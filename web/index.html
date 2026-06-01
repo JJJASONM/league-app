@@ -1,0 +1,2429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pool League Manager</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <style>
+    body { background: #f0f2f5; }
+    .sidebar {
+      min-height: 100vh;
+      background: #1a2035;
+      color: #c8d0e0;
+      width: 230px;
+      flex-shrink: 0;
+    }
+    .sidebar .brand {
+      color: #fff;
+      font-size: 1.15rem;
+      font-weight: 700;
+      padding: 1.1rem 1.2rem 0.4rem;
+      letter-spacing: 0.5px;
+    }
+    .sidebar .brand span { color: #4e9af1; }
+    .league-picker {
+      padding: 0.4rem 0.9rem 0.6rem;
+      border-bottom: 1px solid #2a3550;
+      margin-bottom: 0.25rem;
+    }
+    .league-picker label {
+      font-size: .67rem;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: #5a6a8a;
+      display: block;
+      margin-bottom: 3px;
+    }
+    .league-picker select {
+      background: #232e48;
+      color: #c8d0e0;
+      border: 1px solid #2e3c55;
+      font-size: .83rem;
+    }
+    .league-picker select:focus {
+      background: #2a3550;
+      color: #fff;
+      border-color: #4e9af1;
+      box-shadow: none;
+    }
+    .league-picker select option { background: #1a2035; }
+    .sidebar .nav-link {
+      color: #8899bb;
+      border-radius: 8px;
+      margin: 2px 8px;
+      padding: 0.5rem 1rem;
+      font-size: .9rem;
+    }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active {
+      background: #2a3550;
+      color: #fff;
+    }
+    .sidebar .nav-link i { width: 22px; }
+    .sidebar .active-season {
+      font-size: .72rem;
+      color: #5a7abf;
+      padding: 0.2rem 1.1rem 0.5rem;
+    }
+    .main-content { flex: 1; min-width: 0; padding: 1.5rem; }
+    .card { border: none; border-radius: 12px; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
+    .card-header { background: #fff; border-bottom: 1px solid #e8eaf0; border-radius: 12px 12px 0 0 !important; }
+    .section { display: none; }
+    .section.active { display: block; }
+    .badge-hc { font-size: .75em; }
+    .table th { font-size: .82rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: .5px; }
+    .week-header { background: #e8f0fe; font-weight: 600; font-size: .85rem; color: #3a5299; }
+    #toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; }
+    .season-badge { font-size: .7rem; padding: .2em .5em; }
+    .no-league-msg { display: flex; align-items: center; justify-content: center; height: 60vh; }
+    .action-item { display: flex; align-items: flex-start; gap: .75rem; padding: .8rem 1rem; border-bottom: 1px solid #f0f2f5; }
+    .action-item:last-child { border-bottom: none; }
+    .action-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: .05rem; }
+    .action-title { font-weight: 600; font-size: .9rem; line-height: 1.3; }
+    .action-detail { font-size: .8rem; color: #667; margin-top: .15rem; }
+    .action-btn { flex-shrink: 0; }
+    .action-item.ok .action-icon { color: #28a745; }
+    .action-item.warn .action-icon { color: #f0a500; }
+    .action-item.urgent .action-icon { color: #dc3545; }
+    .action-item.info .action-icon { color: #4e9af1; }
+    .dash-section-header { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; color: #8899bb; padding: .6rem 1rem .3rem; }
+    /* Scoresheet */
+    .scoresheet-round { margin-bottom: 1.25rem; }
+    .scoresheet-round-header { background: #1a2035; color: #fff; font-weight: 700; font-size: .82rem; letter-spacing: .5px; padding: .45rem .9rem; border-radius: 8px 8px 0 0; }
+    .pairing-card { border: 1px solid #dee2e6; border-top: none; }
+    .pairing-card:last-child { border-radius: 0 0 8px 8px; }
+    .pairing-player { font-size: .88rem; padding: .35rem .7rem; border-bottom: 1px dashed #eee; display: flex; align-items: center; gap: .5rem; }
+    .pairing-player.home { background: #f0f4ff; }
+    .pairing-player.away { background: #fff; border-bottom: none; }
+    .pairing-player .player-label { flex: 1; font-weight: 600; }
+    .pairing-player .diff-badge { font-size: .72rem; color: #888; }
+    .game-row { display: flex; align-items: center; gap: .4rem; padding: .3rem .7rem; background: #fafafa; border-top: 1px solid #e8eaf0; flex-wrap: wrap; }
+    .game-row label { font-size: .75rem; font-weight: 600; color: #667; min-width: 52px; }
+    .game-btn { border: 2px solid #dee2e6; background: #fff; border-radius: 6px; padding: .2rem .6rem; font-size: .78rem; font-weight: 600; cursor: pointer; transition: all .15s; min-width: 54px; }
+    .game-btn.home-win  { border-color: #4e9af1; background: #e8f0fe; color: #1a5cb8; }
+    .game-btn.away-win  { border-color: #e05b5b; background: #fdeaea; color: #b81a1a; }
+    .game-btn:disabled  { opacity: .35; cursor: default; }
+    .pairing-winner-row { padding: .3rem .7rem .4rem; font-size: .8rem; font-weight: 700; border-top: 1px solid #e8eaf0; }
+    .pairing-winner-row.home-wins { background: #e8f0fe; color: #1a5cb8; }
+    .pairing-winner-row.away-wins { background: #fdeaea; color: #b81a1a; }
+    .pairing-winner-row.undecided  { background: #f8f9fa; color: #aaa; }
+    .score-summary { background: #1a2035; color: #fff; border-radius: 8px; padding: .6rem 1.1rem; font-size: .88rem; display: inline-flex; gap: 2rem; align-items: center; }
+    .score-summary .team-score { font-size: 1.5rem; font-weight: 800; }
+    .score-summary .team-name  { font-size: .75rem; opacity: .75; }
+    .roster-row td { font-size: .88rem; padding: .3rem .75rem; }
+    .team-card-header { background: #fff; border-bottom: 1px solid #e8eaf0; border-radius: 12px 12px 0 0; padding: .65rem 1rem; display: flex; align-items: center; justify-content: space-between; }
+    .add-to-roster { background: #f8f9fa; border-top: 1px solid #e8eaf0; padding: .5rem .75rem; border-radius: 0 0 12px 12px; }
+
+    /* ── Scoresheet table ─────────────────────────────────────────── */
+    .ss-table { font-size: .82rem; width: 100%; border-collapse: collapse; }
+    .ss-table th { background: #1a2035; color: #c8d0e0; font-size: .7rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .4px; padding: .35rem .5rem;
+      text-align: center; border: 1px solid #0d1525; }
+    .ss-table td { padding: .28rem .35rem; border: 1px solid #dee2e6; vertical-align: middle; }
+    .ss-round-hdr td { background: #e8f0fe; font-weight: 700; font-size: .78rem;
+      color: #3a5299; padding: .35rem .8rem; border-bottom: 2px solid #4e9af1; letter-spacing: .3px; }
+    .ss-pairing-cell { width: 148px; line-height: 1.35; }
+    .ss-pname { font-size: .81rem; }
+    .ss-diff { font-size: .69rem; color: #999; margin-left: 2px; }
+    .ss-game-cell { width: 90px; text-align: center; }
+    .ss-g-btns { display: flex; gap: 2px; justify-content: center; margin-bottom: 3px; }
+    .ss-g-btn { flex: 1; padding: .14rem .25rem; font-size: .78rem; font-weight: 700;
+      border: 1px solid #bbb; background: #fff; border-radius: 3px; cursor: pointer;
+      line-height: 1.3; min-width: 26px; transition: background .08s; }
+    .ss-g-btn:hover:not(.h-win):not(.a-win) { background: #f0f0f0; }
+    .ss-g-btn:focus { outline: 2px solid #4e9af1; outline-offset: 1px; }
+    .ss-g-btn.h-win { background: #4e9af1; color: #fff; border-color: #2c7be5; }
+    .ss-g-btn.a-win { background: #e05b5b; color: #fff; border-color: #c04040; }
+    .ss-lb { width: 44px; text-align: center; font-size: .78rem; padding: .1rem .15rem;
+      border: 1px solid #ccc; border-radius: 3px; display: block; margin: 0 auto; }
+    .ss-lb:focus { outline: 2px solid #4e9af1; border-color: #4e9af1; }
+    .ss-lb:disabled { background: #f5f5f5; color: #ccc; }
+    .ss-result-cell { width: 120px; text-align: center; font-size: .78rem; padding: .28rem .4rem; }
+    .ss-result-cell.h-win { background: #dbeafe; }
+    .ss-result-cell.a-win { background: #fee2e2; }
+    .ss-result-cell.tbd { color: #bbb; }
+    .ss-hc-note { font-size: .68rem; color: #999; margin-bottom: 2px; }
+    .ss-pts { font-size: .85rem; font-weight: 700; margin-bottom: 2px; }
+    .ss-subtotal td { background: #f8f9fa; font-size: .77rem; border-top: 2px solid #dee2e6; }
+  </style>
+</head>
+<body>
+<div class="d-flex">
+  <!-- Sidebar -->
+  <nav class="sidebar d-flex flex-column py-2">
+    <div class="brand">🎱 <span>Pool</span> League</div>
+
+    <!-- League Switcher -->
+    <div class="league-picker">
+      <label>League</label>
+      <select class="form-select form-select-sm" id="league-select" onchange="switchLeague()">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+
+    <div class="active-season" id="active-season-label">No active season</div>
+
+    <ul class="nav flex-column mt-1">
+      <li class="nav-item"><a class="nav-link active" href="#" data-section="dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="seasons"><i class="bi bi-calendar3"></i> Seasons</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="teams"><i class="bi bi-people-fill"></i> Teams</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="players"><i class="bi bi-person-badge"></i> Players</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="schedule"><i class="bi bi-calendar-week"></i> Schedule</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="lineup"><i class="bi bi-person-check"></i> Lineup</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="entry"><i class="bi bi-pencil-square"></i> Match Entry</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="standings"><i class="bi bi-trophy"></i> Standings</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="stats"><i class="bi bi-bar-chart-line"></i> Player Stats</a></li>
+    </ul>
+
+    <div class="mt-auto px-3 pb-3">
+      <button class="btn btn-sm btn-outline-secondary w-100 mb-2" onclick="openLeagueModal()"><i class="bi bi-gear"></i> Manage Leagues</button>
+      <button class="btn btn-sm btn-outline-secondary w-100" onclick="backup()"><i class="bi bi-cloud-download"></i> Backup DB</button>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <div class="main-content">
+
+    <!-- Dashboard -->
+    <div id="section-dashboard" class="section active">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h4 class="mb-0 fw-bold">What Needs Doing</h4>
+          <div class="text-muted small" id="dash-league-label"></div>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" onclick="loadDashboard()"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+      </div>
+      <div class="row g-3">
+        <div class="col-lg-7">
+          <div class="card" id="dash-action-card">
+            <div id="dash-actions"><div class="text-muted text-center py-4">Loading…</div></div>
+          </div>
+        </div>
+        <div class="col-lg-5">
+          <div class="card mb-3">
+            <div class="card-header fw-semibold py-2">Upcoming This Week</div>
+            <div class="card-body p-0">
+              <table class="table table-sm mb-0" id="dash-upcoming"></table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header fw-semibold py-2">Season Standings</div>
+            <div class="card-body p-0">
+              <table class="table table-sm mb-0" id="dash-standings"></table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Seasons -->
+    <div id="section-seasons" class="section">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0 fw-bold">Seasons</h4>
+        <button class="btn btn-primary btn-sm" onclick="openNewSeason()"><i class="bi bi-plus-lg"></i> New Season</button>
+      </div>
+
+      <!-- Season list -->
+      <div class="card mb-3">
+        <div class="card-body p-0">
+          <table class="table table-hover mb-0" id="seasons-table">
+            <thead><tr><th>Name</th><th>Dates</th><th>Type</th><th>Status</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Season Management Panel — shown when "Manage" is clicked -->
+      <div id="season-mgmt" class="d-none">
+        <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+          <h5 class="fw-bold mb-0" id="season-mgmt-title"></h5>
+          <span class="badge bg-success d-none" id="season-mgmt-active">Active</span>
+          <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="closeMgmt()"><i class="bi bi-x"></i> Close</button>
+        </div>
+
+        <!-- Tab bar -->
+        <ul class="nav nav-tabs mb-0" id="season-mgmt-tabs">
+          <li class="nav-item"><a class="nav-link active" href="#" data-stab="schedule">Schedule</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" data-stab="skips">Skip Weeks</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" data-stab="byes">Bye Requests</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" data-stab="rules">Rules</a></li>
+        </ul>
+
+        <!-- Tab: Schedule -->
+        <div id="stab-schedule" class="card border-top-0" style="border-radius:0 0 12px 12px">
+          <div class="card-body">
+
+            <div class="row g-3 align-items-end mb-2">
+              <div class="col-auto">
+                <label class="form-label small mb-1">Schedule Type</label>
+                <select class="form-select form-select-sm" id="gen-type" onchange="onGenTypeChange()">
+                  <option value="single_rr">Single Round Robin</option>
+                  <option value="double_rr" selected>Double Round Robin</option>
+                  <option value="split">Split Season</option>
+                  <option value="custom">Custom (N Weeks)</option>
+                  <option value="blanket">Blanket Template</option>
+                </select>
+              </div>
+              <div class="col-auto" id="gen-numweeks-col" style="display:none">
+                <label class="form-label small mb-1">Weeks</label>
+                <input type="number" class="form-control form-control-sm" id="gen-numweeks" value="16" min="1" style="width:80px">
+              </div>
+              <div class="col-auto" id="gen-mpw-col" style="display:none">
+                <label class="form-label small mb-1">Matches/Week</label>
+                <input type="number" class="form-control form-control-sm" id="gen-mpw" value="3" min="1" style="width:80px">
+              </div>
+              <div class="col-auto">
+                <label class="form-label small mb-1">First Match Date</label>
+                <input type="date" class="form-control form-control-sm" id="gen-start-date">
+              </div>
+              <div class="col-auto">
+                <label class="form-label small mb-1">Use Teams From</label>
+                <select class="form-select form-select-sm" id="gen-from-season" style="min-width:180px">
+                  <option value="">All teams in league</option>
+                </select>
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-success btn-sm" onclick="generateSchedule()"><i class="bi bi-shuffle"></i> Generate</button>
+              </div>
+            </div>
+            <div class="text-muted small" id="gen-type-desc">Each team plays every other team twice (home + away). Skipped dates are worked around automatically.</div>
+
+          </div>
+        </div>
+
+        <!-- Tab: Skip Weeks -->
+        <div id="stab-skips" class="card border-top-0 d-none" style="border-radius:0 0 12px 12px">
+          <div class="card-body">
+            <div class="row g-2 mb-3 align-items-end">
+              <div class="col-auto">
+                <label class="form-label small mb-1">Date to Skip</label>
+                <input type="date" class="form-control form-control-sm" id="skip-date-input">
+              </div>
+              <div class="col">
+                <label class="form-label small mb-1">Reason</label>
+                <input type="text" class="form-control form-control-sm" id="skip-reason-input" placeholder="e.g. Thanksgiving, Christmas break">
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-primary btn-sm" onclick="addSkippedWeek()"><i class="bi bi-plus-lg"></i> Add</button>
+              </div>
+            </div>
+            <table class="table table-sm mb-0" id="skips-table">
+              <thead><tr><th>Date</th><th>Reason</th><th></th></tr></thead>
+              <tbody><tr><td colspan="3" class="text-muted text-center py-2">No skipped dates yet</td></tr></tbody>
+            </table>
+            <div class="text-muted small mt-2">After adding/removing skip dates, regenerate the schedule (Schedule tab) to apply changes.</div>
+          </div>
+        </div>
+
+        <!-- Tab: Bye Requests -->
+        <div id="stab-byes" class="card border-top-0 d-none" style="border-radius:0 0 12px 12px">
+          <div class="card-body">
+            <div class="row g-2 mb-3 align-items-end">
+              <div class="col-auto">
+                <label class="form-label small mb-1">Team</label>
+                <select class="form-select form-select-sm" id="bye-team-select" style="min-width:160px"></select>
+              </div>
+              <div class="col-auto">
+                <label class="form-label small mb-1">Week # <span class="text-muted">(0=TBD)</span></label>
+                <input type="number" class="form-control form-control-sm" id="bye-week-input" value="0" min="0" style="width:75px">
+              </div>
+              <div class="col">
+                <label class="form-label small mb-1">Reason</label>
+                <input type="text" class="form-control form-control-sm" id="bye-reason-input" placeholder="e.g. Team tournament, vacation">
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-primary btn-sm" onclick="addByeRequest()"><i class="bi bi-plus-lg"></i> Add</button>
+              </div>
+            </div>
+            <table class="table table-sm mb-0" id="byes-table">
+              <thead><tr><th>Team</th><th>Week</th><th>Reason</th><th>Approved</th><th></th></tr></thead>
+              <tbody><tr><td colspan="5" class="text-muted text-center py-2">No bye requests yet</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tab: Rules -->
+        <div id="stab-rules" class="card border-top-0 d-none" style="border-radius:0 0 12px 12px">
+          <div class="card-body">
+            <div class="row g-2 mb-3 align-items-end">
+              <div class="col">
+                <label class="form-label small mb-1">Rule Description</label>
+                <input type="text" class="form-control form-control-sm" id="rule-label-input" placeholder="e.g. Max handicap on scoresheet">
+              </div>
+              <div class="col-auto">
+                <label class="form-label small mb-1">Value</label>
+                <input type="text" class="form-control form-control-sm" id="rule-value-input" placeholder="4.5" style="width:90px">
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-primary btn-sm" onclick="addSeasonRule()"><i class="bi bi-plus-lg"></i> Add Rule</button>
+              </div>
+            </div>
+            <table class="table table-sm mb-0" id="rules-table">
+              <thead><tr><th>Rule</th><th>Value</th><th></th></tr></thead>
+              <tbody><tr><td colspan="3" class="text-muted text-center py-2">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div><!-- /season-mgmt -->
+    </div>
+
+    <!-- Teams -->
+    <div id="section-teams" class="section">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0 fw-bold">Teams</h4>
+        <button class="btn btn-primary btn-sm" onclick="openNewTeam()"><i class="bi bi-plus-lg"></i> New Team</button>
+      </div>
+      <div id="teams-cards" class="row g-3"></div>
+    </div>
+
+    <!-- Players -->
+    <div id="section-players" class="section">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0 fw-bold">Players</h4>
+        <button class="btn btn-primary btn-sm" onclick="openNewPlayer()"><i class="bi bi-plus-lg"></i> Add Player</button>
+      </div>
+      <div class="card">
+        <div class="card-body p-0">
+          <table class="table table-hover mb-0" id="players-table">
+            <thead><tr><th>#</th><th>Last Name</th><th>First Name</th><th>Diff</th><th>Team</th><th>Phone</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Schedule -->
+    <div id="section-schedule" class="section">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0 fw-bold">Schedule</h4>
+        <select class="form-select form-select-sm w-auto" id="schedule-season-select" onchange="loadSchedule()"></select>
+      </div>
+      <div id="schedule-content"></div>
+    </div>
+
+    <!-- Lineup Planning -->
+    <div id="section-lineup" class="section">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h4 class="mb-0 fw-bold">Lineup Planning</h4>
+        <div class="d-flex gap-2 align-items-center">
+          <select class="form-select form-select-sm w-auto" id="lu-season-sel" onchange="loadLineupWeeks()"></select>
+          <select class="form-select form-select-sm" id="lu-week-sel" onchange="loadLineupForWeek()" style="min-width:170px"></select>
+        </div>
+      </div>
+      <p class="text-muted small mb-3">Set each team's 3 players before league night. Lineups load automatically in Match Entry.</p>
+      <div id="lineup-cards" class="row g-3"></div>
+    </div>
+
+    <!-- Match Entry -->
+    <div id="section-entry" class="section">
+      <h4 class="mb-3 fw-bold">Match Entry</h4>
+      <div class="row g-2 mb-3 align-items-end">
+        <div class="col-auto">
+          <label class="form-label small mb-1">Season</label>
+          <select class="form-select form-select-sm" id="entry-season-select" onchange="loadEntryMatches()"></select>
+        </div>
+        <div class="col-auto">
+          <label class="form-label small mb-1">Match</label>
+          <select class="form-select form-select-sm" id="entry-match-select" onchange="loadMatchEntry()"></select>
+        </div>
+      </div>
+      <!-- Inline lineup picker — shown only when no lineup plans exist -->
+      <div id="entry-lineup" class="d-none"></div>
+      <!-- Scoresheet -->
+      <div id="entry-scoresheet" class="d-none"></div>
+    </div>
+
+    <!-- Standings -->
+    <div id="section-standings" class="section">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0 fw-bold">Standings</h4>
+        <select class="form-select form-select-sm w-auto" id="standings-season-select" onchange="loadStandings()"></select>
+      </div>
+      <div class="card">
+        <div class="card-body p-0">
+          <table class="table table-hover mb-0" id="standings-table">
+            <thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>T</th><th>Pts</th><th>GW</th><th>GL</th><th>Win%</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Player Stats -->
+    <div id="section-stats" class="section">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0 fw-bold">Player Stats</h4>
+        <select class="form-select form-select-sm w-auto" id="stats-season-select" onchange="loadPlayerStats()"></select>
+      </div>
+      <div class="card">
+        <div class="card-body p-0">
+          <table class="table table-hover mb-0" id="stats-table">
+            <thead><tr><th>#</th><th>Player</th><th>Team</th><th>Handicap</th><th>SW</th><th>SL</th><th>GW</th><th>GL</th><th>Win%</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /flex -->
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- ── Modals ─────────────────────────────────────────────────────────────── -->
+
+<!-- League Modal -->
+<div class="modal fade" id="league-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Manage Leagues</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3 border-bottom pb-3">
+          <h6 class="fw-semibold">Add New League</h6>
+          <div class="row g-2">
+            <div class="col-md-4">
+              <label class="form-label small mb-1">League Name *</label>
+              <input type="text" class="form-control form-control-sm" id="new-league-name" placeholder="e.g. Monday 8-Ball">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-1">Format</label>
+              <select class="form-select form-select-sm" id="new-league-format">
+                <option value="8ball">8-Ball</option>
+                <option value="9ball">9-Ball</option>
+                <option value="10ball">10-Ball</option>
+                <option value="straight">Straight Pool</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-1">Day of Week</label>
+              <select class="form-select form-select-sm" id="new-league-day">
+                <option value="">—</option>
+                <option value="Monday">Monday</option>
+                <option value="Tuesday">Tuesday</option>
+                <option value="Wednesday">Wednesday</option>
+                <option value="Thursday">Thursday</option>
+                <option value="Friday">Friday</option>
+                <option value="Saturday">Saturday</option>
+                <option value="Sunday">Sunday</option>
+              </select>
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+              <button class="btn btn-primary btn-sm w-100" onclick="addLeague()"><i class="bi bi-plus-lg"></i> Add</button>
+            </div>
+          </div>
+        </div>
+        <h6 class="fw-semibold mb-2">Existing Leagues</h6>
+        <table class="table table-sm table-hover" id="leagues-table">
+          <thead><tr><th>Name</th><th>Format</th><th>Day</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Season Modal -->
+<div class="modal fade" id="season-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="season-modal-title">New Season</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="season-id">
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <label class="form-label">Season Name *</label>
+            <input type="text" class="form-control" id="season-name" placeholder="e.g. Fall 2026">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Start Date <span class="text-muted small">(used when generating schedule)</span></label>
+            <input type="date" class="form-control" id="season-start">
+          </div>
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Copy Teams From Season</label>
+            <select class="form-select" id="season-copy-from">
+              <option value="">— Don't copy (use all league teams) —</option>
+            </select>
+            <div class="form-text">Pre-selects a prior season in the schedule generator so only those teams are scheduled.</div>
+          </div>
+          <div class="col-md-6 d-flex align-items-end">
+            <div class="text-muted small"><i class="bi bi-info-circle"></i> End date is calculated automatically from the last scheduled match after you generate a schedule.</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="saveSeason()">Save &amp; Continue</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Assign Match Teams Modal -->
+<div class="modal fade" id="assign-match-modal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0">Assign Teams to Slot</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="assign-match-id">
+        <div class="mb-2">
+          <label class="form-label small mb-1">Home Team</label>
+          <select class="form-select form-select-sm" id="assign-home-select">
+            <option value="">(unassigned)</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label small mb-1">Away Team</label>
+          <select class="form-select form-select-sm" id="assign-away-select">
+            <option value="">(unassigned)</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="confirmAssignMatchTeams()">Assign</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Team Modal -->
+<div class="modal fade" id="team-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="team-modal-title">New Team</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="team-id">
+        <div class="mb-3"><label class="form-label">Team Name *</label>
+          <input type="text" class="form-control" id="team-name" placeholder="e.g. The Cue-balls"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="saveTeam()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Player Modal -->
+<div class="modal fade" id="player-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="player-modal-title">Add Player</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="player-id">
+
+        <!-- Player number: shown readonly with lock icon when editing -->
+        <div class="mb-3">
+          <label class="form-label">Player # <span class="text-muted small">(e.g. 42 — locked once saved)</span></label>
+          <div class="input-group">
+            <input type="text" class="form-control" id="player-number" maxlength="4" placeholder="42">
+            <span class="input-group-text d-none" id="player-number-lock" title="Player number is locked"><i class="bi bi-lock-fill text-secondary"></i></span>
+          </div>
+        </div>
+
+        <!-- First / Last name -->
+        <div class="row g-2 mb-3">
+          <div class="col">
+            <label class="form-label">First Name *</label>
+            <input type="text" class="form-control" id="player-first-name">
+          </div>
+          <div class="col">
+            <label class="form-label">Last Name *</label>
+            <input type="text" class="form-control" id="player-last-name">
+          </div>
+        </div>
+
+        <!-- Phone / Email -->
+        <div class="row g-2 mb-3">
+          <div class="col">
+            <label class="form-label">Phone</label>
+            <input type="tel" class="form-control" id="player-phone" placeholder="(555) 555-5555">
+          </div>
+          <div class="col">
+            <label class="form-label">Email</label>
+            <input type="email" class="form-control" id="player-email" placeholder="player@example.com">
+          </div>
+        </div>
+
+        <!-- Handicap -->
+        <div class="mb-3">
+          <label class="form-label" id="handicap-label">Diff Rating</label>
+          <input type="number" class="form-control" id="player-handicap" value="0" step="0.01">
+          <div class="form-text" id="handicap-hint">8-ball: (games won − games lost) ÷ matches played. 9-ball: race-to number (e.g. 5, 7).</div>
+        </div>
+
+        <!-- Admin Hold — 9-ball only -->
+        <div class="mb-3 d-none" id="admin-hold-row">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="player-admin-hold">
+            <label class="form-check-label" for="player-admin-hold">
+              Admin Hold <span class="text-muted small">(handicap locked at Administrative Discretion)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Team -->
+        <div class="mb-1">
+          <label class="form-label">Team</label>
+          <select class="form-select" id="player-team"><option value="">— No Team —</option></select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="savePlayer()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Assign Existing Player Modal -->
+<div class="modal fade" id="assign-modal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Assign Player to Team</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="assign-team-id">
+        <label class="form-label">Select player to assign</label>
+        <select class="form-select" id="assign-player-select"></select>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="confirmAssign()">Assign</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let allLeagues  = [];
+let activeLeague = null;
+let allTeams    = [];
+let allPlayers  = [];
+let allSeasons  = [];
+let activeSeason = null;
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+document.querySelectorAll('[data-section]').forEach(link => {
+  link.addEventListener('click', e => {
+    e.preventDefault();
+    const sec = link.dataset.section;
+    document.querySelectorAll('[data-section]').forEach(l => l.classList.remove('active'));
+    link.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.getElementById('section-' + sec).classList.add('active');
+    loadSection(sec);
+  });
+});
+
+function loadSection(sec) {
+  if (!activeLeague) return;
+  switch(sec) {
+    case 'dashboard': loadDashboard(); break;
+    case 'seasons':   loadSeasons(); break;
+    case 'teams':     loadTeams(); break;
+    case 'players':   loadPlayers(); break;
+    case 'schedule':  populateSeasonSelect('schedule-season-select', loadSchedule); break;
+    case 'lineup':    loadLineupSection(); break;
+    case 'entry':     populateSeasonSelect('entry-season-select', loadEntryMatches); break;
+    case 'standings': populateSeasonSelect('standings-season-select', loadStandings); break;
+    case 'stats':     populateSeasonSelect('stats-season-select', loadPlayerStats); break;
+  }
+}
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch('/api' + path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+// Returns "?league_id=X" or "" if no active league
+function lid() {
+  return activeLeague ? `?league_id=${activeLeague.id}` : '';
+}
+// Returns "&league_id=X" for appending to existing query strings
+function lidAmp() {
+  return activeLeague ? `&league_id=${activeLeague.id}` : '';
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type='success') {
+  const el = document.createElement('div');
+  el.className = `toast align-items-center text-bg-${type} border-0 show mb-2`;
+  el.setAttribute('role','alert');
+  el.innerHTML = `<div class="d-flex"><div class="toast-body">${msg}</div>
+    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+function openModal(id)  { new bootstrap.Modal(document.getElementById(id)).show(); }
+function closeModal(id) { bootstrap.Modal.getInstance(document.getElementById(id))?.hide(); }
+
+// ── League selector ───────────────────────────────────────────────────────────
+async function switchLeague() {
+  const id = parseInt(document.getElementById('league-select').value);
+  activeLeague = allLeagues.find(l => l.id === id) || null;
+  if (activeLeague) localStorage.setItem('activeLeagueId', activeLeague.id);
+  await loadLeagueData();
+  // reload the currently visible section
+  const sec = document.querySelector('[data-section].active')?.dataset.section || 'dashboard';
+  loadSection(sec);
+}
+
+async function loadLeagueData() {
+  if (!activeLeague) return;
+  const lid = activeLeague.id;
+  try {
+    [allTeams, allPlayers, allSeasons] = await Promise.all([
+      api('GET', `/teams?league_id=${lid}`),
+      api('GET', `/players?league_id=${lid}`),
+      api('GET', `/seasons?league_id=${lid}`)
+    ]);
+    activeSeason = allSeasons.find(s => s.active) || null;
+    const label = document.getElementById('active-season-label');
+    label.textContent = activeSeason ? '📅 ' + activeSeason.name : 'No active season';
+  } catch(e) { toast('Failed to load league data: ' + e.message, 'danger'); }
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    allLeagues = await api('GET', '/leagues');
+  } catch(e) {
+    toast('Could not load leagues: ' + e.message, 'danger');
+    allLeagues = [];
+  }
+
+  // Populate league dropdown
+  const sel = document.getElementById('league-select');
+  if (allLeagues.length === 0) {
+    sel.innerHTML = '<option value="">No leagues — add one</option>';
+    activeLeague = null;
+  } else {
+    sel.innerHTML = allLeagues.map(l =>
+      `<option value="${l.id}">${l.name}</option>`
+    ).join('');
+    // Restore last-used league from localStorage
+    const saved = parseInt(localStorage.getItem('activeLeagueId'));
+    const restored = allLeagues.find(l => l.id === saved);
+    activeLeague = restored || allLeagues[0];
+    sel.value = activeLeague.id;
+  }
+
+  if (activeLeague) {
+    await loadLeagueData();
+    loadDashboard();
+  }
+}
+init();
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  if (!activeLeague) return;
+  await loadLeagueData();
+
+  const fmtLabel = { '8ball':'8-Ball','9ball':'9-Ball','10ball':'10-Ball','straight':'Straight Pool' };
+  document.getElementById('dash-league-label').textContent =
+    activeLeague.name + (activeLeague.game_format ? ' · ' + fmtLabel[activeLeague.game_format] : '');
+
+  const actionsEl  = document.getElementById('dash-actions');
+  const upcomingEl = document.getElementById('dash-upcoming');
+  const standingsEl = document.getElementById('dash-standings');
+
+  // ── No active season ──────────────────────────────────────────────────────
+  if (!activeSeason) {
+    actionsEl.innerHTML = actionItem('urgent','bi-exclamation-circle-fill',
+      'No active season',
+      'Create or activate a season before entering matches.',
+      `<button class="btn btn-sm btn-outline-danger action-btn" onclick="navTo('seasons')">Go to Seasons</button>`);
+    upcomingEl.innerHTML = '<tbody><tr><td class="text-muted text-center py-3">No active season</td></tr></tbody>';
+    standingsEl.innerHTML = '<tbody><tr><td class="text-muted text-center py-3">No active season</td></tr></tbody>';
+    return;
+  }
+
+  let matches = [], standings = [];
+  try {
+    [matches, standings] = await Promise.all([
+      api('GET', `/matches?season_id=${activeSeason.id}`),
+      api('GET', `/standings?season_id=${activeSeason.id}`)
+    ]);
+  } catch(e) { actionsEl.innerHTML = `<div class="text-danger p-3">${e.message}</div>`; return; }
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = today.toISOString().slice(0,10);
+  const nextWeek = new Date(today); nextWeek.setDate(today.getDate()+7);
+
+  const pending   = matches.filter(m => !m.completed);
+  const completed = matches.filter(m =>  m.completed);
+
+  // Past matches with no results (match_date <= today, not completed)
+  const overdue = pending.filter(m => m.match_date && m.match_date <= todayStr);
+  // Upcoming in next 7 days
+  const upcoming = pending.filter(m => {
+    if (!m.match_date) return false;
+    const d = new Date(m.match_date + 'T00:00:00');
+    return d > today && d <= nextWeek;
+  });
+  // Matches with no date set
+  const undated = pending.filter(m => !m.match_date);
+
+  // Group overdue by week
+  const overdueByWeek = {};
+  overdue.forEach(m => { (overdueByWeek[m.week_number] = overdueByWeek[m.week_number]||[]).push(m); });
+
+  // ── Build action items ────────────────────────────────────────────────────
+  const sections = [];
+
+  // Setup checks
+  const setupItems = [];
+  if (allTeams.length === 0)
+    setupItems.push(actionItem('urgent','bi-people-fill','No teams in this league',
+      'Add teams before generating a schedule.',
+      `<button class="btn btn-sm btn-outline-danger action-btn" onclick="navTo('teams')">Add Teams</button>`));
+  if (allPlayers.length === 0)
+    setupItems.push(actionItem('warn','bi-person-badge','No players added',
+      'Add players to teams so scoresheets can be generated.',
+      `<button class="btn btn-sm btn-outline-warning action-btn" onclick="navTo('players')">Add Players</button>`));
+  if (matches.length === 0)
+    setupItems.push(actionItem('warn','bi-calendar-week','No schedule generated',
+      'Generate the round-robin schedule for ' + activeSeason.name + '.',
+      `<button class="btn btn-sm btn-outline-warning action-btn" onclick="navTo('seasons')">Generate Schedule</button>`));
+  if (setupItems.length) {
+    sections.push(`<div class="dash-section-header">Setup</div>` + setupItems.join(''));
+  }
+
+  // Weekly workflow
+  const weeklyItems = [];
+
+  if (overdue.length > 0) {
+    const weeks = Object.keys(overdueByWeek).sort((a,b)=>a-b);
+    weeks.forEach(w => {
+      const ms = overdueByWeek[w];
+      weeklyItems.push(actionItem('urgent','bi-pencil-square',
+        `Week ${w} — scores not entered (${ms.length} match${ms.length>1?'es':''})`,
+        ms.map(m => `${m.home_team_name} vs ${m.away_team_name}`).join(' &nbsp;·&nbsp; '),
+        `<button class="btn btn-sm btn-outline-danger action-btn" onclick="navTo('entry')">Enter Scores</button>`));
+    });
+  }
+
+  // Scoresheet reminder — placeholder until feature is built
+  if (upcoming.length > 0) {
+    const nextDate = upcoming[0].match_date;
+    weeklyItems.push(actionItem('warn','bi-file-earmark-text',
+      `Scoresheets not yet created for ${upcoming.length} upcoming match${upcoming.length>1?'es':''}`,
+      `Next match date: ${nextDate}. Generate scoresheets before league night.`,
+      `<button class="btn btn-sm btn-outline-secondary action-btn" disabled title="Coming soon">Scoresheets (soon)</button>`));
+  }
+
+  // Email template reminder — placeholder until feature is built
+  if (completed.length > 0) {
+    const lastWeek = Math.max(...completed.map(m => m.week_number));
+    weeklyItems.push(actionItem('warn','bi-envelope',
+      `Weekly email not yet sent for Week ${lastWeek}`,
+      'Results, standings update, and any announcements.',
+      `<button class="btn btn-sm btn-outline-secondary action-btn" disabled title="Coming soon">Compose Email (soon)</button>`));
+  }
+
+  if (weeklyItems.length) {
+    sections.push(`<div class="dash-section-header">This Week</div>` + weeklyItems.join(''));
+  }
+
+  // All clear check
+  if (setupItems.length === 0 && weeklyItems.length === 0) {
+    sections.push(actionItem('ok','bi-check-circle-fill',
+      'All caught up!',
+      `${completed.length} matches recorded · ${pending.length} remaining in ${activeSeason.name}.`,
+      ''));
+  }
+
+  // Info: undated matches
+  if (undated.length > 0) {
+    sections.push(`<div class="dash-section-header">Notes</div>` +
+      actionItem('info','bi-calendar-x',
+        `${undated.length} match${undated.length>1?'es':''} have no date assigned`,
+        'Dates can be set when editing the schedule.',
+        `<button class="btn btn-sm btn-outline-secondary action-btn" onclick="navTo('schedule')">View Schedule</button>`));
+  }
+
+  actionsEl.innerHTML = sections.join('') ||
+    '<div class="text-muted text-center py-4">Nothing to show yet.</div>';
+
+  // ── Upcoming panel ────────────────────────────────────────────────────────
+  upcomingEl.innerHTML = `
+    <thead><tr><th>Date</th><th>Home</th><th>Away</th></tr></thead>
+    <tbody>${upcoming.length
+      ? upcoming.map(m=>`<tr>
+          <td class="text-muted small">${m.match_date}</td>
+          <td>${m.home_team_name}</td>
+          <td>${m.away_team_name}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="text-muted text-center py-3">No matches in the next 7 days</td></tr>'
+    }</tbody>`;
+
+  // ── Standings panel ───────────────────────────────────────────────────────
+  const top = standings.slice(0,6);
+  standingsEl.innerHTML = `
+    <thead><tr><th>#</th><th>Team</th><th>Pts</th><th>W-L</th></tr></thead>
+    <tbody>${top.length
+      ? top.map((s,i)=>`<tr ${i===0?'class="fw-semibold"':''}>
+          <td>${i+1}</td><td>${s.team_name}</td>
+          <td>${s.points}</td><td class="text-muted">${s.wins}-${s.losses}</td></tr>`).join('')
+      : '<tr><td colspan="4" class="text-muted text-center py-3">No completed matches</td></tr>'
+    }</tbody>`;
+}
+
+// Renders a single action item row
+function actionItem(level, icon, title, detail, btnHtml) {
+  return `<div class="action-item ${level}">
+    <div class="action-icon"><i class="bi ${icon}"></i></div>
+    <div class="flex-grow-1">
+      <div class="action-title">${title}</div>
+      ${detail ? `<div class="action-detail">${detail}</div>` : ''}
+    </div>
+    ${btnHtml || ''}
+  </div>`;
+}
+
+// Navigate to a section by name
+function navTo(sec) {
+  document.querySelectorAll('[data-section]').forEach(l => l.classList.remove('active'));
+  const link = document.querySelector(`[data-section="${sec}"]`);
+  if (link) link.classList.add('active');
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.getElementById('section-' + sec)?.classList.add('active');
+  loadSection(sec);
+}
+
+// ── Seasons ───────────────────────────────────────────────────────────────────
+let currentMgmtSeasonId = null;
+
+const scheduleTypeLabel = {
+  single_rr: 'Single RR', double_rr: 'Double RR',
+  split: 'Split', custom: 'Custom', blanket: 'Blanket'
+};
+
+async function loadSeasons() {
+  if (!activeLeague) return;
+  allSeasons = await api('GET', `/seasons?league_id=${activeLeague.id}`);
+  const tbody = document.querySelector('#seasons-table tbody');
+  tbody.innerHTML = allSeasons.map(s => `
+    <tr>
+      <td class="fw-semibold">${s.name}</td>
+      <td class="text-muted small">${s.start_date||'—'} → ${s.end_date||'TBD'}</td>
+      <td><span class="badge bg-secondary" style="font-size:.72rem">${scheduleTypeLabel[s.schedule_type]||s.schedule_type||'—'}</span></td>
+      <td>${s.active
+        ? '<span class="badge bg-success season-badge">Active</span>'
+        : '<span class="badge bg-secondary season-badge">Inactive</span>'}</td>
+      <td class="text-end">
+        <button class="btn btn-outline-primary btn-sm py-0 me-1" onclick="manageSeason(${s.id})"><i class="bi bi-sliders"></i> Manage</button>
+        ${!s.active ? `<button class="btn btn-outline-success btn-sm py-0 me-1" onclick="activateSeason(${s.id})">Activate</button>` : ''}
+        <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editSeason(${s.id})"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteSeason(${s.id})"><i class="bi bi-trash"></i></button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-3">No seasons yet. Click "New Season" to add one.</td></tr>';
+}
+
+function openNewSeason() {
+  document.getElementById('season-modal-title').textContent = 'New Season';
+  document.getElementById('season-id').value = '';
+  document.getElementById('season-name').value = '';
+  document.getElementById('season-start').value = '';
+  const sel = document.getElementById('season-copy-from');
+  sel.innerHTML = '<option value="">— Don\'t copy (use all league teams) —</option>' +
+    allSeasons.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+  openModal('season-modal');
+}
+
+function editSeason(id) {
+  const s = allSeasons.find(x => x.id === id);
+  if (!s) return;
+  document.getElementById('season-modal-title').textContent = 'Edit Season';
+  document.getElementById('season-id').value = s.id;
+  document.getElementById('season-name').value = s.name;
+  document.getElementById('season-start').value = s.start_date || '';
+  const sel = document.getElementById('season-copy-from');
+  sel.innerHTML = '<option value="">— Don\'t copy (use all league teams) —</option>' +
+    allSeasons.filter(x => x.id !== id).map(x => `<option value="${x.id}">${x.name}</option>`).join('');
+  openModal('season-modal');
+}
+
+async function saveSeason() {
+  const id = document.getElementById('season-id').value;
+  const copyFrom = parseInt(document.getElementById('season-copy-from').value) || 0;
+  const body = {
+    name:       document.getElementById('season-name').value.trim(),
+    start_date: document.getElementById('season-start').value || null,
+    league_id:  activeLeague?.id
+  };
+  if (!body.name)      { toast('Name is required','warning'); return; }
+  if (!body.league_id) { toast('No active league selected','warning'); return; }
+  try {
+    let saved;
+    if (id) saved = await api('PUT', `/seasons/${id}`, body);
+    else    saved = await api('POST', '/seasons', body);
+    closeModal('season-modal');
+    toast('Season saved');
+    allSeasons = await api('GET', `/seasons?league_id=${activeLeague.id}`);
+    activeSeason = allSeasons.find(s => s.active) || null;
+    document.getElementById('active-season-label').textContent =
+      activeSeason ? '📅 ' + activeSeason.name : 'No active season';
+    loadSeasons();
+    // If new season: open management panel with copy-from pre-selected
+    if (!id && saved?.id) {
+      manageSeason(saved.id, copyFrom);
+    }
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+async function activateSeason(id) {
+  try {
+    await api('POST', `/seasons/${id}/activate`);
+    toast('Season activated');
+    allSeasons = await api('GET', `/seasons?league_id=${activeLeague.id}`);
+    activeSeason = allSeasons.find(s => s.active);
+    document.getElementById('active-season-label').textContent =
+      activeSeason ? '📅 ' + activeSeason.name : 'No active season';
+    loadSeasons();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+async function deleteSeason(id) {
+  if (!confirm('Delete this season and all its matches?')) return;
+  try {
+    await api('DELETE', `/seasons/${id}`);
+    toast('Deleted');
+    if (currentMgmtSeasonId === id) closeMgmt();
+    loadSeasons();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+// ── Season Management Panel ───────────────────────────────────────────────────
+async function manageSeason(id, preselectedFromSeasonId) {
+  currentMgmtSeasonId = id;
+  const s = allSeasons.find(x => x.id === id);
+  if (!s) return;
+
+  document.getElementById('season-mgmt').classList.remove('d-none');
+  document.getElementById('season-mgmt-title').textContent = s.name;
+  document.getElementById('season-mgmt-active').classList.toggle('d-none', !s.active);
+
+  // Populate from-season dropdown
+  const fromSel = document.getElementById('gen-from-season');
+  fromSel.innerHTML = '<option value="">All teams in league</option>' +
+    allSeasons.filter(x => x.id !== id).map(x =>
+      `<option value="${x.id}" ${x.id === preselectedFromSeasonId ? 'selected' : ''}>${x.name}</option>`
+    ).join('');
+
+  // Pre-fill start date from season
+  document.getElementById('gen-start-date').value = s.start_date || '';
+
+  // Set schedule type to match current season type (if set)
+  if (s.schedule_type) {
+    const typeEl = document.getElementById('gen-type');
+    typeEl.value = s.schedule_type;
+  }
+  onGenTypeChange();
+
+  // Populate bye-team dropdown
+  const teamSel = document.getElementById('bye-team-select');
+  teamSel.innerHTML = allTeams.map(t =>
+    `<option value="${t.id}">${t.name}</option>`).join('') ||
+    '<option value="">No teams in league</option>';
+
+  // Show schedule tab first, then load all data
+  showSeasonTab('schedule');
+  document.getElementById('season-mgmt').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  await Promise.all([
+    loadSkippedWeeks(id),
+    loadByeRequests(id),
+    loadSeasonRules(id)
+  ]);
+}
+
+function closeMgmt() {
+  document.getElementById('season-mgmt').classList.add('d-none');
+  currentMgmtSeasonId = null;
+}
+
+function showSeasonTab(tab) {
+  document.querySelectorAll('[data-stab]').forEach(a => a.classList.remove('active'));
+  document.querySelectorAll('#section-seasons [id^="stab-"]').forEach(d => d.classList.add('d-none'));
+  document.querySelector(`[data-stab="${tab}"]`)?.classList.add('active');
+  document.getElementById(`stab-${tab}`)?.classList.remove('d-none');
+}
+
+// Wire up management tab clicks
+document.querySelectorAll('[data-stab]').forEach(link => {
+  link.addEventListener('click', e => { e.preventDefault(); showSeasonTab(link.dataset.stab); });
+});
+
+function onGenTypeChange() {
+  const t = document.getElementById('gen-type').value;
+  document.getElementById('gen-numweeks-col').style.display = (t === 'custom' || t === 'blanket') ? '' : 'none';
+  document.getElementById('gen-mpw-col').style.display = t === 'blanket' ? '' : 'none';
+  const descs = {
+    single_rr: 'Each team plays every other team once.',
+    double_rr: 'Each team plays every other team twice (home + away). Classic full season format.',
+    split:     'Double round-robin divided into two halves; standings are tracked per half.',
+    custom:    'Repeat pairings for exactly N weeks, cycling through the schedule as needed.',
+    blanket:   'Create N weeks of empty match slots. Assign teams to each slot manually after generating.'
+  };
+  document.getElementById('gen-type-desc').textContent = descs[t] || '';
+}
+
+async function generateSchedule() {
+  if (!currentMgmtSeasonId) { toast('No season selected', 'warning'); return; }
+  const type      = document.getElementById('gen-type').value;
+  const startDate = document.getElementById('gen-start-date').value;
+  const numWeeks  = parseInt(document.getElementById('gen-numweeks').value) || 0;
+  const mpw       = parseInt(document.getElementById('gen-mpw').value) || 1;
+  const fromSeason = parseInt(document.getElementById('gen-from-season').value) || 0;
+
+  // Fetch skip dates for this season
+  let skipDates = [];
+  try {
+    const skips = await api('GET', `/seasons/${currentMgmtSeasonId}/skipped-weeks`);
+    skipDates = skips.map(s => s.skip_date);
+  } catch(_) {}
+
+  const body = {
+    season_id:        currentMgmtSeasonId,
+    start_date:       startDate || '',
+    schedule_type:    type,
+    num_weeks:        numWeeks,
+    matches_per_week: mpw,
+    skip_dates:       skipDates,
+    from_season_id:   fromSeason
+  };
+
+  if (!confirm(`This will replace any existing schedule for this season. Continue?`)) return;
+
+  try {
+    const res = await api('POST', '/matches/generate', body);
+    toast(`Schedule generated: ${res.matches_created} matches`);
+    // Refresh seasons to pick up newly computed end_date
+    allSeasons = await api('GET', `/seasons?league_id=${activeLeague.id}`);
+    activeSeason = allSeasons.find(s => s.active) || null;
+    document.getElementById('active-season-label').textContent =
+      activeSeason ? '📅 ' + activeSeason.name : 'No active season';
+    loadSeasons();
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+// ── Skip Weeks ────────────────────────────────────────────────────────────────
+async function loadSkippedWeeks(seasonId) {
+  let skips = [];
+  try { skips = await api('GET', `/seasons/${seasonId}/skipped-weeks`); } catch(_) {}
+  const tbody = document.querySelector('#skips-table tbody');
+  tbody.innerHTML = skips.length
+    ? skips.map(sk => `<tr data-skip-date="${sk.skip_date}">
+        <td>${sk.skip_date}</td>
+        <td>${sk.reason || '<span class="text-muted">—</span>'}</td>
+        <td class="text-end">
+          <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteSkippedWeek(${sk.id})"><i class="bi bi-trash"></i></button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="3" class="text-muted text-center py-2">No skipped dates yet</td></tr>';
+}
+
+async function addSkippedWeek() {
+  if (!currentMgmtSeasonId) return;
+  const date   = document.getElementById('skip-date-input').value;
+  const reason = document.getElementById('skip-reason-input').value.trim();
+  if (!date) { toast('Date is required', 'warning'); return; }
+  try {
+    await api('POST', `/seasons/${currentMgmtSeasonId}/skipped-weeks`, { skip_date: date, reason });
+    document.getElementById('skip-date-input').value = '';
+    document.getElementById('skip-reason-input').value = '';
+    toast('Skip date added');
+    await loadSkippedWeeks(currentMgmtSeasonId);
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+async function deleteSkippedWeek(id) {
+  if (!confirm('Remove this skip date?')) return;
+  try {
+    await api('DELETE', `/seasons/${currentMgmtSeasonId}/skipped-weeks/${id}`);
+    toast('Removed');
+    await loadSkippedWeeks(currentMgmtSeasonId);
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+// ── Bye Requests ──────────────────────────────────────────────────────────────
+async function loadByeRequests(seasonId) {
+  let byes = [];
+  try { byes = await api('GET', `/seasons/${seasonId}/bye-requests`); } catch(_) {}
+  const tbody = document.querySelector('#byes-table tbody');
+  tbody.innerHTML = byes.length
+    ? byes.map(b => `<tr>
+        <td>${b.team_name || b.team_id}</td>
+        <td>${b.week_number || 'TBD'}</td>
+        <td>${b.reason || '<span class="text-muted">—</span>'}</td>
+        <td>
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="bye_app_${b.id}"
+              ${b.approved ? 'checked' : ''} onchange="toggleByeApproval(${b.id}, this.checked)">
+          </div>
+        </td>
+        <td class="text-end">
+          <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteByeRequest(${b.id})"><i class="bi bi-trash"></i></button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="text-muted text-center py-2">No bye requests yet</td></tr>';
+}
+
+async function addByeRequest() {
+  if (!currentMgmtSeasonId) return;
+  const teamId = document.getElementById('bye-team-select').value;
+  const week   = parseInt(document.getElementById('bye-week-input').value) || 0;
+  const reason = document.getElementById('bye-reason-input').value.trim();
+  if (!teamId) { toast('Select a team', 'warning'); return; }
+  try {
+    await api('POST', `/seasons/${currentMgmtSeasonId}/bye-requests`, {
+      team_id: parseInt(teamId), week_number: week, reason
+    });
+    document.getElementById('bye-reason-input').value = '';
+    document.getElementById('bye-week-input').value = '0';
+    toast('Bye request added');
+    await loadByeRequests(currentMgmtSeasonId);
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+async function toggleByeApproval(id, approved) {
+  try {
+    await api('PUT', `/seasons/${currentMgmtSeasonId}/bye-requests/${id}`, { approved });
+    toast(approved ? 'Bye approved' : 'Bye unapproved');
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+async function deleteByeRequest(id) {
+  if (!confirm('Remove this bye request?')) return;
+  try {
+    await api('DELETE', `/seasons/${currentMgmtSeasonId}/bye-requests/${id}`);
+    toast('Removed');
+    await loadByeRequests(currentMgmtSeasonId);
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+// ── Season Rules ──────────────────────────────────────────────────────────────
+async function loadSeasonRules(seasonId) {
+  let rules = [];
+  try { rules = await api('GET', `/seasons/${seasonId}/rules`); } catch(_) {}
+  const tbody = document.querySelector('#rules-table tbody');
+  tbody.innerHTML = rules.length
+    ? rules.map(r => `<tr>
+        <td>${r.rule_label}</td>
+        <td>
+          <input type="text" class="form-control form-control-sm d-inline-block" style="width:100px"
+            value="${r.rule_value}" onchange="updateSeasonRule(${r.id}, this.value)">
+        </td>
+        <td class="text-end">
+          <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteSeasonRule(${r.id})"><i class="bi bi-trash"></i></button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="3" class="text-muted text-center py-2">No rules yet</td></tr>';
+}
+
+async function addSeasonRule() {
+  if (!currentMgmtSeasonId) return;
+  const label = document.getElementById('rule-label-input').value.trim();
+  const value = document.getElementById('rule-value-input').value.trim();
+  if (!label) { toast('Rule description is required', 'warning'); return; }
+  // Generate a simple key from the label
+  const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  try {
+    await api('POST', `/seasons/${currentMgmtSeasonId}/rules`, { rule_key: key, rule_label: label, rule_value: value });
+    document.getElementById('rule-label-input').value = '';
+    document.getElementById('rule-value-input').value = '';
+    toast('Rule added');
+    await loadSeasonRules(currentMgmtSeasonId);
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+async function updateSeasonRule(id, value) {
+  try {
+    await api('PUT', `/seasons/${currentMgmtSeasonId}/rules/${id}`, { rule_value: value });
+    toast('Rule updated');
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+async function deleteSeasonRule(id) {
+  if (!confirm('Remove this rule?')) return;
+  try {
+    await api('DELETE', `/seasons/${currentMgmtSeasonId}/rules/${id}`);
+    toast('Rule removed');
+    await loadSeasonRules(currentMgmtSeasonId);
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+// ── Assign teams to blanket match slots ───────────────────────────────────────
+function openAssignMatchTeams(matchId) {
+  document.getElementById('assign-match-id').value = matchId;
+  const opts = '<option value="">(unassigned)</option>' +
+    allTeams.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  document.getElementById('assign-home-select').innerHTML = opts;
+  document.getElementById('assign-away-select').innerHTML = opts;
+  openModal('assign-match-modal');
+}
+
+async function confirmAssignMatchTeams() {
+  const matchId  = parseInt(document.getElementById('assign-match-id').value);
+  const homeId   = document.getElementById('assign-home-select').value;
+  const awayId   = document.getElementById('assign-away-select').value;
+  const body = {
+    home_team_id: homeId ? parseInt(homeId) : null,
+    away_team_id: awayId ? parseInt(awayId) : null
+  };
+  try {
+    await api('PATCH', `/matches/${matchId}/assign`, body);
+    closeModal('assign-match-modal');
+    toast('Teams assigned');
+    loadSchedule(); // refresh schedule view
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+// ── Teams ─────────────────────────────────────────────────────────────────────
+async function loadTeams() {
+  if (!activeLeague) return;
+  allTeams   = await api('GET', `/teams?league_id=${activeLeague.id}`);
+  allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
+
+  const container = document.getElementById('teams-cards');
+  if (!allTeams.length) {
+    container.innerHTML = '<div class="col"><div class="text-muted py-3">No teams yet. Click "New Team" to add one.</div></div>';
+    return;
+  }
+
+  // Group players by team
+  const byTeam = {};
+  allTeams.forEach(t => byTeam[t.id] = []);
+  allPlayers.forEach(p => { if (p.team_id && byTeam[p.team_id]) byTeam[p.team_id].push(p); });
+
+  // Players with no team in this league (for the assign dropdown)
+  // We fetch all league players; those with team_id null won't appear due to JOIN,
+  // so unassigned shows as empty — covered by "New Player" path below.
+
+  container.innerHTML = allTeams.map(t => {
+    const players = byTeam[t.id] || [];
+    const rows = players.map(p => `
+      <tr class="roster-row">
+        <td class="text-muted">${p.player_number||'—'}</td>
+        <td>${p.name}${p.admin_hold ? ' <span class="badge bg-warning text-dark" style="font-size:.65rem">Hold</span>' : ''}</td>
+        <td><span class="badge bg-secondary" style="font-size:.72rem">${p.handicap}</span></td>
+        <td class="text-end">
+          <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editPlayer(${p.id})" title="Edit"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-outline-danger btn-sm py-0" onclick="removeFromTeam(${p.id})" title="Remove from team"><i class="bi bi-person-dash"></i></button>
+        </td>
+      </tr>`).join('') ||
+      '<tr><td colspan="4" class="text-muted text-center py-2" style="font-size:.85rem">No players on roster</td></tr>';
+
+    return `
+      <div class="col-md-6 col-xl-4">
+        <div class="card h-100">
+          <div class="team-card-header">
+            <span class="fw-semibold">${t.name}</span>
+            <span>
+              <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editTeam(${t.id})"><i class="bi bi-pencil"></i></button>
+              <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteTeam(${t.id})"><i class="bi bi-trash"></i></button>
+            </span>
+          </div>
+          <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+              <thead><tr>
+                <th style="font-size:.75rem;padding:.4rem .75rem">#</th>
+                <th style="font-size:.75rem;padding:.4rem .75rem">Name</th>
+                <th style="font-size:.75rem;padding:.4rem .75rem">HC</th>
+                <th></th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          <div class="add-to-roster d-flex gap-2 align-items-center">
+            <button class="btn btn-sm btn-outline-primary" onclick="openNewPlayerOnTeam(${t.id})">
+              <i class="bi bi-person-plus"></i> New Player
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="openAssignPlayer(${t.id})">
+              <i class="bi bi-arrow-left-right"></i> Assign Existing
+            </button>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// Remove a player from their team (unassign, don't delete)
+async function removeFromTeam(playerId) {
+  const p = allPlayers.find(x => x.id === playerId);
+  if (!p) return;
+  if (!confirm(`Remove ${p.name} from their team? The player won't be deleted.`)) return;
+  try {
+    await api('PUT', `/players/${playerId}`, {
+      first_name: p.first_name, last_name: p.last_name,
+      phone:      p.phone,      email:     p.email,
+      handicap:   p.handicap,   admin_hold: p.admin_hold,
+      team_id:    null
+    });
+    toast(`${p.name} removed from team`);
+    loadTeams();
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+// Open player modal pre-set to a specific team
+function openNewPlayerOnTeam(teamId) {
+  document.getElementById('player-modal-title').textContent = 'Add Player to Roster';
+  document.getElementById('player-id').value = '';
+  document.getElementById('player-number').value = '';
+  document.getElementById('player-first-name').value = '';
+  document.getElementById('player-last-name').value = '';
+  document.getElementById('player-phone').value = '';
+  document.getElementById('player-email').value = '';
+  document.getElementById('player-handicap').value = '0';
+  document.getElementById('player-admin-hold').checked = false;
+  setPlayerModalMode(false);
+  populateTeamDropdown(teamId);
+  openModal('player-modal');
+}
+
+// Assign an existing (unassigned) player to a team
+async function openAssignPlayer(teamId) {
+  // Fetch all players with no team filter to find unassigned ones
+  let all;
+  try { all = await api('GET', '/players'); } catch(e) { toast(e.message,'danger'); return; }
+  const unassigned = all.filter(p => !p.team_id);
+  if (!unassigned.length) {
+    toast('No unassigned players available. Use "New Player" to create one.', 'warning');
+    return;
+  }
+  // Build a quick inline dropdown — show a small modal
+  document.getElementById('assign-team-id').value = teamId;
+  const sel = document.getElementById('assign-player-select');
+  sel.innerHTML = unassigned.map(p => `<option value="${p.id}">${p.name}${p.player_number?' (#'+p.player_number+')':''}</option>`).join('');
+  openModal('assign-modal');
+}
+
+async function confirmAssign() {
+  const teamId   = parseInt(document.getElementById('assign-team-id').value);
+  const playerId = parseInt(document.getElementById('assign-player-select').value);
+  const p = (await api('GET', `/players/${playerId}`));
+  try {
+    await api('PUT', `/players/${playerId}`, {
+      player_number: p.player_number,
+      name:          p.name,
+      handicap:      p.handicap,
+      admin_hold:    p.admin_hold,
+      team_id:       teamId
+    });
+    closeModal('assign-modal');
+    toast('Player assigned to team');
+    allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
+    loadTeams();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+function openNewTeam() {
+  document.getElementById('team-modal-title').textContent = 'New Team';
+  document.getElementById('team-id').value = '';
+  document.getElementById('team-name').value = '';
+  openModal('team-modal');
+}
+
+function editTeam(id) {
+  const t = allTeams.find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('team-modal-title').textContent = 'Edit Team';
+  document.getElementById('team-id').value = t.id;
+  document.getElementById('team-name').value = t.name;
+  openModal('team-modal');
+}
+
+async function saveTeam() {
+  const id = document.getElementById('team-id').value;
+  const body = {
+    name: document.getElementById('team-name').value.trim(),
+    league_id: activeLeague?.id
+  };
+  if (!body.name) { toast('Name is required','warning'); return; }
+  if (!body.league_id) { toast('No active league selected','warning'); return; }
+  try {
+    if (id) await api('PUT', `/teams/${id}`, body);
+    else    await api('POST', '/teams', body);
+    closeModal('team-modal');
+    toast('Team saved');
+    document.getElementById('team-id').value = '';
+    document.getElementById('team-modal-title').textContent = 'New Team';
+    allTeams = await api('GET', `/teams?league_id=${activeLeague.id}`);
+    loadTeams();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+async function deleteTeam(id) {
+  if (!confirm('Delete this team? Players will be unassigned.')) return;
+  try {
+    await api('DELETE', `/teams/${id}`);
+    toast('Deleted');
+    allTeams = await api('GET', `/teams?league_id=${activeLeague.id}`);
+    loadTeams();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+// ── Players ───────────────────────────────────────────────────────────────────
+async function loadPlayers() {
+  if (!activeLeague) return;
+  allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
+  const tbody = document.querySelector('#players-table tbody');
+  tbody.innerHTML = allPlayers.map(p => `
+    <tr>
+      <td class="text-muted small">${p.player_number||'—'}</td>
+      <td class="fw-semibold">${p.last_name}${p.admin_hold ? ' <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem">Hold</span>' : ''}</td>
+      <td>${p.first_name}</td>
+      <td><span class="badge bg-secondary badge-hc">${p.handicap}</span></td>
+      <td>${p.team_name || '<span class="text-muted">—</span>'}</td>
+      <td class="text-muted small">${p.phone||'—'}</td>
+      <td class="text-end">
+        <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editPlayer(${p.id})"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-outline-danger btn-sm py-0" onclick="deletePlayer(${p.id})"><i class="bi bi-trash"></i></button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted py-3">No players yet</td></tr>';
+}
+
+function setPlayerModalMode(isEdit) {
+  const numInput = document.getElementById('player-number');
+  const lockIcon = document.getElementById('player-number-lock');
+  // Lock player number when editing
+  numInput.readOnly = isEdit;
+  numInput.classList.toggle('bg-light', isEdit);
+  lockIcon.classList.toggle('d-none', !isEdit);
+  // Show admin hold only for 9-ball leagues
+  const is9ball = activeLeague?.game_format === '9ball';
+  document.getElementById('admin-hold-row').classList.toggle('d-none', !is9ball);
+}
+
+function openNewPlayer() {
+  document.getElementById('player-modal-title').textContent = 'Add Player';
+  document.getElementById('player-id').value = '';
+  document.getElementById('player-number').value = '';
+  document.getElementById('player-first-name').value = '';
+  document.getElementById('player-last-name').value = '';
+  document.getElementById('player-phone').value = '';
+  document.getElementById('player-email').value = '';
+  document.getElementById('player-handicap').value = '0';
+  document.getElementById('player-admin-hold').checked = false;
+  setPlayerModalMode(false);
+  populateTeamDropdown(null);
+  openModal('player-modal');
+}
+
+function editPlayer(id) {
+  const p = allPlayers.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('player-modal-title').textContent = 'Edit Player';
+  document.getElementById('player-id').value = p.id;
+  document.getElementById('player-number').value = p.player_number || '';
+  document.getElementById('player-first-name').value = p.first_name || '';
+  document.getElementById('player-last-name').value = p.last_name || '';
+  document.getElementById('player-phone').value = p.phone || '';
+  document.getElementById('player-email').value = p.email || '';
+  document.getElementById('player-handicap').value = p.handicap;
+  document.getElementById('player-admin-hold').checked = !!p.admin_hold;
+  setPlayerModalMode(true);
+  populateTeamDropdown(p.team_id);
+  openModal('player-modal');
+}
+
+function populateTeamDropdown(selectedId) {
+  const sel = document.getElementById('player-team');
+  sel.innerHTML = '<option value="">— No Team —</option>' +
+    allTeams.map(t => `<option value="${t.id}" ${t.id==selectedId?'selected':''}>${t.name}</option>`).join('');
+}
+
+async function savePlayer() {
+  const id        = document.getElementById('player-id').value;
+  const teamVal   = document.getElementById('player-team').value;
+  const firstName = document.getElementById('player-first-name').value.trim();
+  const lastName  = document.getElementById('player-last-name').value.trim();
+  if (!firstName && !lastName) { toast('First or last name is required','warning'); return; }
+  const body = {
+    player_number: id ? undefined : document.getElementById('player-number').value.trim(), // only on create
+    first_name:    firstName,
+    last_name:     lastName,
+    phone:         document.getElementById('player-phone').value.trim(),
+    email:         document.getElementById('player-email').value.trim(),
+    handicap:      parseFloat(document.getElementById('player-handicap').value) || 0,
+    admin_hold:    document.getElementById('player-admin-hold').checked,
+    team_id:       teamVal ? parseInt(teamVal) : null,
+    league_id:     activeLeague?.id
+  };
+  // Include player_number on create
+  if (!id) body.player_number = document.getElementById('player-number').value.trim();
+  try {
+    if (id) await api('PUT', `/players/${id}`, body);
+    else    await api('POST', '/players', body);
+    closeModal('player-modal');
+    toast('Player saved');
+    allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
+    const activeSec = document.querySelector('[data-section].active')?.dataset.section;
+    if (activeSec === 'teams') loadTeams();
+    else loadPlayers();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+async function deletePlayer(id) {
+  if (!confirm('Remove this player?')) return;
+  try {
+    await api('DELETE', `/players/${id}`);
+    toast('Deleted');
+    allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
+    loadPlayers();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+// ── Season selects ────────────────────────────────────────────────────────────
+function populateSeasonSelect(selId, callback) {
+  const sel = document.getElementById(selId);
+  sel.innerHTML = allSeasons.map(s =>
+    `<option value="${s.id}" ${s.active?'selected':''}>${s.name}</option>`
+  ).join('') || '<option value="">No seasons</option>';
+  if (callback) callback();
+}
+
+// ── Schedule ──────────────────────────────────────────────────────────────────
+async function loadSchedule() {
+  const seasonId = document.getElementById('schedule-season-select').value;
+  if (!seasonId) { document.getElementById('schedule-content').innerHTML = '<div class="text-muted">No season selected.</div>'; return; }
+  const matches = await api('GET', `/matches?season_id=${seasonId}`);
+  const byWeek = {};
+  matches.forEach(m => { (byWeek[m.week_number] = byWeek[m.week_number]||[]).push(m); });
+  const weeks = Object.keys(byWeek).sort((a,b)=>a-b);
+
+  const isUnassigned = m => !m.home_team_id || m.home_team_name === '(unassigned)' ||
+                            !m.away_team_id || m.away_team_name === '(unassigned)';
+
+  document.getElementById('schedule-content').innerHTML = weeks.length ? weeks.map(w => `
+    <div class="card mb-2">
+      <div class="card-header week-header py-1">Week ${w} — ${byWeek[w][0].match_date||'TBD'}</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Home</th><th class="text-center">vs</th><th>Away</th><th>Status</th><th></th></tr></thead>
+          <tbody>${byWeek[w].map(m => `<tr>
+            <td>${m.home_team_name || '<span class="text-muted fst-italic">(unassigned)</span>'}</td>
+            <td class="text-center text-muted">vs</td>
+            <td>${m.away_team_name || '<span class="text-muted fst-italic">(unassigned)</span>'}</td>
+            <td>${m.completed
+              ? '<span class="badge bg-success">Done</span>'
+              : '<span class="badge bg-secondary">Pending</span>'}</td>
+            <td class="text-end">${isUnassigned(m)
+              ? `<button class="btn btn-outline-primary btn-sm py-0" onclick="openAssignMatchTeams(${m.id})"><i class="bi bi-people"></i> Assign</button>`
+              : ''}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`).join('')
+  : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons → Manage → Schedule.</div>';
+}
+
+// ── Lineup Planning ───────────────────────────────────────────────────────────
+function loadLineupSection() {
+  populateSeasonSelect('lu-season-sel', loadLineupWeeks);
+}
+
+async function loadLineupWeeks() {
+  const seasonId = document.getElementById('lu-season-sel').value;
+  if (!seasonId) return;
+  const matches = await api('GET', `/matches?season_id=${seasonId}`);
+  const weeks = {};
+  matches.forEach(m => { if (!weeks[m.week_number]) weeks[m.week_number] = m.match_date || 'TBD'; });
+  const sorted = Object.keys(weeks).sort((a,b) => parseInt(a)-parseInt(b));
+  const weekSel = document.getElementById('lu-week-sel');
+  weekSel.innerHTML = sorted.length
+    ? sorted.map(w => `<option value="${w}">Week ${w} — ${weeks[w]}</option>`).join('')
+    : '<option value="">No matches scheduled</option>';
+  loadLineupForWeek();
+}
+
+async function loadLineupForWeek() {
+  const seasonId = document.getElementById('lu-season-sel').value;
+  const weekNum  = document.getElementById('lu-week-sel').value;
+  if (!seasonId || !weekNum) return;
+
+  const [matches, plans] = await Promise.all([
+    api('GET', `/matches?season_id=${seasonId}`),
+    api('GET', `/lineup-plans?season_id=${seasonId}&week_number=${weekNum}`)
+  ]);
+
+  const weekMatches = matches.filter(m => m.week_number == weekNum);
+  const plansByTeam = {};
+  plans.forEach(p => { (plansByTeam[p.team_id] = plansByTeam[p.team_id] || []).push(p); });
+
+  const container = document.getElementById('lineup-cards');
+  if (!weekMatches.length) {
+    container.innerHTML = '<div class="col"><div class="text-muted py-3">No matches this week.</div></div>';
+    return;
+  }
+  container.innerHTML = weekMatches.map(m =>
+    renderLineupCard(m, plansByTeam, parseInt(seasonId), parseInt(weekNum))
+  ).join('');
+}
+
+function renderLineupCard(match, plansByTeam, seasonId, weekNum) {
+  function teamCol(teamId, teamName, slotPrefix) {
+    const plans  = plansByTeam[teamId] || [];
+    const roster = allPlayers.filter(p => p.team_id == teamId);
+    const badge  = plans.length >= 3
+      ? '<span class="badge bg-success ms-1" style="font-size:.68rem">✓ Set</span>'
+      : plans.length > 0
+        ? `<span class="badge bg-warning text-dark ms-1" style="font-size:.68rem">${plans.length}/3</span>`
+        : '<span class="badge bg-secondary ms-1" style="font-size:.68rem">Not set</span>';
+    const slots = [0,1,2].map(i => {
+      const saved = plans[i];
+      const opts = '<option value="0">— not set —</option>' +
+        roster.map(p =>
+          `<option value="${p.id}" ${saved && saved.player_id == p.id ? 'selected' : ''}>` +
+          `${p.name} (${p.handicap >= 0 ? '+' : ''}${p.handicap})</option>`
+        ).join('');
+      return `<div class="d-flex align-items-center gap-2 mb-1">
+        <span class="text-muted fw-bold" style="width:22px;font-size:.8rem">${slotPrefix}${i+1}</span>
+        <select class="form-select form-select-sm" id="lu_${teamId}_${i}">${opts}</select>
+      </div>`;
+    }).join('');
+    return `<div class="col-6">
+      <div class="small fw-semibold mb-2">${slotPrefix==='H'?'🏠':'🚗'} ${teamName}${badge}</div>
+      ${slots}
+      <button class="btn btn-primary btn-sm w-100 mt-2"
+        onclick="saveTeamLineup(${seasonId},${weekNum},${teamId})">
+        <i class="bi bi-check-lg"></i> Save Lineup
+      </button>
+    </div>`;
+  }
+  return `<div class="col-12 col-xl-6">
+    <div class="card">
+      <div class="card-header py-2 fw-semibold small d-flex justify-content-between">
+        <span>${match.home_team_name} <span class="text-muted fw-normal">vs</span> ${match.away_team_name}</span>
+        <span class="text-muted">Week ${match.week_number}${match.match_date?' · '+match.match_date:''}</span>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          ${teamCol(match.home_team_id, match.home_team_name, 'H')}
+          ${teamCol(match.away_team_id, match.away_team_name, 'A')}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveTeamLineup(seasonId, weekNum, teamId) {
+  const playerIds = [0,1,2]
+    .map(i => parseInt(document.getElementById(`lu_${teamId}_${i}`)?.value) || 0)
+    .filter(id => id > 0);
+  if (playerIds.length === 0) { toast('Select at least one player','warning'); return; }
+  if (new Set(playerIds).size !== playerIds.length) { toast('Duplicate player selected','warning'); return; }
+  try {
+    await api('POST', '/lineup-plans', { season_id: seasonId, team_id: teamId, week_number: weekNum, player_ids: playerIds });
+    toast('Lineup saved');
+    loadLineupForWeek();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+// ── Match Entry ───────────────────────────────────────────────────────────────
+let currentMatch       = null;
+let scoresheetHomeTeam = [];  // 3 Player objects  (ordered: slot 1, 2, 3)
+let scoresheetAwayTeam = [];  // 3 Player objects
+// scoresheetGames[r*3+p]: g1w/g2w/g3w = 'home'|'away'|'', g1lb/g2lb/g3lb = 0-7
+let scoresheetGames = Array.from({length:9}, () => ({
+  g1w:'', g1lb:0, g2w:'', g2lb:0, g3w:'', g3lb:0
+}));
+
+async function loadEntryMatches() {
+  const seasonId = document.getElementById('entry-season-select').value;
+  if (!seasonId) return;
+  const matches = await api('GET', `/matches?season_id=${seasonId}`);
+  const sel = document.getElementById('entry-match-select');
+  sel.innerHTML = matches.map(m =>
+    `<option value="${m.id}">[W${m.week_number}] ${m.home_team_name} vs ${m.away_team_name} ${m.completed?'✓':''}</option>`
+  ).join('') || '<option>No matches</option>';
+  loadMatchEntry();
+}
+
+async function loadMatchEntry() {
+  const matchId = document.getElementById('entry-match-select').value;
+  if (!matchId) return;
+
+  const lineupDiv     = document.getElementById('entry-lineup');
+  const scoresheetDiv = document.getElementById('entry-scoresheet');
+  lineupDiv.classList.add('d-none');
+  scoresheetDiv.classList.add('d-none');
+  scoresheetDiv.innerHTML = '';
+
+  let detail;
+  try { detail = await api('GET', `/matches/${matchId}`); }
+  catch(e) { toast(e.message, 'danger'); return; }
+
+  currentMatch = detail.match;
+  const m = currentMatch;
+
+  if (!activeLeague || activeLeague.game_format !== '8ball') {
+    scoresheetDiv.classList.remove('d-none');
+    scoresheetDiv.innerHTML = '<div class="text-muted p-3">9-ball scoresheet coming soon.</div>';
+    return;
+  }
+
+  const homePlayers = allPlayers.filter(p => p.team_id == m.home_team_id);
+  const awayPlayers = allPlayers.filter(p => p.team_id == m.away_team_id);
+
+  // 1. Existing round results take highest priority (already played)
+  let existingRounds = [];
+  try { existingRounds = await api('GET', `/matches/${matchId}/rounds`); } catch(_) {}
+  if (existingRounds.length > 0) {
+    const r1 = existingRounds.filter(r => r.round_number === 1).sort((a,b) => a.id - b.id);
+    if (r1.length === 3) {
+      const hp = r1.map(r => homePlayers.find(p => p.id === r.home_player_id)).filter(Boolean);
+      const ap = r1.map(r => awayPlayers.find(p => p.id === r.away_player_id)).filter(Boolean);
+      if (hp.length === 3 && ap.length === 3) {
+        scoresheetHomeTeam = hp;
+        scoresheetAwayTeam = ap;
+        renderScoresheet(existingRounds);
+        return;
+      }
+    }
+  }
+
+  // 2. Lineup plans (pre-game) — load automatically
+  let plans = [];
+  try { plans = await api('GET', `/lineup-plans?season_id=${m.season_id}&week_number=${m.week_number}`); } catch(_) {}
+  const homePlans = plans.filter(p => p.team_id == m.home_team_id);
+  const awayPlans = plans.filter(p => p.team_id == m.away_team_id);
+  if (homePlans.length >= 3 && awayPlans.length >= 3) {
+    const hp = homePlans.slice(0,3).map(lp => homePlayers.find(p => p.id === lp.player_id)).filter(Boolean);
+    const ap = awayPlans.slice(0,3).map(lp => awayPlayers.find(p => p.id === lp.player_id)).filter(Boolean);
+    if (hp.length === 3 && ap.length === 3) {
+      scoresheetHomeTeam = hp;
+      scoresheetAwayTeam = ap;
+      scoresheetGames = Array.from({length:9}, () => ({g1w:'',g1lb:0,g2w:'',g2lb:0,g3w:'',g3lb:0}));
+      renderScoresheet([]);
+      return;
+    }
+  }
+
+  // 3. Fallback: inline quick picker
+  showLineupPicker(m, homePlayers, awayPlayers);
+}
+
+function showLineupPicker(m, homePlayers, awayPlayers) {
+  const lineupDiv = document.getElementById('entry-lineup');
+  lineupDiv.classList.remove('d-none');
+
+  const makeOpts = (players) => players.map(p =>
+    `<option value="${p.id}">${p.name} (${p.handicap >= 0 ? '+' : ''}${p.handicap})</option>`
+  ).join('');
+
+  lineupDiv.innerHTML = `<div class="card mb-3">
+    <div class="card-header fw-semibold py-2 d-flex justify-content-between align-items-center">
+      <span>Set Tonight's Lineup</span>
+      <span class="text-muted fw-normal small">
+        Set in advance on the <a href="#" onclick="navTo('lineup');return false">Lineup</a> page
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <h6 class="fw-bold mb-2" style="color:#1a5cb8">🏠 ${m.home_team_name}</h6>
+          ${[1,2,3].map(i => `<div class="d-flex align-items-center gap-2 mb-2">
+            <span class="text-muted fw-bold" style="width:22px">H${i}</span>
+            <select class="form-select form-select-sm" id="ph_${i}">
+              <option value="">— select —</option>${makeOpts(homePlayers)}
+            </select></div>`).join('')}
+        </div>
+        <div class="col-md-6">
+          <h6 class="fw-bold mb-2" style="color:#9b1c1c">🚗 ${m.away_team_name}</h6>
+          ${[1,2,3].map(i => `<div class="d-flex align-items-center gap-2 mb-2">
+            <span class="text-muted fw-bold" style="width:22px">A${i}</span>
+            <select class="form-select form-select-sm" id="pa_${i}">
+              <option value="">— select —</option>${makeOpts(awayPlayers)}
+            </select></div>`).join('')}
+        </div>
+      </div>
+      <button class="btn btn-primary mt-2" onclick="confirmLineup()">
+        <i class="bi bi-arrow-right"></i> Go to Scoresheet
+      </button>
+    </div>
+  </div>`;
+}
+
+function confirmLineup() {
+  const m = currentMatch;
+  if (!m) return;
+  const homePlayers = allPlayers.filter(p => p.team_id == m.home_team_id);
+  const awayPlayers = allPlayers.filter(p => p.team_id == m.away_team_id);
+
+  const hp = [1,2,3].map(i => homePlayers.find(p => p.id == document.getElementById(`ph_${i}`)?.value)).filter(Boolean);
+  const ap = [1,2,3].map(i => awayPlayers.find(p => p.id == document.getElementById(`pa_${i}`)?.value)).filter(Boolean);
+
+  if (hp.length !== 3) { toast('Select all 3 home players','warning'); return; }
+  if (ap.length !== 3) { toast('Select all 3 away players','warning'); return; }
+  if (new Set(hp.map(p=>p.id)).size !== 3) { toast('Duplicate home player','warning'); return; }
+  if (new Set(ap.map(p=>p.id)).size !== 3) { toast('Duplicate away player','warning'); return; }
+
+  scoresheetHomeTeam = hp;
+  scoresheetAwayTeam = ap;
+  scoresheetGames    = Array.from({length:9}, () => ({g1w:'',g1lb:0,g2w:'',g2lb:0,g3w:'',g3lb:0}));
+  document.getElementById('entry-lineup').classList.add('d-none');
+  renderScoresheet([]);
+}
+
+// ── Scoring helpers ───────────────────────────────────────────────────────────
+function gameScores(winner, lb) {
+  if (!winner) return { h: 0, a: 0 };
+  return winner === 'home' ? { h: 10, a: lb } : { h: lb, a: 10 };
+}
+
+function calcHandicap(hHC, aHC) {
+  const diff = Math.abs(hHC - aHC);
+  const pts  = Math.round(diff * 2.55);
+  const to   = hHC < aHC ? 'home' : aHC < hHC ? 'away' : '';
+  return { pts, to };
+}
+
+function pairingTotals(idx) {
+  const g  = scoresheetGames[idx];
+  const ri = Math.floor(idx / 3);
+  const pi = idx % 3;
+  const hp = scoresheetHomeTeam[pi];
+  const ap = scoresheetAwayTeam[(pi + ri) % 3];
+  const s1 = gameScores(g.g1w, g.g1lb);
+  const s2 = gameScores(g.g2w, g.g2lb);
+  const s3 = gameScores(g.g3w, g.g3lb);
+  const rawH = s1.h + s2.h + s3.h;
+  const rawA = s1.a + s2.a + s3.a;
+  const hc   = calcHandicap(hp.handicap, ap.handicap);
+  const adjH = rawH + (hc.to === 'home' ? hc.pts : 0);
+  const adjA = rawA + (hc.to === 'away' ? hc.pts : 0);
+  const winner = adjH > adjA ? 'home' : adjA > adjH ? 'away' : '';
+  return { rawH, rawA, adjH, adjA, hc, winner, hp, ap };
+}
+
+// ── Scoresheet — table layout matching physical Page 1 ───────────────────────
+function renderScoresheet(existingRounds) {
+  const m    = currentMatch;
+  const home = scoresheetHomeTeam;
+  const away = scoresheetAwayTeam;
+
+  // Hydrate scoresheetGames from saved round data
+  scoresheetGames = Array.from({length:9}, () => ({g1w:'',g1lb:0,g2w:'',g2lb:0,g3w:'',g3lb:0}));
+  existingRounds.forEach(rr => {
+    const ri = rr.round_number - 1;
+    const pi = home.findIndex(p => p.id === rr.home_player_id);
+    if (pi < 0) return;
+    const idx = ri * 3 + pi;
+    const from = (hs, as) => hs===10 ? {w:'home',lb:as} : as===10 ? {w:'away',lb:hs} : {w:'',lb:0};
+    const g1 = from(rr.game1_home, rr.game1_away);
+    const g2 = from(rr.game2_home, rr.game2_away);
+    const g3 = from(rr.game3_home, rr.game3_away);
+    scoresheetGames[idx] = {g1w:g1.w,g1lb:g1.lb,g2w:g2.w,g2lb:g2.lb,g3w:g3.w,g3lb:g3.lb};
+  });
+
+  // ── Header ──
+  let html = `<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+    <div>
+      <h6 class="fw-bold mb-0">
+        Week ${m.week_number}${m.match_date?' · '+m.match_date:''}
+        ${m.completed?'<span class="badge bg-success ms-2">Completed</span>':'<span class="badge bg-secondary ms-2">Pending</span>'}
+      </h6>
+      <div class="small" style="margin-top:2px">
+        <span style="color:#1a5cb8;font-weight:600">${m.home_team_name}</span>
+        <span class="text-muted mx-1">vs</span>
+        <span style="color:#9b1c1c;font-weight:600">${m.away_team_name}</span>
+      </div>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary" onclick="loadMatchEntry()">
+      <i class="bi bi-arrow-left"></i> Change Lineup</button>
+  </div>`;
+
+  // ── Lineup summary ──
+  html += `<div class="card mb-2"><div class="card-body py-2 px-3">
+    <div class="row g-0">
+      <div class="col-6 pe-3">
+        <div class="small fw-semibold mb-1" style="color:#1a5cb8">${m.home_team_name}</div>
+        ${home.map((p,i) => `<div class="small">H${i+1} <strong>${p.name}</strong>
+          <span class="text-muted ms-1">${p.handicap>=0?'+':''}${p.handicap}</span></div>`).join('')}
+      </div>
+      <div class="col-6 border-start ps-3">
+        <div class="small fw-semibold mb-1" style="color:#9b1c1c">${m.away_team_name}</div>
+        ${away.map((p,i) => `<div class="small">A${i+1} <strong>${p.name}</strong>
+          <span class="text-muted ms-1">${p.handicap>=0?'+':''}${p.handicap}</span></div>`).join('')}
+      </div>
+    </div>
+  </div></div>`;
+
+  // ── Scoring table ──
+  html += `<div class="card mb-3"><div class="card-body p-0"><table class="ss-table">
+    <thead><tr>
+      <th style="width:148px">Pairing</th>
+      <th style="width:90px">Game 1<br><span style="font-size:.62rem;opacity:.7;font-weight:400;text-transform:none">Win · Loser Balls</span></th>
+      <th style="width:90px">Game 2<br><span style="font-size:.62rem;opacity:.7;font-weight:400;text-transform:none">Win · Loser Balls</span></th>
+      <th style="width:90px">Game 3<br><span style="font-size:.62rem;opacity:.7;font-weight:400;text-transform:none">Win · Loser Balls</span></th>
+      <th>Result</th>
+    </tr></thead>
+    <tbody>`;
+
+  for (let r = 0; r < 3; r++) {
+    const pairLabels = [0,1,2].map(p => `H${p+1}·A${(p+r)%3+1}`).join('&nbsp;&nbsp;');
+    html += `<tr class="ss-round-hdr"><td colspan="5">Round ${r+1}&nbsp;&nbsp;&nbsp;${pairLabels}</td></tr>`;
+
+    for (let p = 0; p < 3; p++) {
+      const hp  = home[p];
+      const ap  = away[(p + r) % 3];
+      const idx = r * 3 + p;
+      const g   = scoresheetGames[idx];
+      const hc  = calcHandicap(hp.handicap, ap.handicap);
+      const hcNote = hc.pts > 0
+        ? `+${hc.pts} → ${hc.to==='home'?'H':'A'}${hc.to==='home'?p+1:(p+r)%3+1}`
+        : 'Even';
+
+      html += `<tr id="ss-row-${idx}">
+        <td class="ss-pairing-cell">
+          <div><span class="fw-bold" style="color:#1a5cb8;font-size:.75rem">H${p+1}</span>
+               <span class="ss-pname"> ${hp.name}</span>
+               <span class="ss-diff">${hp.handicap>=0?'+':''}${hp.handicap}</span></div>
+          <div><span class="fw-bold" style="color:#9b1c1c;font-size:.75rem">A${(p+r)%3+1}</span>
+               <span class="ss-pname"> ${ap.name}</span>
+               <span class="ss-diff">${ap.handicap>=0?'+':''}${ap.handicap}</span></div>
+        </td>
+        ${ssGameCell(idx,1,g.g1w,g.g1lb)}
+        ${ssGameCell(idx,2,g.g2w,g.g2lb)}
+        ${ssGameCell(idx,3,g.g3w,g.g3lb)}
+        <td class="ss-result-cell tbd" id="ss-result-${idx}">
+          <div class="ss-hc-note">${hcNote}</div>
+          <div class="ss-pts" id="ss-pts-${idx}">—</div>
+          <div id="ss-winner-${idx}"></div>
+        </td>
+      </tr>`;
+    }
+
+    html += `<tr class="ss-subtotal">
+      <td colspan="4" class="text-end pe-3" style="color:#777">Round ${r+1} pairings:</td>
+      <td class="text-center fw-bold" id="ss-rnd-${r}">—</td>
+    </tr>`;
+  }
+
+  html += `</tbody></table></div></div>`;
+
+  // ── Final score + save ──
+  html += `<div class="d-flex align-items-center gap-3 flex-wrap" id="ss-final-wrap">
+    <div id="ss-summary">${buildScoreSummary()}</div>
+    <button class="btn btn-success" onclick="saveScoresheet()">
+      <i class="bi bi-check-lg"></i> Save Scoresheet</button>
+    ${m.completed?`<button class="btn btn-outline-secondary" onclick="clearMatchResults(${m.id})">
+      <i class="bi bi-x-lg"></i> Clear Results</button>`:''}
+  </div>`;
+
+  const sd = document.getElementById('entry-scoresheet');
+  sd.innerHTML = html;
+  sd.classList.remove('d-none');
+
+  // Render all result cells with current state
+  for (let i = 0; i < 9; i++) updateSSRow(i);
+  updateSSFinal();
+}
+
+// ── Scoresheet cell + interaction helpers ─────────────────────────────────────
+function ssGameCell(idx, gn, winner, lb) {
+  const dis = !winner ? ' disabled' : '';
+  return `<td class="ss-game-cell">
+    <div class="ss-g-btns">
+      <button class="ss-g-btn${winner==='home'?' h-win':''}" id="sg_${idx}_${gn}_h"
+        onclick="ssSetWinner(${idx},${gn},'home')">H</button>
+      <button class="ss-g-btn${winner==='away'?' a-win':''}" id="sg_${idx}_${gn}_a"
+        onclick="ssSetWinner(${idx},${gn},'away')">A</button>
+    </div>
+    <input type="number" class="ss-lb" id="slb_${idx}_${gn}"
+      min="0" max="7" value="${lb}"${dis}
+      oninput="ssSetLB(${idx},${gn},this.value)"
+      onkeydown="ssLBKey(event,${idx},${gn})">
+  </td>`;
+}
+
+function ssSetWinner(idx, gn, side) {
+  const g = scoresheetGames[idx];
+  const wk = `g${gn}w`, lk = `g${gn}lb`;
+  g[wk] = (g[wk] === side) ? '' : side;
+  if (!g[wk]) g[lk] = 0;
+  updateSSRow(idx);
+  updateSSFinal();
+  // Auto-focus loser balls input when winner chosen
+  if (g[wk]) {
+    const lb = document.getElementById(`slb_${idx}_${gn}`);
+    if (lb) { lb.disabled = false; lb.focus(); lb.select(); }
+  }
+}
+
+function ssSetLB(idx, gn, val) {
+  scoresheetGames[idx][`g${gn}lb`] = Math.min(7, Math.max(0, parseInt(val) || 0));
+  updateSSRow(idx);
+  updateSSFinal();
+}
+
+// Enter/Tab in loser balls → advance to next game's H button
+function ssLBKey(e, idx, gn) {
+  if (e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) {
+    e.preventDefault();
+    const nextGn = gn + 1;
+    const nextEl = nextGn <= 3
+      ? document.getElementById(`sg_${idx}_${nextGn}_h`)
+      : document.getElementById(`sg_${idx+1}_1_h`);
+    nextEl?.focus();
+  }
+}
+
+function updateSSRow(idx) {
+  const { adjH, adjA, winner, hc, hp, ap } = pairingTotals(idx);
+  const g = scoresheetGames[idx];
+  const cell = document.getElementById(`ss-result-${idx}`);
+  const ptsEl = document.getElementById(`ss-pts-${idx}`);
+  const winEl = document.getElementById(`ss-winner-${idx}`);
+
+  // Update H/A buttons and LB inputs
+  for (const gn of [1,2,3]) {
+    const wk = `g${gn}w`, lk = `g${gn}lb`;
+    const hb = document.getElementById(`sg_${idx}_${gn}_h`);
+    const ab = document.getElementById(`sg_${idx}_${gn}_a`);
+    const lb = document.getElementById(`slb_${idx}_${gn}`);
+    if (hb) hb.className = 'ss-g-btn' + (g[wk]==='home'?' h-win':'');
+    if (ab) ab.className = 'ss-g-btn' + (g[wk]==='away'?' a-win':'');
+    if (lb) { lb.disabled = !g[wk]; lb.value = g[lk]; }
+  }
+
+  if (!cell) return;
+  const hasData = g.g1w || g.g2w || g.g3w;
+  cell.className = 'ss-result-cell ' + (winner==='home'?'h-win':winner==='away'?'a-win':'tbd');
+  if (ptsEl) ptsEl.innerHTML = hasData
+    ? `<span style="color:#1a5cb8">${adjH}</span> · <span style="color:#9b1c1c">${adjA}</span>`
+    : '—';
+  if (winEl) winEl.innerHTML = winner==='home'
+    ? '<span class="badge bg-primary" style="font-size:.7rem">HOME</span>'
+    : winner==='away'
+    ? '<span class="badge bg-danger" style="font-size:.7rem">AWAY</span>'
+    : '';
+}
+
+function updateSSFinal() {
+  // Round subtotals
+  for (let r = 0; r < 3; r++) {
+    let rh = 0, ra = 0;
+    for (let p = 0; p < 3; p++) {
+      const {winner} = pairingTotals(r*3+p);
+      if (winner==='home') rh++; else if (winner==='away') ra++;
+    }
+    const el = document.getElementById(`ss-rnd-${r}`);
+    if (el) el.textContent = `H: ${rh}  A: ${ra}`;
+  }
+  // Overall summary
+  const wrap = document.getElementById('ss-summary');
+  if (wrap) wrap.innerHTML = buildScoreSummary();
+}
+
+function buildScoreSummary() {
+  let hw = 0, aw = 0;
+  for (let i = 0; i < 9; i++) {
+    const {winner} = pairingTotals(i);
+    if (winner==='home') hw++; else if (winner==='away') aw++;
+  }
+  const m = currentMatch;
+  return `<div class="score-summary">
+    <div class="text-center">
+      <div class="team-name">${m?.home_team_name||'Home'}</div>
+      <div class="team-score">${hw}</div>
+    </div>
+    <div class="text-center" style="opacity:.5;font-size:1.2rem">–</div>
+    <div class="text-center">
+      <div class="team-name">${m?.away_team_name||'Away'}</div>
+      <div class="team-score">${aw}</div>
+    </div>
+  </div>`;
+}
+
+async function saveScoresheet() {
+  const m = currentMatch;
+  if (!m) return;
+
+  const rounds = [];
+  for (let r = 0; r < 3; r++) {
+    for (let p = 0; p < 3; p++) {
+      const idx = r * 3 + p;
+      const g   = scoresheetGames[idx];
+      const hp  = scoresheetHomeTeam[p];
+      const ap  = scoresheetAwayTeam[(p + r) % 3];
+
+      const s1 = gameScores(g.g1w, g.g1lb);
+      const s2 = gameScores(g.g2w, g.g2lb);
+      const s3 = gameScores(g.g3w, g.g3lb);
+
+      rounds.push({
+        round_number:   r + 1,
+        home_player_id: hp.id,
+        away_player_id: ap.id,
+        game1_home: s1.h, game1_away: s1.a,
+        game2_home: s2.h, game2_away: s2.a,
+        game3_home: s3.h, game3_away: s3.a
+      });
+    }
+  }
+
+  try {
+    await api('POST', `/matches/${m.id}/rounds`, { rounds });
+    toast('Scoresheet saved');
+    loadEntryMatches();
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+async function clearMatchResults(matchId) {
+  if (!confirm('Clear all results for this match?')) return;
+  try {
+    await api('DELETE', `/matches/${matchId}/results`);
+    toast('Results cleared');
+    loadMatchEntry();
+  } catch(e) { toast(e.message, 'danger'); }
+}
+
+// ── Standings ─────────────────────────────────────────────────────────────────
+async function loadStandings() {
+  const seasonId = document.getElementById('standings-season-select').value;
+  if (!seasonId) return;
+  const standings = await api('GET', `/standings?season_id=${seasonId}`);
+  const tbody = document.querySelector('#standings-table tbody');
+  tbody.innerHTML = standings.map((s,i) => `
+    <tr ${i===0?'class="table-warning fw-bold"':''}>
+      <td>${i+1}</td>
+      <td>${s.team_name}</td>
+      <td>${s.played}</td>
+      <td>${s.wins}</td>
+      <td>${s.losses}</td>
+      <td>${s.ties}</td>
+      <td class="fw-bold">${s.points}</td>
+      <td>${s.games_won}</td>
+      <td>${s.games_lost}</td>
+      <td>${(s.win_pct*100).toFixed(1)}%</td>
+    </tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-3">No completed matches yet</td></tr>';
+}
+
+// ── Player Stats ──────────────────────────────────────────────────────────────
+async function loadPlayerStats() {
+  const seasonId = document.getElementById('stats-season-select').value;
+  if (!seasonId) return;
+  const stats = await api('GET', `/player-stats?season_id=${seasonId}`);
+  const tbody = document.querySelector('#stats-table tbody');
+  tbody.innerHTML = stats.map(s => `
+    <tr>
+      <td class="text-muted small">${s.player_number||'—'}</td>
+      <td>${s.player_name}</td>
+      <td>${s.team_name}</td>
+      <td><span class="badge bg-secondary badge-hc">${s.handicap}</span></td>
+      <td>${s.sets_won}</td>
+      <td>${s.sets_lost}</td>
+      <td>${s.games_won}</td>
+      <td>${s.games_lost}</td>
+      <td>${(s.win_pct*100).toFixed(1)}%</td>
+    </tr>`).join('') || '<tr><td colspan="9" class="text-center text-muted py-3">No stats yet</td></tr>';
+}
+
+// ── Leagues management modal ──────────────────────────────────────────────────
+function openLeagueModal() {
+  renderLeaguesTable();
+  openModal('league-modal');
+}
+
+function renderLeaguesTable() {
+  const formatLabel = { '8ball':'8-Ball','9ball':'9-Ball','10ball':'10-Ball','straight':'Straight' };
+  const tbody = document.querySelector('#leagues-table tbody');
+  tbody.innerHTML = allLeagues.map(l => `
+    <tr ${activeLeague && l.id === activeLeague.id ? 'class="table-primary"' : ''}>
+      <td class="fw-semibold">${l.name}</td>
+      <td>${formatLabel[l.game_format]||l.game_format}</td>
+      <td>${l.day_of_week||'—'}</td>
+      <td class="text-end">
+        <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteLeague(${l.id})"><i class="bi bi-trash"></i></button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted py-2">No leagues yet</td></tr>';
+}
+
+async function addLeague() {
+  const name   = document.getElementById('new-league-name').value.trim();
+  const format = document.getElementById('new-league-format').value;
+  const day    = document.getElementById('new-league-day').value;
+  if (!name) { toast('League name is required','warning'); return; }
+  try {
+    const newL = await api('POST', '/leagues', { name, game_format: format, day_of_week: day||null });
+    toast('League added');
+    document.getElementById('new-league-name').value = '';
+    allLeagues = await api('GET', '/leagues');
+    // Update sidebar select
+    const sel = document.getElementById('league-select');
+    sel.innerHTML = allLeagues.map(l =>
+      `<option value="${l.id}" ${activeLeague && l.id === activeLeague.id ? 'selected' : ''}>${l.name}</option>`
+    ).join('');
+    renderLeaguesTable();
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+async function deleteLeague(id) {
+  if (!confirm('Delete this league and ALL its teams, seasons and matches? This cannot be undone.')) return;
+  try {
+    await api('DELETE', `/leagues/${id}`);
+    toast('League deleted');
+    allLeagues = await api('GET', '/leagues');
+    // If we deleted the active league, switch to first available
+    if (activeLeague?.id === id) {
+      activeLeague = allLeagues[0] || null;
+      if (activeLeague) localStorage.setItem('activeLeagueId', activeLeague.id);
+      else              localStorage.removeItem('activeLeagueId');
+    }
+    const sel = document.getElementById('league-select');
+    sel.innerHTML = allLeagues.map(l =>
+      `<option value="${l.id}" ${activeLeague && l.id === activeLeague.id ? 'selected' : ''}>${l.name}</option>`
+    ).join('') || '<option value="">No leagues</option>';
+    if (activeLeague) await loadLeagueData();
+    renderLeaguesTable();
+    loadSection('dashboard');
+  } catch(e) { toast(e.message,'danger'); }
+}
+
+// ── Backup ────────────────────────────────────────────────────────────────────
+async function backup() {
+  try {
+    const res = await api('POST', '/backup');
+    toast('Backup saved: ' + res.path.split(/[/\\]/).pop());
+  } catch(e) { toast(e.message,'danger'); }
+}
+</script>
+</body>
+</html>

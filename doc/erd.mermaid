@@ -1,0 +1,125 @@
+---
+title: Pool League Manager — Entity Relationship Diagram
+---
+erDiagram
+
+    leagues {
+        int     id          PK
+        text    name
+        text    game_format     "8ball | 9ball | 10ball | straight"
+        text    day_of_week     "Monday … Sunday"
+        datetime created_at
+    }
+
+    teams {
+        int     id          PK
+        int     league_id   FK
+        text    name
+        int     captain_id  FK  "→ players.id (nullable)"
+        datetime created_at
+    }
+
+    players {
+        int     id            PK
+        text    player_number     "e.g. 42 — locked once set"
+        text    first_name
+        text    last_name
+        text    phone
+        text    email
+        int     team_id       FK  "nullable — unassigned if null"
+        real    handicap          "8ball: Diff avg | 9ball: race-to"
+        int     admin_hold        "9ball only: 1 = Admin Discretion lock"
+        datetime created_at
+    }
+
+    seasons {
+        int     id              PK
+        int     league_id       FK
+        text    name
+        date    start_date
+        date    end_date
+        int     active              "1 = current season for this league"
+        real    handicap_factor     "8ball: multiplier (e.g. 0.85) | 9ball: 0"
+        datetime created_at
+    }
+
+    matches {
+        int     id              PK
+        int     season_id       FK
+        int     home_team_id    FK
+        int     away_team_id    FK
+        date    match_date
+        int     week_number
+        int     match_number        "sequential # for the season"
+        text    table_numbers       "e.g. 1&2"
+        int     completed           "1 = results entered"
+        datetime created_at
+    }
+
+    match_results {
+        int     id          PK
+        int     match_id    FK
+        int     player_id   FK
+        int     team_id     FK
+        int     sets_won        "9ball"
+        int     sets_lost       "9ball"
+        int     games_won       "8ball"
+        int     games_lost      "8ball"
+        real    diff            "8ball: point differential"
+        datetime created_at
+    }
+
+    handicap_history {
+        int     id              PK
+        int     player_id       FK
+        real    old_handicap
+        real    new_handicap
+        date    effective_date
+        int     admin_hold          "1 = held at Admin Discretion"
+        text    note
+        datetime created_at
+    }
+
+    lineup_plans {
+        int     id          PK
+        int     team_id     FK
+        int     player_id   FK
+        int     season_id   FK
+        int     week_number
+        int     is_sub          "1 = substitute"
+        int     sub_for_id  FK  "→ players.id — who they cover (nullable)"
+        datetime created_at
+    }
+
+    %% ── Relationships ─────────────────────────────────────────
+
+    leagues     ||--o{ teams             : "has"
+    leagues     ||--o{ seasons           : "has"
+
+    teams       }o--|| leagues           : "belongs to"
+    teams       ||--o{ players           : "roster"
+    teams       ||--o{ lineup_plans      : "plans"
+
+    players     }o--o| teams             : "assigned to"
+    players     ||--o{ match_results     : "plays"
+    players     ||--o{ handicap_history  : "history"
+    players     ||--o{ lineup_plans      : "lined up"
+
+    seasons     }o--|| leagues           : "belongs to"
+    seasons     ||--o{ matches           : "schedule"
+    seasons     ||--o{ lineup_plans      : "in season"
+
+    matches     }o--|| seasons           : "in season"
+    matches     }o--|| teams             : "home"
+    matches     }o--|| teams             : "away"
+    matches     ||--o{ match_results     : "results"
+
+    match_results }o--|| matches         : "for match"
+    match_results }o--|| players         : "by player"
+    match_results }o--|| teams           : "for team"
+
+    handicap_history }o--|| players      : "tracks"
+
+    lineup_plans }o--|| teams            : "for team"
+    lineup_plans }o--|| players          : "player"
+    lineup_plans }o--|| seasons          : "in season"
