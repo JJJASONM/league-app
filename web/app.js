@@ -1030,6 +1030,170 @@ async function loadSchedule() {
   : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons → Manage → Schedule.</div>';
 }
 
+// ── Schedule Poster ───────────────────────────────────────────────────────────
+
+// Pool ball colours (solid 1-8, then stripes repeat tinted)
+const POSTER_BALLS = [
+  { bg:'#f5c500', fg:'#000' }, // 1 yellow
+  { bg:'#1547b8', fg:'#fff' }, // 2 blue
+  { bg:'#d91414', fg:'#fff' }, // 3 red
+  { bg:'#6a24a0', fg:'#fff' }, // 4 purple
+  { bg:'#f07a00', fg:'#000' }, // 5 orange
+  { bg:'#1a7828', fg:'#fff' }, // 6 green
+  { bg:'#8b0000', fg:'#fff' }, // 7 maroon
+  { bg:'#222',    fg:'#fff' }, // 8 black
+];
+
+function pocketHTML() {
+  return ['tl','tr','ml','mr','bl','br'].map(p =>
+    `<div class="poster-pocket poster-pocket-${p}"></div>`
+  ).join('');
+}
+
+function posterDateLabel(matchDate, weekNumber) {
+  if (!matchDate) return `Wk ${weekNumber}`;
+  const datePart = String(matchDate).split('T')[0];
+  const parts = datePart.split('-').map(n => parseInt(n, 10));
+  if (parts.length === 3 && parts.every(Number.isFinite)) {
+    return `${parts[1]}/${parts[2]}`;
+  }
+  const d = new Date(matchDate);
+  return Number.isNaN(d.getTime()) ? `Wk ${weekNumber}` : `${d.getMonth()+1}/${d.getDate()}`;
+}
+
+async function openSchedulePoster() {
+  const seasonId = document.getElementById('schedule-season-select').value;
+  if (!seasonId) { toast('Select a season first', 'warning'); return; }
+
+  const [matches, players] = await Promise.all([
+    api('GET', `/matches?season_id=${seasonId}`),
+    api('GET', `/players?league_id=${activeLeague.id}`)
+  ]);
+
+  if (!matches.length) { toast('No matches scheduled yet', 'warning'); return; }
+
+  const season = allSeasons.find(s => s.id == seasonId);
+
+  // ── Assign team numbers (alphabetical by name for predictability) ──
+  const seenIds = new Set();
+  matches.forEach(m => { seenIds.add(m.home_team_id); seenIds.add(m.away_team_id); });
+
+  // Build team list from match data (we already have team names on matches)
+  const teamMap = {};
+  matches.forEach(m => {
+    if (m.home_team_id) teamMap[m.home_team_id] = m.home_team_name;
+    if (m.away_team_id) teamMap[m.away_team_id] = m.away_team_name;
+  });
+  const seasonTeams = Object.entries(teamMap)
+    .map(([id, name]) => ({ id: parseInt(id), name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const teamNum = {}; // teamId → 1-based number
+  seasonTeams.forEach((t, i) => teamNum[t.id] = i + 1);
+
+  // ── Players by team ──
+  const playersByTeam = {};
+  players.forEach(p => {
+    if (p.team_id && teamMap[p.team_id]) {
+      (playersByTeam[p.team_id] = playersByTeam[p.team_id] || []).push(p.name);
+    }
+  });
+
+  // ── Group matches by week ──
+  const byWeek = {};
+  matches.forEach(m => {
+    (byWeek[m.week_number] = byWeek[m.week_number] || []).push(m);
+  });
+  const weeks = Object.keys(byWeek).sort((a, b) => a - b);
+
+  // ── Ball row decoration ──
+  const balls = seasonTeams.slice(0, 8).map((_, i) => {
+    const b = POSTER_BALLS[i];
+    return `<div class="poster-ball" style="background:${b.bg};color:${b.fg}">${i+1}</div>`;
+  }).join('');
+
+  // ── Schedule rows ──
+  const rows = weeks.map(wn => {
+    const wMatches = byWeek[wn].sort((a, b) =>
+      (a.match_number ?? 999) - (b.match_number ?? 999)
+    );
+    const dateStr  = posterDateLabel(wMatches[0].match_date, wn);
+
+    const playingIds = new Set();
+    wMatches.forEach(m => { playingIds.add(m.home_team_id); playingIds.add(m.away_team_id); });
+    const byeTeams = seasonTeams.filter(t => !playingIds.has(t.id));
+    const byeStr   = byeTeams.length
+      ? `BYE: ${byeTeams.map(t => teamNum[t.id]).join(', ')}`
+      : '';
+
+    const pairings = wMatches.map(m => {
+      const h  = teamNum[m.home_team_id] || '?';
+      const a  = teamNum[m.away_team_id] || '?';
+      const mn = m.match_number != null
+        ? `<sup class="poster-matchnum">${m.match_number}</sup>` : '';
+      return `<span class="poster-pairing">${h}–${a}${mn}</span>`;
+    }).join('');
+
+    return `<tr>
+      <td class="poster-wk">${wn}</td>
+      <td class="poster-date">${dateStr}</td>
+      <td class="poster-pairings">${pairings}</td>
+      <td class="poster-bye-col">${byeStr ? `<span class="poster-bye">${byeStr}</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+
+  // ── Teams grid ──
+  const teamCards = seasonTeams.map(t => {
+    const players = (playersByTeam[t.id] || []).join(', ');
+    return `<div>
+      <div class="poster-team-name">${teamNum[t.id]}. ${t.name}</div>
+      ${players ? `<div class="poster-team-players">${players}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  // ── Title ──
+  const leagueName = activeLeague?.name || 'League';
+  const shortName  = leagueName.replace(/^Brass Ring\s*/i, '').replace(/\bLeague\b/i, '').trim();
+  const title      = shortName ? shortName + ' Schedule' : 'Schedule';
+  const subtitle   = season?.name || '';
+
+  // ── Render ──
+  const posterHTML = `
+    <div class="poster-outer">
+      ${pocketHTML()}
+      <div class="poster-balls">${balls}</div>
+      <div class="poster-inner">
+        <div class="poster-title">${title}</div>
+        ${subtitle ? `<div class="poster-subtitle">${subtitle}</div>` : ''}
+        <hr class="poster-divider">
+        <table class="poster-sched">
+          <thead><tr>
+            <th class="poster-wk">Wk</th>
+            <th class="poster-date">Date</th>
+            <th class="poster-pairings">Pairings</th>
+            <th class="poster-bye-col">Bye</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="poster-teams-box">
+      ${pocketHTML()}
+      <div class="poster-inner">
+        <div class="poster-teams-hdr">Teams</div>
+        <div class="poster-teams-grid">${teamCards}</div>
+      </div>
+    </div>`;
+
+  document.getElementById('poster-content').innerHTML = posterHTML;
+  document.getElementById('schedule-table-view').classList.add('d-none');
+  document.getElementById('schedule-poster-view').classList.remove('d-none');
+}
+
+function closeSchedulePoster() {
+  document.getElementById('schedule-poster-view').classList.add('d-none');
+  document.getElementById('schedule-table-view').classList.remove('d-none');
+}
+
 // ── Lineup Planning ───────────────────────────────────────────────────────────
 function loadLineupSection() {
   populateSeasonSelect('lu-season-sel', loadLineupWeeks);

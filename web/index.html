@@ -256,11 +256,36 @@
 
     <!-- Schedule -->
     <div id="section-schedule" class="section">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4 class="mb-0 fw-bold">Schedule</h4>
-        <select class="form-select form-select-sm w-auto" id="schedule-season-select" onchange="loadSchedule()"></select>
+
+      <!-- Table view -->
+      <div id="schedule-table-view">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h4 class="mb-0 fw-bold">Schedule</h4>
+          <div class="d-flex gap-2 align-items-center">
+            <select class="form-select form-select-sm w-auto" id="schedule-season-select" onchange="loadSchedule()"></select>
+            <button class="btn btn-sm btn-outline-success" onclick="openSchedulePoster()">
+              <i class="bi bi-image"></i> Poster View
+            </button>
+          </div>
+        </div>
+        <div id="schedule-content"></div>
       </div>
-      <div id="schedule-content"></div>
+
+      <!-- Poster view (hidden until Poster View clicked) -->
+      <div id="schedule-poster-view" class="d-none">
+        <div class="no-print d-flex justify-content-between align-items-center mb-3">
+          <button class="btn btn-sm btn-outline-secondary" onclick="closeSchedulePoster()">
+            <i class="bi bi-arrow-left"></i> Table View
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">
+            <i class="bi bi-printer"></i> Print
+          </button>
+        </div>
+        <div id="poster-print-area">
+          <div id="poster-content"></div>
+        </div>
+      </div>
+
     </div>
 
     <!-- Lineup Planning -->
