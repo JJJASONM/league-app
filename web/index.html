@@ -116,36 +116,89 @@
     .add-to-roster { background: #f8f9fa; border-top: 1px solid #e8eaf0; padding: .5rem .75rem; border-radius: 0 0 12px 12px; }
 
     /* ── Scoresheet table ─────────────────────────────────────────── */
-    .ss-table { font-size: .82rem; width: 100%; border-collapse: collapse; }
-    .ss-table th { background: #1a2035; color: #c8d0e0; font-size: .7rem; font-weight: 600;
-      text-transform: uppercase; letter-spacing: .4px; padding: .35rem .5rem;
-      text-align: center; border: 1px solid #0d1525; }
-    .ss-table td { padding: .28rem .35rem; border: 1px solid #dee2e6; vertical-align: middle; }
-    .ss-round-hdr td { background: #e8f0fe; font-weight: 700; font-size: .78rem;
-      color: #3a5299; padding: .35rem .8rem; border-bottom: 2px solid #4e9af1; letter-spacing: .3px; }
-    .ss-pairing-cell { width: 148px; line-height: 1.35; }
-    .ss-pname { font-size: .81rem; }
-    .ss-diff { font-size: .69rem; color: #999; margin-left: 2px; }
-    .ss-game-cell { width: 90px; text-align: center; }
-    .ss-g-btns { display: flex; gap: 2px; justify-content: center; margin-bottom: 3px; }
-    .ss-g-btn { flex: 1; padding: .14rem .25rem; font-size: .78rem; font-weight: 700;
-      border: 1px solid #bbb; background: #fff; border-radius: 3px; cursor: pointer;
-      line-height: 1.3; min-width: 26px; transition: background .08s; }
-    .ss-g-btn:hover:not(.h-win):not(.a-win) { background: #f0f0f0; }
-    .ss-g-btn:focus { outline: 2px solid #4e9af1; outline-offset: 1px; }
-    .ss-g-btn.h-win { background: #4e9af1; color: #fff; border-color: #2c7be5; }
-    .ss-g-btn.a-win { background: #e05b5b; color: #fff; border-color: #c04040; }
-    .ss-lb { width: 44px; text-align: center; font-size: .78rem; padding: .1rem .15rem;
-      border: 1px solid #ccc; border-radius: 3px; display: block; margin: 0 auto; }
+    /* ── Scoresheet layout ──────────────────────────────── */
+    .ss-sheet { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #000;
+      max-width: 760px; margin: 0 auto; background: #fff; padding: 10px 14px; }
+    .ss-title-bar { display: flex; justify-content: space-between; align-items: baseline;
+      border-bottom: 2.5px solid #000; padding-bottom: 4px; margin-bottom: 6px; }
+    .ss-main-title { font-size: 14px; font-weight: 700; letter-spacing: .2px; }
+    .ss-title-meta { font-size: 11px; display: flex; gap: 18px; align-items: baseline; }
+    .ss-match-num  { font-size: 16px; font-weight: 700; }
+    .ss-teams-tbl  { width: 100%; border-collapse: collapse; margin-bottom: 5px; font-size: 11px; }
+    .ss-teams-tbl td { border: 1px solid #888; padding: 2px 6px; }
+    .ss-teams-tbl .ss-tn-num  { width: 22px; font-weight: 700; text-align: center; background: #eee; }
+    .ss-teams-tbl .ss-tn-label{ width: 70px; font-weight: 700; font-size: 10px; text-align: center;
+      background: #f5f5f5; }
+    .ss-teams-tbl .ss-tn-name { font-weight: 600; font-size: 12px; }
+    /* Roster */
+    .ss-roster-tbl { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10.5px; }
+    .ss-roster-tbl th { background: #ddd; border: 1px solid #999; padding: 2px 5px;
+      font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+    .ss-roster-tbl td { border: 1px solid #bbb; padding: 2px 5px; }
+    .ss-slot-h { font-weight: 700; color: #1e3a8a; text-align: center; width: 24px; }
+    .ss-slot-v { font-weight: 700; color: #7f1d1d; text-align: center; width: 24px; }
+    .ss-pnum-col { width: 30px; text-align: center; color: #555; }
+    .ss-hc-roster { width: 42px; text-align: right; font-weight: 600; color: #b91c1c; font-size: 10px; }
+    .ss-roster-sep { width: 8px; border: none !important; background: #fff !important; }
+    /* Scoring table */
+    .ss-score-tbl { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-bottom: 6px; }
+    .ss-score-tbl th { background: #1a2035; color: #d0d8e8; font-size: 9.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .4px; padding: 3px 4px; text-align: center;
+      border: 1px solid #111; }
+    .ss-score-tbl th.ss-th-left { text-align: left; }
+    .ss-score-tbl td { padding: 2px 3px; border: 1px solid #bbb; vertical-align: middle; }
+    .ss-rnd-row td { background: #e8f0fe; font-weight: 700; font-size: 11px; color: #1e3a8a;
+      padding: 3px 6px; border-bottom: 2px solid #6b91d4; border-top: 2px solid #6b91d4; }
+    .ss-home-row { background: rgba(219,234,254,.18); }
+    .ss-away-row { background: rgba(254,226,226,.18); border-bottom: 2px solid #ddd; }
+    .ss-slot { width: 24px; font-weight: 700; font-size: 10px; text-align: center; white-space: nowrap; }
+    .ss-pname-cell { min-width: 110px; font-size: 10.5px; }
+    .ss-game-cell { width: 48px; text-align: center; padding: 2px !important; cursor: pointer; }
+    .ss-pick { display: block; color: #ccc; padding: 1px 4px; border-radius: 2px; cursor: pointer;
+      border: 1px dashed #ccc; font-size: 10px; }
+    .ss-pick:hover, .ss-pick:focus { color: #555; border-color: #888; outline: none; }
+    .ss-home-row .ss-win-pts { display: block; font-weight: 700; font-size: 11px; color: #1e40af;
+      background: rgba(219,234,254,.8); border-radius: 2px; padding: 1px 3px; cursor: pointer; }
+    .ss-away-row .ss-win-pts { display: block; font-weight: 700; font-size: 11px; color: #991b1b;
+      background: rgba(254,226,226,.8); border-radius: 2px; padding: 1px 3px; cursor: pointer; }
+    .ss-lb { width: 38px; text-align: center; font-size: 10px; padding: 1px 2px;
+      border: 1px solid #aaa; border-radius: 2px; display: block; margin: 0 auto; }
     .ss-lb:focus { outline: 2px solid #4e9af1; border-color: #4e9af1; }
-    .ss-lb:disabled { background: #f5f5f5; color: #ccc; }
-    .ss-result-cell { width: 120px; text-align: center; font-size: .78rem; padding: .28rem .4rem; }
-    .ss-result-cell.h-win { background: #dbeafe; }
-    .ss-result-cell.a-win { background: #fee2e2; }
-    .ss-result-cell.tbd { color: #bbb; }
-    .ss-hc-note { font-size: .68rem; color: #999; margin-bottom: 2px; }
-    .ss-pts { font-size: .85rem; font-weight: 700; margin-bottom: 2px; }
-    .ss-subtotal td { background: #f8f9fa; font-size: .77rem; border-top: 2px solid #dee2e6; }
+    .ss-score-cell  { width: 38px; text-align: center; font-weight: 600; font-size: 11px; }
+    .ss-rating-cell { width: 40px; text-align: right; font-size: 10px; color: #b91c1c; font-weight: 600; }
+    .ss-adj-cell    { width: 48px; text-align: center; font-weight: 700; font-size: 11px; }
+    .ss-home-row .ss-adj-cell.ss-adj-win { background: #dbeafe; color: #1e40af; }
+    .ss-away-row .ss-adj-cell.ss-adj-win { background: #fee2e2; color: #991b1b; }
+    .ss-winner-cell { width: 100px; font-size: 10px; padding: 3px 4px !important; vertical-align: middle; }
+    .cw-opt { padding: 1px 4px; border-radius: 2px; color: #aaa; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; margin-bottom: 1px; font-size: 10px; }
+    .cw-sel-h { color: #1e40af; background: #dbeafe; font-weight: 700; }
+    .cw-sel-a { color: #991b1b; background: #fee2e2; font-weight: 700; }
+    .cw-hc  { font-size: 9px; color: #aaa; margin-top: 2px; font-style: italic; }
+    .ss-tally-row td { background: #f3f4f6; font-size: 10px; color: #555;
+      border-top: 1.5px solid #ccc; padding: 2px 6px; }
+    /* Signatures */
+    .ss-sigs { display: flex; gap: 40px; margin-top: 10px; padding-top: 8px;
+      border-top: 1px solid #ccc; font-size: 10.5px; }
+    .ss-sig-line { flex: 1; }
+    .ss-sig-blank { display: inline-block; border-bottom: 1px solid #000;
+      min-width: 160px; margin-left: 4px; }
+    /* Score summary bar */
+    .ss-summary-bar { display: flex; gap: 24px; align-items: center; justify-content: center;
+      border: 1.5px solid #555; border-radius: 4px; padding: 5px 14px; margin: 8px 0;
+      font-size: 11px; background: #f9fafb; }
+    .ss-summary-bar .ss-sum-score { font-size: 22px; font-weight: 800; line-height: 1; }
+    .ss-summary-bar .ss-sum-label { font-size: 9px; color: #888; text-transform: uppercase; }
+    /* Print */
+    @media print {
+      body * { visibility: hidden; }
+      #ss-print-area, #ss-print-area * { visibility: visible; }
+      #ss-print-area { position: fixed; top: 0; left: 0; width: 100%; }
+      .no-print { display: none !important; }
+      @page { size: letter portrait; margin: 0.45in; }
+      .ss-sheet { padding: 0; max-width: 100%; }
+      .ss-pick { border: 1px solid #ccc !important; }
+    }
   </style>
 </head>
 <body>
@@ -2095,7 +2148,7 @@ function pairingTotals(idx) {
   return { rawH, rawA, adjH, adjA, hc, winner, hp, ap };
 }
 
-// ── Scoresheet — table layout matching physical Page 1 ───────────────────────
+// ── Scoresheet — portrait letter layout matching physical Page 1 ─────────────
 function renderScoresheet(existingRounds) {
   const m    = currentMatch;
   const home = scoresheetHomeTeam;
@@ -2115,188 +2168,240 @@ function renderScoresheet(existingRounds) {
     scoresheetGames[idx] = {g1w:g1.w,g1lb:g1.lb,g2w:g2.w,g2lb:g2.lb,g3w:g3.w,g3lb:g3.lb};
   });
 
-  // ── Header ──
-  let html = `<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
-    <div>
-      <h6 class="fw-bold mb-0">
-        Week ${m.week_number}${m.match_date?' · '+m.match_date:''}
-        ${m.completed?'<span class="badge bg-success ms-2">Completed</span>':'<span class="badge bg-secondary ms-2">Pending</span>'}
-      </h6>
-      <div class="small" style="margin-top:2px">
-        <span style="color:#1a5cb8;font-weight:600">${m.home_team_name}</span>
-        <span class="text-muted mx-1">vs</span>
-        <span style="color:#9b1c1c;font-weight:600">${m.away_team_name}</span>
-      </div>
+  const fmtHC = v => (v >= 0 ? '+' : '') + v;
+  const leagueName = activeLeague?.name || 'League';
+
+  // ── No-print toolbar ──
+  let html = `<div class="no-print d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
+    <div class="d-flex align-items-center gap-2">
+      <span class="fw-semibold small">Week ${m.week_number}${m.match_date?' · '+m.match_date:''}</span>
+      ${m.completed
+        ? '<span class="badge bg-success">Completed</span>'
+        : '<span class="badge bg-secondary">Pending</span>'}
     </div>
-    <button class="btn btn-sm btn-outline-secondary" onclick="loadMatchEntry()">
-      <i class="bi bi-arrow-left"></i> Change Lineup</button>
+    <div class="d-flex gap-2">
+      <button class="btn btn-sm btn-outline-secondary" onclick="loadMatchEntry()">
+        <i class="bi bi-arrow-left"></i> Change Lineup</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">
+        <i class="bi bi-printer"></i> Print</button>
+      <button class="btn btn-sm btn-success" onclick="saveScoresheet()">
+        <i class="bi bi-check-lg"></i> Save</button>
+      ${m.completed ? `<button class="btn btn-sm btn-outline-danger" onclick="clearMatchResults(${m.id})">
+        <i class="bi bi-x-lg"></i> Clear</button>` : ''}
+    </div>
   </div>`;
 
-  // ── Lineup summary ──
-  html += `<div class="card mb-2"><div class="card-body py-2 px-3">
-    <div class="row g-0">
-      <div class="col-6 pe-3">
-        <div class="small fw-semibold mb-1" style="color:#1a5cb8">${m.home_team_name}</div>
-        ${home.map((p,i) => `<div class="small">H${i+1} <strong>${p.name}</strong>
-          <span class="text-muted ms-1">${p.handicap>=0?'+':''}${p.handicap}</span></div>`).join('')}
-      </div>
-      <div class="col-6 border-start ps-3">
-        <div class="small fw-semibold mb-1" style="color:#9b1c1c">${m.away_team_name}</div>
-        ${away.map((p,i) => `<div class="small">A${i+1} <strong>${p.name}</strong>
-          <span class="text-muted ms-1">${p.handicap>=0?'+':''}${p.handicap}</span></div>`).join('')}
-      </div>
-    </div>
-  </div></div>`;
+  // ── Printable scoresheet ──
+  html += `<div id="ss-print-area"><div class="ss-sheet">`;
 
-  // ── Scoring table ──
-  html += `<div class="card mb-3"><div class="card-body p-0"><table class="ss-table">
+  // Title bar
+  html += `<div class="ss-title-bar">
+    <span class="ss-main-title">${leagueName} Scoresheet</span>
+    <div class="ss-title-meta">
+      <span>${m.match_date || 'Date TBD'}</span>
+      ${m.match_number != null ? `<span class="ss-match-num">${m.match_number}</span>` : ''}
+    </div>
+  </div>`;
+
+  // Team header row
+  html += `<table class="ss-teams-tbl">
+    <tr>
+      <td class="ss-tn-num">1</td>
+      <td class="ss-tn-name" style="color:#1e3a8a">${m.home_team_name}</td>
+      <td class="ss-tn-label">Home Team</td>
+      <td class="ss-tn-num">2</td>
+      <td class="ss-tn-name" style="color:#7f1d1d">${m.away_team_name}</td>
+      <td class="ss-tn-label">Visiting Team</td>
+    </tr>
+  </table>`;
+
+  // Player roster
+  html += `<table class="ss-roster-tbl">
     <thead><tr>
-      <th style="width:148px">Pairing</th>
-      <th style="width:90px">Game 1<br><span style="font-size:.62rem;opacity:.7;font-weight:400;text-transform:none">Win · Loser Balls</span></th>
-      <th style="width:90px">Game 2<br><span style="font-size:.62rem;opacity:.7;font-weight:400;text-transform:none">Win · Loser Balls</span></th>
-      <th style="width:90px">Game 3<br><span style="font-size:.62rem;opacity:.7;font-weight:400;text-transform:none">Win · Loser Balls</span></th>
-      <th>Result</th>
+      <th colspan="4" style="text-align:center;color:#1e3a8a">Home Team</th>
+      <th class="ss-roster-sep"></th>
+      <th colspan="4" style="text-align:center;color:#7f1d1d">Visiting Team</th>
+    </tr></thead>
+    <tbody>`;
+  for (let i = 0; i < 3; i++) {
+    const hp = home[i], ap = away[i];
+    html += `<tr>
+      <td class="ss-slot-h">H${i+1}</td>
+      <td class="ss-pnum-col">${hp.player_number||''}</td>
+      <td>${hp.name}</td>
+      <td class="ss-hc-roster">${fmtHC(hp.handicap)}</td>
+      <td class="ss-roster-sep"></td>
+      <td class="ss-slot-v">V${i+1}</td>
+      <td class="ss-pnum-col">${ap.player_number||''}</td>
+      <td>${ap.name}</td>
+      <td class="ss-hc-roster">${fmtHC(ap.handicap)}</td>
+    </tr>`;
+  }
+  html += `</tbody></table>`;
+
+  // Main scoring table
+  html += `<table class="ss-score-tbl">
+    <thead><tr>
+      <th style="width:22px"></th>
+      <th class="ss-th-left" style="width:115px">Player</th>
+      <th style="width:46px">Game 1</th>
+      <th style="width:46px">Game 2</th>
+      <th style="width:46px">Game 3</th>
+      <th style="width:38px">Score</th>
+      <th style="width:42px">Rating</th>
+      <th style="width:48px">Adj&nbsp;Score</th>
+      <th style="width:102px">Circle Winner</th>
     </tr></thead>
     <tbody>`;
 
   for (let r = 0; r < 3; r++) {
-    const pairLabels = [0,1,2].map(p => `H${p+1}·A${(p+r)%3+1}`).join('&nbsp;&nbsp;');
-    html += `<tr class="ss-round-hdr"><td colspan="5">Round ${r+1}&nbsp;&nbsp;&nbsp;${pairLabels}</td></tr>`;
+    html += `<tr class="ss-rnd-row"><td colspan="9">Round ${r+1}</td></tr>`;
 
     for (let p = 0; p < 3; p++) {
       const hp  = home[p];
       const ap  = away[(p + r) % 3];
       const idx = r * 3 + p;
-      const g   = scoresheetGames[idx];
       const hc  = calcHandicap(hp.handicap, ap.handicap);
       const hcNote = hc.pts > 0
-        ? `+${hc.pts} → ${hc.to==='home'?'H':'A'}${hc.to==='home'?p+1:(p+r)%3+1}`
-        : 'Even';
+        ? `+${hc.pts} pts → ${hc.to==='home'?'H':'V'}`
+        : 'even';
 
-      html += `<tr id="ss-row-${idx}">
-        <td class="ss-pairing-cell">
-          <div><span class="fw-bold" style="color:#1a5cb8;font-size:.75rem">H${p+1}</span>
-               <span class="ss-pname"> ${hp.name}</span>
-               <span class="ss-diff">${hp.handicap>=0?'+':''}${hp.handicap}</span></div>
-          <div><span class="fw-bold" style="color:#9b1c1c;font-size:.75rem">A${(p+r)%3+1}</span>
-               <span class="ss-pname"> ${ap.name}</span>
-               <span class="ss-diff">${ap.handicap>=0?'+':''}${ap.handicap}</span></div>
+      html += `<tr class="ss-home-row" id="ss-hrow-${idx}">
+        <td class="ss-slot" style="color:#1e3a8a">H${p+1}</td>
+        <td class="ss-pname-cell">${hp.name}</td>
+        <td class="ss-game-cell" id="ss-gcell-${idx}-1-h"></td>
+        <td class="ss-game-cell" id="ss-gcell-${idx}-2-h"></td>
+        <td class="ss-game-cell" id="ss-gcell-${idx}-3-h"></td>
+        <td class="ss-score-cell" id="ss-score-h-${idx}">—</td>
+        <td class="ss-rating-cell">${fmtHC(hp.handicap)}</td>
+        <td class="ss-adj-cell" id="ss-adj-h-${idx}">—</td>
+        <td class="ss-winner-cell" id="ss-winner-${idx}" rowspan="2">
+          <div class="cw-opt" id="ss-cw-h-${idx}">◯ ${m.home_team_name}</div>
+          <div class="cw-opt" id="ss-cw-a-${idx}">◯ ${m.away_team_name}</div>
+          <div class="cw-hc">${hcNote}</div>
         </td>
-        ${ssGameCell(idx,1,g.g1w,g.g1lb)}
-        ${ssGameCell(idx,2,g.g2w,g.g2lb)}
-        ${ssGameCell(idx,3,g.g3w,g.g3lb)}
-        <td class="ss-result-cell tbd" id="ss-result-${idx}">
-          <div class="ss-hc-note">${hcNote}</div>
-          <div class="ss-pts" id="ss-pts-${idx}">—</div>
-          <div id="ss-winner-${idx}"></div>
-        </td>
+      </tr>
+      <tr class="ss-away-row" id="ss-arow-${idx}">
+        <td class="ss-slot" style="color:#7f1d1d">V${(p+r)%3+1}</td>
+        <td class="ss-pname-cell">${ap.name}</td>
+        <td class="ss-game-cell" id="ss-gcell-${idx}-1-a"></td>
+        <td class="ss-game-cell" id="ss-gcell-${idx}-2-a"></td>
+        <td class="ss-game-cell" id="ss-gcell-${idx}-3-a"></td>
+        <td class="ss-score-cell" id="ss-score-a-${idx}">—</td>
+        <td class="ss-rating-cell">${fmtHC(ap.handicap)}</td>
+        <td class="ss-adj-cell" id="ss-adj-a-${idx}">—</td>
       </tr>`;
     }
 
-    html += `<tr class="ss-subtotal">
-      <td colspan="4" class="text-end pe-3" style="color:#777">Round ${r+1} pairings:</td>
-      <td class="text-center fw-bold" id="ss-rnd-${r}">—</td>
+    // Round game tally row
+    html += `<tr class="ss-tally-row">
+      <td colspan="3" style="text-align:right">Game Tally — Round ${r+1}:</td>
+      <td colspan="6" class="fw-bold" id="ss-rnd-${r}">Home: 0 &nbsp;·&nbsp; Visitor: 0</td>
     </tr>`;
   }
 
-  html += `</tbody></table></div></div>`;
+  html += `</tbody></table>`;
 
-  // ── Final score + save ──
-  html += `<div class="d-flex align-items-center gap-3 flex-wrap" id="ss-final-wrap">
-    <div id="ss-summary">${buildScoreSummary()}</div>
-    <button class="btn btn-success" onclick="saveScoresheet()">
-      <i class="bi bi-check-lg"></i> Save Scoresheet</button>
-    ${m.completed?`<button class="btn btn-outline-secondary" onclick="clearMatchResults(${m.id})">
-      <i class="bi bi-x-lg"></i> Clear Results</button>`:''}
+  // Match summary
+  html += `<div class="no-print mt-2" id="ss-summary">${buildScoreSummary()}</div>`;
+
+  // Signature lines
+  html += `<div class="ss-sigs">
+    <div class="ss-sig-line">Home Team Captain Signature: <span class="ss-sig-blank"></span></div>
+    <div class="ss-sig-line">Visiting Team Captain Signature: <span class="ss-sig-blank"></span></div>
   </div>`;
+
+  html += `</div></div>`; // .ss-sheet  #ss-print-area
 
   const sd = document.getElementById('entry-scoresheet');
   sd.innerHTML = html;
   sd.classList.remove('d-none');
 
-  // Render all result cells with current state
-  for (let i = 0; i < 9; i++) updateSSRow(i);
+  for (let i = 0; i < 9; i++) updateSSPairing(i);
   updateSSFinal();
 }
 
 // ── Scoresheet cell + interaction helpers ─────────────────────────────────────
-function ssGameCell(idx, gn, winner, lb) {
-  const dis = !winner ? ' disabled' : '';
-  return `<td class="ss-game-cell">
-    <div class="ss-g-btns">
-      <button class="ss-g-btn${winner==='home'?' h-win':''}" id="sg_${idx}_${gn}_h"
-        onclick="ssSetWinner(${idx},${gn},'home')">H</button>
-      <button class="ss-g-btn${winner==='away'?' a-win':''}" id="sg_${idx}_${gn}_a"
-        onclick="ssSetWinner(${idx},${gn},'away')">A</button>
-    </div>
-    <input type="number" class="ss-lb" id="slb_${idx}_${gn}"
-      min="0" max="7" value="${lb}"${dis}
-      oninput="ssSetLB(${idx},${gn},this.value)"
-      onkeydown="ssLBKey(event,${idx},${gn})">
-  </td>`;
+
+// Returns innerHTML for one player's game cell.
+// side='home'|'away', winner=current winner for this game, lb=loser balls
+function ssGameCellContent(idx, gn, side, winner, lb) {
+  const oc = `ssClickCell(${idx},${gn},'${side}')`;
+  const kd = `if(event.key==='Enter'){${oc}}`;
+  if (!winner) {
+    return `<span class="ss-pick" tabindex="0" onclick="${oc}" onkeydown="${kd}">—</span>`;
+  }
+  if (winner === side) {
+    return `<span class="ss-win-pts" tabindex="0" onclick="${oc}" onkeydown="${kd}" title="Click to deselect">10</span>`;
+  }
+  // Loser — editable ball count
+  return `<input type="number" class="ss-lb" id="slb_${idx}_${gn}" min="0" max="7" value="${lb||0}"
+    oninput="ssSetLB(${idx},${gn},this.value)"
+    onkeydown="ssLBKey(event,${idx},${gn})"
+    onclick="event.stopPropagation()">`;
 }
 
-function ssSetWinner(idx, gn, side) {
-  const g = scoresheetGames[idx];
+// Click a player's game cell to designate them as winner (click again to deselect)
+function ssClickCell(idx, gn, side) {
+  const g  = scoresheetGames[idx];
   const wk = `g${gn}w`, lk = `g${gn}lb`;
   g[wk] = (g[wk] === side) ? '' : side;
   if (!g[wk]) g[lk] = 0;
-  updateSSRow(idx);
+  updateSSPairing(idx);
   updateSSFinal();
-  // Auto-focus loser balls input when winner chosen
   if (g[wk]) {
+    // Auto-focus loser's input
     const lb = document.getElementById(`slb_${idx}_${gn}`);
-    if (lb) { lb.disabled = false; lb.focus(); lb.select(); }
+    if (lb) { lb.focus(); lb.select(); }
   }
 }
 
 function ssSetLB(idx, gn, val) {
   scoresheetGames[idx][`g${gn}lb`] = Math.min(7, Math.max(0, parseInt(val) || 0));
-  updateSSRow(idx);
+  updateSSPairing(idx);
   updateSSFinal();
 }
 
-// Enter/Tab in loser balls → advance to next game's H button
+// Enter/Tab from loser balls → next game's home cell
 function ssLBKey(e, idx, gn) {
   if (e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) {
     e.preventDefault();
-    const nextGn = gn + 1;
-    const nextEl = nextGn <= 3
-      ? document.getElementById(`sg_${idx}_${nextGn}_h`)
-      : document.getElementById(`sg_${idx+1}_1_h`);
-    nextEl?.focus();
+    const nextIdx = gn === 3 ? idx + 1 : idx;
+    const nextGn  = gn === 3 ? 1 : gn + 1;
+    const nextCell = document.getElementById(`ss-gcell-${nextIdx}-${nextGn}-h`);
+    nextCell?.querySelector('.ss-pick,.ss-win-pts,input')?.focus();
   }
 }
 
-function updateSSRow(idx) {
-  const { adjH, adjA, winner, hc, hp, ap } = pairingTotals(idx);
+// Rebuild all cells for one pairing (both rows)
+function updateSSPairing(idx) {
   const g = scoresheetGames[idx];
-  const cell = document.getElementById(`ss-result-${idx}`);
-  const ptsEl = document.getElementById(`ss-pts-${idx}`);
-  const winEl = document.getElementById(`ss-winner-${idx}`);
+  const { rawH, rawA, adjH, adjA, winner } = pairingTotals(idx);
 
-  // Update H/A buttons and LB inputs
   for (const gn of [1,2,3]) {
-    const wk = `g${gn}w`, lk = `g${gn}lb`;
-    const hb = document.getElementById(`sg_${idx}_${gn}_h`);
-    const ab = document.getElementById(`sg_${idx}_${gn}_a`);
-    const lb = document.getElementById(`slb_${idx}_${gn}`);
-    if (hb) hb.className = 'ss-g-btn' + (g[wk]==='home'?' h-win':'');
-    if (ab) ab.className = 'ss-g-btn' + (g[wk]==='away'?' a-win':'');
-    if (lb) { lb.disabled = !g[wk]; lb.value = g[lk]; }
+    const w  = g[`g${gn}w`], lb = g[`g${gn}lb`];
+    const hC = document.getElementById(`ss-gcell-${idx}-${gn}-h`);
+    const aC = document.getElementById(`ss-gcell-${idx}-${gn}-a`);
+    if (hC) hC.innerHTML = ssGameCellContent(idx, gn, 'home', w, lb);
+    if (aC) aC.innerHTML = ssGameCellContent(idx, gn, 'away', w, lb);
   }
 
-  if (!cell) return;
   const hasData = g.g1w || g.g2w || g.g3w;
-  cell.className = 'ss-result-cell ' + (winner==='home'?'h-win':winner==='away'?'a-win':'tbd');
-  if (ptsEl) ptsEl.innerHTML = hasData
-    ? `<span style="color:#1a5cb8">${adjH}</span> · <span style="color:#9b1c1c">${adjA}</span>`
-    : '—';
-  if (winEl) winEl.innerHTML = winner==='home'
-    ? '<span class="badge bg-primary" style="font-size:.7rem">HOME</span>'
-    : winner==='away'
-    ? '<span class="badge bg-danger" style="font-size:.7rem">AWAY</span>'
-    : '';
+  const sh = document.getElementById(`ss-score-h-${idx}`);
+  const sa = document.getElementById(`ss-score-a-${idx}`);
+  const ah = document.getElementById(`ss-adj-h-${idx}`);
+  const aa = document.getElementById(`ss-adj-a-${idx}`);
+  if (sh) sh.textContent = hasData ? rawH : '—';
+  if (sa) sa.textContent = hasData ? rawA : '—';
+  if (ah) { ah.textContent = hasData ? adjH : '—';
+    ah.className = 'ss-adj-cell' + (hasData && winner==='home' ? ' ss-adj-win' : ''); }
+  if (aa) { aa.textContent = hasData ? adjA : '—';
+    aa.className = 'ss-adj-cell' + (hasData && winner==='away' ? ' ss-adj-win' : ''); }
+
+  const cwH = document.getElementById(`ss-cw-h-${idx}`);
+  const cwA = document.getElementById(`ss-cw-a-${idx}`);
+  if (cwH) cwH.className = 'cw-opt' + (winner==='home' ? ' cw-sel-h' : '');
+  if (cwA) cwA.className = 'cw-opt' + (winner==='away' ? ' cw-sel-a' : '');
 }
 
 function updateSSFinal() {
@@ -2308,7 +2413,7 @@ function updateSSFinal() {
       if (winner==='home') rh++; else if (winner==='away') ra++;
     }
     const el = document.getElementById(`ss-rnd-${r}`);
-    if (el) el.textContent = `H: ${rh}  A: ${ra}`;
+    if (el) el.textContent = `Home: ${rh}  ·  Visitor: ${ra}`;
   }
   // Overall summary
   const wrap = document.getElementById('ss-summary');
@@ -2324,12 +2429,12 @@ function buildScoreSummary() {
   const m = currentMatch;
   return `<div class="score-summary">
     <div class="text-center">
-      <div class="team-name">${m?.home_team_name||'Home'}</div>
+      <div class="team-name">${m?.home_team_name||'Home'} (Home)</div>
       <div class="team-score">${hw}</div>
     </div>
     <div class="text-center" style="opacity:.5;font-size:1.2rem">–</div>
     <div class="text-center">
-      <div class="team-name">${m?.away_team_name||'Away'}</div>
+      <div class="team-name">${m?.away_team_name||'Away'} (Visitor)</div>
       <div class="team-score">${aw}</div>
     </div>
   </div>`;
