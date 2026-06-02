@@ -309,26 +309,82 @@ const scheduleTypeLabel = {
   single_rr: 'Single RR', double_rr: 'Double RR',
   split: 'Split', custom: 'Custom', blanket: 'Blanket'
 };
+const scheduleTypeFull = {
+  single_rr: 'Single Round Robin',
+  double_rr: 'Double Round Robin',
+  split:     'Split Season',
+  custom:    'Custom (Fixed Weeks)',
+  blanket:   'Blanket (Empty Slots)'
+};
+
+// Format a YYYY-MM-DD or ISO date string as M/D/YYYY. Returns fallback if empty.
+function fmtDate(raw, fallback = 'TBD') {
+  if (!raw) return fallback;
+  // Trim to date part in case a full ISO timestamp arrives
+  const d = new Date(raw.slice(0, 10) + 'T12:00:00');
+  if (isNaN(d)) return raw;
+  return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`;
+}
+
+function fmtDateRange(start, end) {
+  const s = fmtDate(start, '—');
+  const e = fmtDate(end, 'TBD');
+  return `${s} – ${e}`;
+}
 
 async function loadSeasons() {
   if (!activeLeague) return;
   allSeasons = await api('GET', `/seasons?league_id=${activeLeague.id}`);
+
+  // Also load matches for all seasons in one call so we can show counts without
+  // N separate requests. We fetch matches for each season lazily only if the
+  // list is small; otherwise show a neutral placeholder.
+  // Strategy: load matches for the active season only; show "–" for others.
+  let matchCounts = {}; // seasonId -> { total, done }
+  if (allSeasons.length <= 8) {
+    await Promise.all(allSeasons.map(async s => {
+      try {
+        const ms = await api('GET', `/matches?season_id=${s.id}`);
+        matchCounts[s.id] = { total: ms.length, done: ms.filter(m => m.completed).length };
+      } catch(_) {}
+    }));
+  }
+
   const tbody = document.querySelector('#seasons-table tbody');
-  tbody.innerHTML = allSeasons.map(s => `
-    <tr>
-      <td class="fw-semibold">${s.name}</td>
-      <td class="text-muted small">${s.start_date||'—'} → ${s.end_date||'TBD'}</td>
-      <td><span class="badge bg-secondary" style="font-size:.72rem">${scheduleTypeLabel[s.schedule_type]||s.schedule_type||'—'}</span></td>
-      <td>${s.active
-        ? '<span class="badge bg-success season-badge">Active</span>'
-        : '<span class="badge bg-secondary season-badge">Inactive</span>'}</td>
-      <td class="text-end">
-        <button class="btn btn-outline-primary btn-sm py-0 me-1" onclick="manageSeason(${s.id})"><i class="bi bi-sliders"></i> Manage</button>
+  tbody.innerHTML = allSeasons.map(s => {
+    const mc = matchCounts[s.id];
+    let schedInfo = '';
+    if (mc) {
+      if (mc.total === 0) {
+        schedInfo = '<span class="text-warning small"><i class="bi bi-exclamation-triangle"></i> No schedule</span>';
+      } else {
+        schedInfo = `<span class="text-muted small">${mc.done}/${mc.total} done</span>`;
+      }
+    }
+    const typeLabel = scheduleTypeLabel[s.schedule_type] || s.schedule_type || '—';
+    const weeksNote = (s.schedule_type === 'custom' || s.schedule_type === 'blanket') && s.num_weeks
+      ? ` · ${s.num_weeks}wk` : '';
+
+    return `<tr>
+      <td>
+        <span class="fw-semibold">${s.name}</span>
+        ${s.active ? '<span class="badge bg-success ms-1" style="font-size:.68rem">Active</span>' : ''}
+      </td>
+      <td class="text-muted small">${fmtDateRange(s.start_date, s.end_date)}</td>
+      <td>
+        <span class="badge bg-secondary" style="font-size:.7rem">${typeLabel}${weeksNote}</span>
+      </td>
+      <td>${schedInfo}</td>
+      <td class="text-end" style="white-space:nowrap">
+        <button class="btn btn-outline-primary btn-sm py-0 me-1" onclick="manageSeason(${s.id})">
+          <i class="bi bi-sliders"></i> Manage
+        </button>
         ${!s.active ? `<button class="btn btn-outline-success btn-sm py-0 me-1" onclick="activateSeason(${s.id})">Activate</button>` : ''}
         <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editSeason(${s.id})"><i class="bi bi-pencil"></i></button>
         <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteSeason(${s.id})"><i class="bi bi-trash"></i></button>
       </td>
-    </tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-3">No seasons yet. Click "New Season" to add one.</td></tr>';
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="text-center text-muted py-3">No seasons yet. Click "New Season" to add one.</td></tr>';
 }
 
 function openNewSeason() {
@@ -411,25 +467,32 @@ async function manageSeason(id, preselectedFromSeasonId) {
   const s = allSeasons.find(x => x.id === id);
   if (!s) return;
 
+  // ── Header ──
   document.getElementById('season-mgmt').classList.remove('d-none');
   document.getElementById('season-mgmt-title').textContent = s.name;
   document.getElementById('season-mgmt-active').classList.toggle('d-none', !s.active);
 
-  // Populate from-season dropdown
+  // Meta line: date range · schedule type
+  const meta = [
+    fmtDateRange(s.start_date, s.end_date),
+    scheduleTypeFull[s.schedule_type] || s.schedule_type
+  ].filter(Boolean).join(' · ');
+  document.getElementById('season-mgmt-meta').textContent = meta;
+
+  // "Set Active" button — show only when not active
+  const setActiveBtn = document.getElementById('season-mgmt-set-active-btn');
+  setActiveBtn.style.display = s.active ? 'none' : '';
+
+  // ── Schedule setup ──
   const fromSel = document.getElementById('gen-from-season');
   fromSel.innerHTML = '<option value="">All teams in league</option>' +
     allSeasons.filter(x => x.id !== id).map(x =>
       `<option value="${x.id}" ${x.id === preselectedFromSeasonId ? 'selected' : ''}>${x.name}</option>`
     ).join('');
 
-  // Pre-fill start date from season
-  document.getElementById('gen-start-date').value = s.start_date || '';
-
-  // Set schedule type to match current season type (if set)
-  if (s.schedule_type) {
-    const typeEl = document.getElementById('gen-type');
-    typeEl.value = s.schedule_type;
-  }
+  document.getElementById('gen-start-date').value = s.start_date ? s.start_date.slice(0, 10) : '';
+  if (s.schedule_type) document.getElementById('gen-type').value = s.schedule_type;
+  if (s.num_weeks)     document.getElementById('gen-numweeks').value = s.num_weeks;
   onGenTypeChange();
 
   // Populate bye-team dropdown
@@ -438,7 +501,6 @@ async function manageSeason(id, preselectedFromSeasonId) {
     `<option value="${t.id}">${t.name}</option>`).join('') ||
     '<option value="">No teams in league</option>';
 
-  // Show schedule tab first, then load all data
   showSeasonTab('schedule');
   document.getElementById('season-mgmt').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -452,6 +514,33 @@ async function manageSeason(id, preselectedFromSeasonId) {
 function closeMgmt() {
   document.getElementById('season-mgmt').classList.add('d-none');
   currentMgmtSeasonId = null;
+}
+
+function activateMgmtSeason() {
+  if (currentMgmtSeasonId) activateSeason(currentMgmtSeasonId);
+}
+
+// Quick-nav from manage panel → Schedule tab (with season pre-selected)
+function goToSchedule() {
+  if (!currentMgmtSeasonId) return;
+  // Switch to the Schedule section and select this season
+  navTo('schedule');
+  // Give the section a tick to render, then set the selector and load
+  setTimeout(() => {
+    const sel = document.getElementById('schedule-season-select');
+    if (sel) { sel.value = currentMgmtSeasonId; loadSchedule(); }
+  }, 50);
+}
+
+// Quick-nav from manage panel → Schedule tab, then open poster
+function goToPoster() {
+  if (!currentMgmtSeasonId) return;
+  navTo('schedule');
+  setTimeout(() => {
+    const sel = document.getElementById('schedule-season-select');
+    if (sel) { sel.value = currentMgmtSeasonId; loadSchedule(); }
+    openSchedulePoster();
+  }, 100);
 }
 
 function showSeasonTab(tab) {
@@ -471,13 +560,14 @@ function onGenTypeChange() {
   document.getElementById('gen-numweeks-col').style.display = (t === 'custom' || t === 'blanket') ? '' : 'none';
   document.getElementById('gen-mpw-col').style.display = t === 'blanket' ? '' : 'none';
   const descs = {
-    single_rr: 'Each team plays every other team once.',
-    double_rr: 'Each team plays every other team twice (home + away). Classic full season format.',
-    split:     'Double round-robin divided into two halves; standings are tracked per half.',
-    custom:    'Repeat pairings for exactly N weeks, cycling through the schedule as needed.',
-    blanket:   'Create N weeks of empty match slots. Assign teams to each slot manually after generating.'
+    single_rr: '<strong>Single Round Robin</strong> — Each team plays every other team once. Good for short seasons.',
+    double_rr: '<strong>Double Round Robin</strong> — Each team plays every other team twice: once as home, once as visitor. Standard full-season format.',
+    split:     '<strong>Split Season</strong> — Double round-robin split into two equal halves. Standings reset at the midpoint; teams play for each half separately.',
+    custom:    '<strong>Custom (Fixed Weeks)</strong> — Repeats the pairing rotation for exactly the number of weeks you specify. Use when you want to control the exact length.',
+    blanket:   '<strong>Blanket (Empty Slots)</strong> — Creates N weeks of blank match slots without assigning teams. Use "Matches per Week" to control how many slots appear each week, then assign teams to slots manually.'
   };
-  document.getElementById('gen-type-desc').textContent = descs[t] || '';
+  const el = document.getElementById('gen-type-desc');
+  el.innerHTML = descs[t] || '';
 }
 
 async function generateSchedule() {

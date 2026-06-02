@@ -88,7 +88,13 @@
       <div class="card mb-3">
         <div class="card-body p-0">
           <table class="table table-hover mb-0" id="seasons-table">
-            <thead><tr><th>Name</th><th>Dates</th><th>Type</th><th>Status</th><th></th></tr></thead>
+            <thead><tr>
+              <th style="width:30%">Season</th>
+              <th>Dates</th>
+              <th>Format</th>
+              <th>Schedule</th>
+              <th></th>
+            </tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -96,58 +102,89 @@
 
       <!-- Season Management Panel — shown when "Manage" is clicked -->
       <div id="season-mgmt" class="d-none">
-        <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
-          <h5 class="fw-bold mb-0" id="season-mgmt-title"></h5>
-          <span class="badge bg-success d-none" id="season-mgmt-active">Active</span>
-          <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="closeMgmt()"><i class="bi bi-x"></i> Close</button>
+
+        <!-- Manage panel header -->
+        <div class="card mb-0" style="border-radius:12px 12px 0 0;border-bottom:none">
+          <div class="card-body py-2 px-3">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+              <div>
+                <span class="fw-bold fs-6" id="season-mgmt-title"></span>
+                <span class="badge bg-success ms-1 d-none" id="season-mgmt-active">Active</span>
+                <span class="text-muted small ms-2" id="season-mgmt-meta"></span>
+              </div>
+              <div class="ms-auto d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-outline-secondary" id="season-mgmt-set-active-btn"
+                  onclick="activateMgmtSeason()" style="display:none!important">
+                  <i class="bi bi-lightning"></i> Set Active
+                </button>
+                <button class="btn btn-sm btn-outline-primary" onclick="goToSchedule()">
+                  <i class="bi bi-calendar-week"></i> View Schedule
+                </button>
+                <button class="btn btn-sm btn-outline-success" onclick="goToPoster()">
+                  <i class="bi bi-image"></i> Poster View
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="closeMgmt()">
+                  <i class="bi bi-x"></i> Close
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Tab bar -->
         <ul class="nav nav-tabs mb-0" id="season-mgmt-tabs">
-          <li class="nav-item"><a class="nav-link active" href="#" data-stab="schedule">Schedule</a></li>
+          <li class="nav-item"><a class="nav-link active" href="#" data-stab="schedule">Schedule Setup</a></li>
           <li class="nav-item"><a class="nav-link" href="#" data-stab="skips">Skip Weeks</a></li>
           <li class="nav-item"><a class="nav-link" href="#" data-stab="byes">Bye Requests</a></li>
           <li class="nav-item"><a class="nav-link" href="#" data-stab="rules">Rules</a></li>
         </ul>
 
-        <!-- Tab: Schedule -->
+        <!-- Tab: Schedule Setup -->
         <div id="stab-schedule" class="card border-top-0" style="border-radius:0 0 12px 12px">
           <div class="card-body">
 
             <div class="row g-3 align-items-end mb-2">
               <div class="col-auto">
-                <label class="form-label small mb-1">Schedule Type</label>
+                <label class="form-label small mb-1 fw-semibold">Schedule Type</label>
                 <select class="form-select form-select-sm" id="gen-type" onchange="onGenTypeChange()">
                   <option value="single_rr">Single Round Robin</option>
                   <option value="double_rr" selected>Double Round Robin</option>
                   <option value="split">Split Season</option>
-                  <option value="custom">Custom (N Weeks)</option>
-                  <option value="blanket">Blanket Template</option>
+                  <option value="custom">Custom (Fixed Weeks)</option>
+                  <option value="blanket">Blanket (Empty Slots)</option>
                 </select>
               </div>
               <div class="col-auto" id="gen-numweeks-col" style="display:none">
-                <label class="form-label small mb-1">Weeks</label>
-                <input type="number" class="form-control form-control-sm" id="gen-numweeks" value="16" min="1" style="width:80px">
+                <label class="form-label small mb-1 fw-semibold">Number of Weeks</label>
+                <input type="number" class="form-control form-control-sm" id="gen-numweeks" value="16" min="1" style="width:90px">
               </div>
               <div class="col-auto" id="gen-mpw-col" style="display:none">
-                <label class="form-label small mb-1">Matches/Week</label>
-                <input type="number" class="form-control form-control-sm" id="gen-mpw" value="3" min="1" style="width:80px">
+                <label class="form-label small mb-1 fw-semibold">Matches per Week</label>
+                <input type="number" class="form-control form-control-sm" id="gen-mpw" value="3" min="1" style="width:90px">
               </div>
               <div class="col-auto">
-                <label class="form-label small mb-1">First Match Date</label>
+                <label class="form-label small mb-1 fw-semibold">First Match Date</label>
                 <input type="date" class="form-control form-control-sm" id="gen-start-date">
               </div>
               <div class="col-auto">
-                <label class="form-label small mb-1">Use Teams From</label>
+                <label class="form-label small mb-1 fw-semibold">Use Teams From</label>
                 <select class="form-select form-select-sm" id="gen-from-season" style="min-width:180px">
                   <option value="">All teams in league</option>
                 </select>
               </div>
               <div class="col-auto">
-                <button class="btn btn-success btn-sm" onclick="generateSchedule()"><i class="bi bi-shuffle"></i> Generate</button>
+                <button class="btn btn-success btn-sm" onclick="generateSchedule()">
+                  <i class="bi bi-shuffle"></i> Generate Schedule
+                </button>
               </div>
             </div>
-            <div class="text-muted small" id="gen-type-desc">Each team plays every other team twice (home + away). Skipped dates are worked around automatically.</div>
+
+            <div class="alert alert-light border py-2 px-3 mb-0" id="gen-type-desc" style="font-size:.82rem"></div>
+            <div class="text-muted small mt-2">
+              <i class="bi bi-info-circle"></i>
+              Generating replaces only <strong>unplayed</strong> matches. Completed matches are preserved.
+              Add any skip dates first (Skip Weeks tab) before generating.
+            </div>
 
           </div>
         </div>
