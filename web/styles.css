@@ -1,0 +1,194 @@
+
+    body { background: #f0f2f5; }
+    .sidebar {
+      min-height: 100vh;
+      background: #1a2035;
+      color: #c8d0e0;
+      width: 230px;
+      flex-shrink: 0;
+    }
+    .sidebar .brand {
+      color: #fff;
+      font-size: 1.15rem;
+      font-weight: 700;
+      padding: 1.1rem 1.2rem 0.4rem;
+      letter-spacing: 0.5px;
+    }
+    .sidebar .brand span { color: #4e9af1; }
+    .league-picker {
+      padding: 0.4rem 0.9rem 0.6rem;
+      border-bottom: 1px solid #2a3550;
+      margin-bottom: 0.25rem;
+    }
+    .league-picker label {
+      font-size: .67rem;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: #5a6a8a;
+      display: block;
+      margin-bottom: 3px;
+    }
+    .league-picker select {
+      background: #232e48;
+      color: #c8d0e0;
+      border: 1px solid #2e3c55;
+      font-size: .83rem;
+    }
+    .league-picker select:focus {
+      background: #2a3550;
+      color: #fff;
+      border-color: #4e9af1;
+      box-shadow: none;
+    }
+    .league-picker select option { background: #1a2035; }
+    .sidebar .nav-link {
+      color: #8899bb;
+      border-radius: 8px;
+      margin: 2px 8px;
+      padding: 0.5rem 1rem;
+      font-size: .9rem;
+    }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active {
+      background: #2a3550;
+      color: #fff;
+    }
+    .sidebar .nav-link i { width: 22px; }
+    .sidebar .active-season {
+      font-size: .72rem;
+      color: #5a7abf;
+      padding: 0.2rem 1.1rem 0.5rem;
+    }
+    .main-content { flex: 1; min-width: 0; padding: 1.5rem; }
+    .card { border: none; border-radius: 12px; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
+    .card-header { background: #fff; border-bottom: 1px solid #e8eaf0; border-radius: 12px 12px 0 0 !important; }
+    .section { display: none; }
+    .section.active { display: block; }
+    .badge-hc { font-size: .75em; }
+    .table th { font-size: .82rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: .5px; }
+    .week-header { background: #e8f0fe; font-weight: 600; font-size: .85rem; color: #3a5299; }
+    #toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; }
+    .season-badge { font-size: .7rem; padding: .2em .5em; }
+    .no-league-msg { display: flex; align-items: center; justify-content: center; height: 60vh; }
+    .action-item { display: flex; align-items: flex-start; gap: .75rem; padding: .8rem 1rem; border-bottom: 1px solid #f0f2f5; }
+    .action-item:last-child { border-bottom: none; }
+    .action-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: .05rem; }
+    .action-title { font-weight: 600; font-size: .9rem; line-height: 1.3; }
+    .action-detail { font-size: .8rem; color: #667; margin-top: .15rem; }
+    .action-btn { flex-shrink: 0; }
+    .action-item.ok .action-icon { color: #28a745; }
+    .action-item.warn .action-icon { color: #f0a500; }
+    .action-item.urgent .action-icon { color: #dc3545; }
+    .action-item.info .action-icon { color: #4e9af1; }
+    .dash-section-header { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; color: #8899bb; padding: .6rem 1rem .3rem; }
+    /* Scoresheet */
+    .scoresheet-round { margin-bottom: 1.25rem; }
+    .scoresheet-round-header { background: #1a2035; color: #fff; font-weight: 700; font-size: .82rem; letter-spacing: .5px; padding: .45rem .9rem; border-radius: 8px 8px 0 0; }
+    .pairing-card { border: 1px solid #dee2e6; border-top: none; }
+    .pairing-card:last-child { border-radius: 0 0 8px 8px; }
+    .pairing-player { font-size: .88rem; padding: .35rem .7rem; border-bottom: 1px dashed #eee; display: flex; align-items: center; gap: .5rem; }
+    .pairing-player.home { background: #f0f4ff; }
+    .pairing-player.away { background: #fff; border-bottom: none; }
+    .pairing-player .player-label { flex: 1; font-weight: 600; }
+    .pairing-player .diff-badge { font-size: .72rem; color: #888; }
+    .game-row { display: flex; align-items: center; gap: .4rem; padding: .3rem .7rem; background: #fafafa; border-top: 1px solid #e8eaf0; flex-wrap: wrap; }
+    .game-row label { font-size: .75rem; font-weight: 600; color: #667; min-width: 52px; }
+    .game-btn { border: 2px solid #dee2e6; background: #fff; border-radius: 6px; padding: .2rem .6rem; font-size: .78rem; font-weight: 600; cursor: pointer; transition: all .15s; min-width: 54px; }
+    .game-btn.home-win  { border-color: #4e9af1; background: #e8f0fe; color: #1a5cb8; }
+    .game-btn.away-win  { border-color: #e05b5b; background: #fdeaea; color: #b81a1a; }
+    .game-btn:disabled  { opacity: .35; cursor: default; }
+    .pairing-winner-row { padding: .3rem .7rem .4rem; font-size: .8rem; font-weight: 700; border-top: 1px solid #e8eaf0; }
+    .pairing-winner-row.home-wins { background: #e8f0fe; color: #1a5cb8; }
+    .pairing-winner-row.away-wins { background: #fdeaea; color: #b81a1a; }
+    .pairing-winner-row.undecided  { background: #f8f9fa; color: #aaa; }
+    .score-summary { background: #1a2035; color: #fff; border-radius: 8px; padding: .6rem 1.1rem; font-size: .88rem; display: inline-flex; gap: 2rem; align-items: center; }
+    .score-summary .team-score { font-size: 1.5rem; font-weight: 800; }
+    .score-summary .team-name  { font-size: .75rem; opacity: .75; }
+    .roster-row td { font-size: .88rem; padding: .3rem .75rem; }
+    .team-card-header { background: #fff; border-bottom: 1px solid #e8eaf0; border-radius: 12px 12px 0 0; padding: .65rem 1rem; display: flex; align-items: center; justify-content: space-between; }
+    .add-to-roster { background: #f8f9fa; border-top: 1px solid #e8eaf0; padding: .5rem .75rem; border-radius: 0 0 12px 12px; }
+
+    /* ── Scoresheet table ─────────────────────────────────────────── */
+    /* ── Scoresheet layout ──────────────────────────────── */
+    .ss-sheet { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #000;
+      max-width: 760px; margin: 0 auto; background: #fff; padding: 10px 14px; }
+    .ss-title-bar { display: flex; justify-content: space-between; align-items: baseline;
+      border-bottom: 2.5px solid #000; padding-bottom: 4px; margin-bottom: 6px; }
+    .ss-main-title { font-size: 14px; font-weight: 700; letter-spacing: .2px; }
+    .ss-title-meta { font-size: 11px; display: flex; gap: 18px; align-items: baseline; }
+    .ss-match-num  { font-size: 16px; font-weight: 700; }
+    .ss-teams-tbl  { width: 100%; border-collapse: collapse; margin-bottom: 5px; font-size: 11px; }
+    .ss-teams-tbl td { border: 1px solid #888; padding: 2px 6px; }
+    .ss-teams-tbl .ss-tn-num  { width: 22px; font-weight: 700; text-align: center; background: #eee; }
+    .ss-teams-tbl .ss-tn-label{ width: 70px; font-weight: 700; font-size: 10px; text-align: center;
+      background: #f5f5f5; }
+    .ss-teams-tbl .ss-tn-name { font-weight: 600; font-size: 12px; }
+    /* Roster */
+    .ss-roster-tbl { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10.5px; }
+    .ss-roster-tbl th { background: #ddd; border: 1px solid #999; padding: 2px 5px;
+      font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+    .ss-roster-tbl td { border: 1px solid #bbb; padding: 2px 5px; }
+    .ss-slot-h { font-weight: 700; color: #1e3a8a; text-align: center; width: 24px; }
+    .ss-slot-v { font-weight: 700; color: #7f1d1d; text-align: center; width: 24px; }
+    .ss-pnum-col { width: 30px; text-align: center; color: #555; }
+    .ss-hc-roster { width: 42px; text-align: right; font-weight: 600; color: #b91c1c; font-size: 10px; }
+    .ss-roster-sep { width: 8px; border: none !important; background: #fff !important; }
+    /* Scoring table */
+    .ss-score-tbl { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-bottom: 6px; }
+    .ss-score-tbl th { background: #1a2035; color: #d0d8e8; font-size: 9.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .4px; padding: 3px 4px; text-align: center;
+      border: 1px solid #111; }
+    .ss-score-tbl th.ss-th-left { text-align: left; }
+    .ss-score-tbl td { padding: 2px 3px; border: 1px solid #bbb; vertical-align: middle; }
+    .ss-rnd-row td { background: #e8f0fe; font-weight: 700; font-size: 11px; color: #1e3a8a;
+      padding: 3px 6px; border-bottom: 2px solid #6b91d4; border-top: 2px solid #6b91d4; }
+    .ss-home-row { background: rgba(219,234,254,.18); }
+    .ss-away-row { background: rgba(254,226,226,.18); border-bottom: 2px solid #ddd; }
+    .ss-slot { width: 24px; font-weight: 700; font-size: 10px; text-align: center; white-space: nowrap; }
+    .ss-pname-cell { min-width: 110px; font-size: 10.5px; }
+    .ss-game-cell { width: 48px; text-align: center; padding: 2px !important; cursor: pointer; }
+    .ss-pick { display: block; color: #ccc; padding: 1px 4px; border-radius: 2px; cursor: pointer;
+      border: 1px dashed #ccc; font-size: 10px; }
+    .ss-pick:hover, .ss-pick:focus { color: #555; border-color: #888; outline: none; }
+    .ss-home-row .ss-win-pts { display: block; font-weight: 700; font-size: 11px; color: #1e40af;
+      background: rgba(219,234,254,.8); border-radius: 2px; padding: 1px 3px; cursor: pointer; }
+    .ss-away-row .ss-win-pts { display: block; font-weight: 700; font-size: 11px; color: #991b1b;
+      background: rgba(254,226,226,.8); border-radius: 2px; padding: 1px 3px; cursor: pointer; }
+    .ss-lb { width: 38px; text-align: center; font-size: 10px; padding: 1px 2px;
+      border: 1px solid #aaa; border-radius: 2px; display: block; margin: 0 auto; }
+    .ss-lb:focus { outline: 2px solid #4e9af1; border-color: #4e9af1; }
+    .ss-score-cell  { width: 38px; text-align: center; font-weight: 600; font-size: 11px; }
+    .ss-rating-cell { width: 40px; text-align: right; font-size: 10px; color: #b91c1c; font-weight: 600; }
+    .ss-adj-cell    { width: 48px; text-align: center; font-weight: 700; font-size: 11px; }
+    .ss-home-row .ss-adj-cell.ss-adj-win { background: #dbeafe; color: #1e40af; }
+    .ss-away-row .ss-adj-cell.ss-adj-win { background: #fee2e2; color: #991b1b; }
+    .ss-winner-cell { width: 100px; font-size: 10px; padding: 3px 4px !important; vertical-align: middle; }
+    .cw-opt { padding: 1px 4px; border-radius: 2px; color: #aaa; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; margin-bottom: 1px; font-size: 10px; }
+    .cw-sel-h { color: #1e40af; background: #dbeafe; font-weight: 700; }
+    .cw-sel-a { color: #991b1b; background: #fee2e2; font-weight: 700; }
+    .cw-hc  { font-size: 9px; color: #aaa; margin-top: 2px; font-style: italic; }
+    .ss-tally-row td { background: #f3f4f6; font-size: 10px; color: #555;
+      border-top: 1.5px solid #ccc; padding: 2px 6px; }
+    /* Signatures */
+    .ss-sigs { display: flex; gap: 40px; margin-top: 10px; padding-top: 8px;
+      border-top: 1px solid #ccc; font-size: 10.5px; }
+    .ss-sig-line { flex: 1; }
+    .ss-sig-blank { display: inline-block; border-bottom: 1px solid #000;
+      min-width: 160px; margin-left: 4px; }
+    /* Score summary bar */
+    .ss-summary-bar { display: flex; gap: 24px; align-items: center; justify-content: center;
+      border: 1.5px solid #555; border-radius: 4px; padding: 5px 14px; margin: 8px 0;
+      font-size: 11px; background: #f9fafb; }
+    .ss-summary-bar .ss-sum-score { font-size: 22px; font-weight: 800; line-height: 1; }
+    .ss-summary-bar .ss-sum-label { font-size: 9px; color: #888; text-transform: uppercase; }
+    /* Print */
+    @media print {
+      body * { visibility: hidden; }
+      #ss-print-area, #ss-print-area * { visibility: visible; }
+      #ss-print-area { position: fixed; top: 0; left: 0; width: 100%; }
+      .no-print { display: none !important; }
+      @page { size: letter portrait; margin: 0.45in; }
+      .ss-sheet { padding: 0; max-width: 100%; }
+      .ss-pick { border: 1px solid #ccc !important; }
+    }
+  
