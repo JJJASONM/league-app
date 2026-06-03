@@ -28,17 +28,20 @@ type Player struct {
 	//   9-ball: race-to number (e.g. 5, 7)
 	Handicap  float64   `json:"handicap"`
 	AdminHold bool      `json:"admin_hold"` // 9-ball: locked at Administrative Discretion
+	Active    bool      `json:"active"`
+	Note      string    `json:"note,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 // Team represents a group of players competing together.
 type Team struct {
-	ID        int64     `json:"id"`
-	LeagueID  int64     `json:"league_id"`
-	Name      string    `json:"name"`
-	CaptainID *int64    `json:"captain_id"`
-	Players   []Player  `json:"players,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         int64     `json:"id"`
+	LeagueID   int64     `json:"league_id"`
+	Name       string    `json:"name"`
+	TeamNumber string    `json:"team_number,omitempty"`
+	CaptainID  *int64    `json:"captain_id"`
+	Players    []Player  `json:"players,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Season represents a bounded league season.
@@ -171,6 +174,12 @@ type RoundResult struct {
 	Game2Away      int     `json:"game2_away"`
 	Game3Home      int     `json:"game3_home"`
 	Game3Away      int     `json:"game3_away"`
+	// Snapshot of handicap values at the time the round was played.
+	// Prefer these over current player handicap for historical scoresheets.
+	HomeHandicapUsed *float64 `json:"home_handicap_used,omitempty"`
+	AwayHandicapUsed *float64 `json:"away_handicap_used,omitempty"`
+	HandicapPtsUsed  *int     `json:"handicap_pts_used,omitempty"`
+	HandicapToUsed   *string  `json:"handicap_to_used,omitempty"`
 	// Computed on read — not stored:
 	HandicapPts   int    `json:"handicap_pts,omitempty"`  // balls spotted
 	HandicapTo    string `json:"handicap_to,omitempty"`   // "home"|"away"|""

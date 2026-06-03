@@ -1,0 +1,38 @@
+
+
+--- PAGE 1 ---
+Date Handicap UsedStarting HndcpPlayer NameEnding HndcpAdditional NotesHandicap Changes
+Subjectemail_bodyemail recipientEmail_Layout
+NineBall_Team_Nu…NineBall_Team
+Final RankNineBall Teams
+NineBall_Team_Nu…NineBall_Team
+Final RankNineBall Teams 2
+NineBall_Team_Nu…NineBall_Team
+Final RankNineBall Teams 3
+Match NumberPlayer NumberDate of Match
+Team NumberTeam Name
+Player NameNineBall_Matches_Players
+Nine_Ball_Player_Nu…Nine_Ball_Player
+In?Phone Number1Phone Number2emailNineBall_Players 2
+Nine_Ball_Player_Nu…Nine_Ball_Player
+In?Phone Number1Phone Number2emailNineBall_Players 5
+NB_Match_NumberNB_Match_Team_NumberNB_Match_Date
+NB_Match_Team_NameNB_Match_Team_Set_WinsNB_Match_Team_Set_LossesNB_Match_Team_SWPNB_Match_Team_TB_WinsNB_Match_Team_TB_LossesNB_Match_Team_TBWPNB_Match_Team_Match_WinsNB_Match_Team_Match_LossesNB_Match_Team_MWPTotal Sets WonTotal Sets LostTotal TB WinsTotal TB LossesNineBall_Matches_Team
+Nine_Ball_Player_N…Nine_Ball_Player
+In?Phone Number1Phone Number2emailNineBall_Players
+Match NumberHome Team NumberVisitor Team NumberH1_NumberH2_NumberV1_NumberV2_NumberH3_NumberV3_NumberDate of Match
+Home TeamVisitor Team
+H1_Name
+H2_Name
+V1_Name
+V2_NameH1_HndcpH2_HndcpV1_HndcpV2_Hndcp
+H3_NameH3_HndcpV3_Name
+V3_HndcpMatch PlayedR1G1 HndcpR1G2 HndcpScoresheet_Gameday
+Nine_Ball_Player_Nu…Nine_Ball_Player
+In?Phone Number1Phone Number2emailNineBall_Players 7
+Nine_Ball_Player_Nu…Nine_Ball_Player
+In?Phone Number1Phone Number2emailNineBall_Players 3
+Nine_Ball_Player_Nu…Nine_Ball_Player
+In?Phone Number1Phone Number2emailNineBall_Players 4
+Nine_Ball_Player_Nu…Nine_Ball_Player
+In?Phone Number1Phone Number2emailNineBall_Players 6

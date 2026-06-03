@@ -7,5 +7,6 @@ dist/
 data/
 
 *.log
+~$*.docx
 .DS_Store
 Thumbs.db

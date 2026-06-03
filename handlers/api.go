@@ -9,7 +9,6 @@ import (
 	"league_app/logic"
 	"league_app/models"
 	"log"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -243,7 +242,8 @@ func listPlayers(w http.ResponseWriter, r *http.Request) {
 	                    p.first_name || ' ' || p.last_name,
 	                    COALESCE(p.phone,''), COALESCE(p.email,''),
 	                    p.team_id, COALESCE(t.name,''), COALESCE(t.league_id,0),
-	                    p.handicap, p.admin_hold, p.created_at
+	                    p.handicap, p.admin_hold, COALESCE(p.active,1), COALESCE(p.note,''),
+	                    p.created_at
 	             FROM players p LEFT JOIN teams t ON t.id = p.team_id`
 	if hasLeague {
 		rows, err = db.DB.Query(sel+` WHERE t.league_id = ? ORDER BY p.last_name, p.first_name`, leagueID)
@@ -259,10 +259,12 @@ func listPlayers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p models.Player
 		var adminHold int
+		var activeInt int
 		rows.Scan(&p.ID, &p.PlayerNumber, &p.FirstName, &p.LastName, &p.Name,
 			&p.Phone, &p.Email, &p.TeamID, &p.TeamName, &p.LeagueID,
-			&p.Handicap, &adminHold, &p.CreatedAt)
+			&p.Handicap, &adminHold, &activeInt, &p.Note, &p.CreatedAt)
 		p.AdminHold = adminHold == 1
+		p.Active = activeInt == 1
 		players = append(players, p)
 	}
 	if players == nil {
@@ -307,21 +309,24 @@ func getPlayer(w http.ResponseWriter, r *http.Request) {
 	}
 	var p models.Player
 	var adminHold int
+	var activeInt int
 	err = db.DB.QueryRow(`
 		SELECT p.id, p.player_number, p.first_name, p.last_name,
 		       p.first_name || ' ' || p.last_name,
 		       COALESCE(p.phone,''), COALESCE(p.email,''),
 		       p.team_id, COALESCE(t.name,''), COALESCE(t.league_id,0),
-		       p.handicap, p.admin_hold, p.created_at
+		       p.handicap, p.admin_hold, COALESCE(p.active,1), COALESCE(p.note,''),
+		       p.created_at
 		FROM players p LEFT JOIN teams t ON t.id = p.team_id WHERE p.id=?`, id,
 	).Scan(&p.ID, &p.PlayerNumber, &p.FirstName, &p.LastName, &p.Name,
 		&p.Phone, &p.Email, &p.TeamID, &p.TeamName, &p.LeagueID,
-		&p.Handicap, &adminHold, &p.CreatedAt)
+		&p.Handicap, &adminHold, &activeInt, &p.Note, &p.CreatedAt)
 	if err != nil {
 		jsonError(w, "player not found", 404)
 		return
 	}
 	p.AdminHold = adminHold == 1
+	p.Active = activeInt == 1
 	jsonOK(w, p)
 }
 
@@ -375,11 +380,11 @@ func listTeams(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if hasLeague {
 		rows, err = db.DB.Query(
-			`SELECT id, league_id, name, captain_id, created_at FROM teams WHERE league_id=? ORDER BY name`,
+			`SELECT id, league_id, name, COALESCE(team_number,''), captain_id, created_at FROM teams WHERE league_id=? ORDER BY name`,
 			leagueID)
 	} else {
 		rows, err = db.DB.Query(
-			`SELECT id, league_id, name, captain_id, created_at FROM teams ORDER BY league_id, name`)
+			`SELECT id, league_id, name, COALESCE(team_number,''), captain_id, created_at FROM teams ORDER BY league_id, name`)
 	}
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -389,7 +394,7 @@ func listTeams(w http.ResponseWriter, r *http.Request) {
 	var teams []models.Team
 	for rows.Next() {
 		var t models.Team
-		rows.Scan(&t.ID, &t.LeagueID, &t.Name, &t.CaptainID, &t.CreatedAt)
+		rows.Scan(&t.ID, &t.LeagueID, &t.Name, &t.TeamNumber, &t.CaptainID, &t.CreatedAt)
 		teams = append(teams, t)
 	}
 	if teams == nil {
@@ -430,8 +435,8 @@ func getTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	var t models.Team
 	err = db.DB.QueryRow(
-		`SELECT id, league_id, name, captain_id, created_at FROM teams WHERE id=?`, id,
-	).Scan(&t.ID, &t.LeagueID, &t.Name, &t.CaptainID, &t.CreatedAt)
+		`SELECT id, league_id, name, COALESCE(team_number,''), captain_id, created_at FROM teams WHERE id=?`, id,
+	).Scan(&t.ID, &t.LeagueID, &t.Name, &t.TeamNumber, &t.CaptainID, &t.CreatedAt)
 	if err != nil {
 		jsonError(w, "team not found", 404)
 		return
@@ -1285,25 +1290,28 @@ func computePairingResult(rr *models.RoundResult) {
 	homeRaw := rr.Game1Home + rr.Game2Home + rr.Game3Home
 	awayRaw := rr.Game1Away + rr.Game2Away + rr.Game3Away
 
-	diffAbs := rr.HomeHandicap - rr.AwayHandicap
-	if diffAbs < 0 {
-		diffAbs = -diffAbs
+	// Prefer snapshot handicap (recorded at match time) if available;
+	// fall back to current player handicap for older rows without a snapshot.
+	homeHC := rr.HomeHandicap
+	if rr.HomeHandicapUsed != nil {
+		homeHC = *rr.HomeHandicapUsed
 	}
-	hcPts := int(math.Round(diffAbs * 2.55))
-	rr.HandicapPts = hcPts
+	awayHC := rr.AwayHandicap
+	if rr.AwayHandicapUsed != nil {
+		awayHC = *rr.AwayHandicapUsed
+	}
+
+	spot := logic.CalcSpot(homeHC, awayHC)
+	rr.HandicapPts = spot.Pts
+	rr.HandicapTo = spot.To
 
 	homeAdj := homeRaw
 	awayAdj := awayRaw
-	switch {
-	case rr.HomeHandicap < rr.AwayHandicap:
-		// home player is lower rated — they receive the spot
-		homeAdj += hcPts
-		rr.HandicapTo = "home"
-	case rr.AwayHandicap < rr.HomeHandicap:
-		awayAdj += hcPts
-		rr.HandicapTo = "away"
-	default:
-		rr.HandicapTo = ""
+	switch spot.To {
+	case "home":
+		homeAdj += spot.Pts
+	case "away":
+		awayAdj += spot.Pts
 	}
 
 	rr.HomeTotalPts = homeAdj
@@ -1331,7 +1339,9 @@ func getRounds(w http.ResponseWriter, r *http.Request) {
 		       rr.away_player_id, ap.first_name||' '||ap.last_name, ap.handicap,
 		       rr.game1_home, rr.game1_away,
 		       rr.game2_home, rr.game2_away,
-		       rr.game3_home, rr.game3_away
+		       rr.game3_home, rr.game3_away,
+		       rr.home_handicap_used, rr.away_handicap_used,
+		       rr.handicap_pts_used,  rr.handicap_to
 		FROM round_results rr
 		JOIN players hp ON hp.id = rr.home_player_id
 		JOIN players ap ON ap.id = rr.away_player_id
@@ -1350,7 +1360,9 @@ func getRounds(w http.ResponseWriter, r *http.Request) {
 			&rr.AwayPlayerID, &rr.AwayPlayerName, &rr.AwayHandicap,
 			&rr.Game1Home, &rr.Game1Away,
 			&rr.Game2Home, &rr.Game2Away,
-			&rr.Game3Home, &rr.Game3Away); err != nil {
+			&rr.Game3Home, &rr.Game3Away,
+			&rr.HomeHandicapUsed, &rr.AwayHandicapUsed,
+			&rr.HandicapPtsUsed, &rr.HandicapToUsed); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
@@ -1375,6 +1387,18 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Collect all player IDs to look up their current handicaps
+	playerIDs := make(map[int64]float64)
+	for _, rr := range req.Rounds {
+		playerIDs[rr.HomePlayerID] = 0
+		playerIDs[rr.AwayPlayerID] = 0
+	}
+	for pid := range playerIDs {
+		var hc float64
+		db.DB.QueryRow(`SELECT handicap FROM players WHERE id=?`, pid).Scan(&hc)
+		playerIDs[pid] = hc
+	}
+
 	tx, err := db.DB.Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -1385,15 +1409,19 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 	// Replace all round results for this match
 	tx.Exec(`DELETE FROM round_results WHERE match_id=?`, matchID)
 	for _, rr := range req.Rounds {
+		spot := logic.CalcSpot(playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID])
 		_, err := tx.Exec(`
 			INSERT INTO round_results
 			  (match_id, round_number, home_player_id, away_player_id,
-			   game1_home, game1_away, game2_home, game2_away, game3_home, game3_away)
-			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			   game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+			   home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			matchID, rr.RoundNumber, rr.HomePlayerID, rr.AwayPlayerID,
 			rr.Game1Home, rr.Game1Away,
 			rr.Game2Home, rr.Game2Away,
-			rr.Game3Home, rr.Game3Away)
+			rr.Game3Home, rr.Game3Away,
+			playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID],
+			spot.Pts, spot.To)
 		if err != nil {
 			jsonError(w, err.Error(), 500)
 			return

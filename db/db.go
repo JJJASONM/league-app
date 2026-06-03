@@ -237,6 +237,15 @@ CREATE INDEX IF NOT EXISTS idx_lineup_team_week  ON lineup_plans(team_id, week_n
 	additiveMigrations := []string{
 		`ALTER TABLE seasons ADD COLUMN schedule_type TEXT NOT NULL DEFAULT 'double_rr'`,
 		`ALTER TABLE seasons ADD COLUMN num_weeks     INTEGER NOT NULL DEFAULT 0`,
+		// Handicap snapshots on round_results (stores handicap values at match time)
+		`ALTER TABLE round_results ADD COLUMN home_handicap_used REAL`,
+		`ALTER TABLE round_results ADD COLUMN away_handicap_used REAL`,
+		`ALTER TABLE round_results ADD COLUMN handicap_pts_used  INTEGER`,
+		`ALTER TABLE round_results ADD COLUMN handicap_to        TEXT`,
+		// Legacy / import fields
+		`ALTER TABLE teams   ADD COLUMN team_number TEXT    NOT NULL DEFAULT ''`,
+		`ALTER TABLE players ADD COLUMN active      INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE players ADD COLUMN note        TEXT    NOT NULL DEFAULT ''`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs
