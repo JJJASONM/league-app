@@ -509,7 +509,29 @@ func scanSeason(row interface{ Scan(...any) error }) (models.Season, error) {
 	if s.ScheduleType == "" {
 		s.ScheduleType = "double_rr"
 	}
+	// modernc.org/sqlite converts DATE columns to time.Time, which serialises to
+	// a full ISO-8601 timestamp. Trim to YYYY-MM-DD so date inputs work correctly.
+	s.StartDate = normDatePtr(s.StartDate)
+	s.EndDate = normDatePtr(s.EndDate)
 	return s, err
+}
+
+// normDatePtr trims a date pointer to YYYY-MM-DD, discarding any time component
+// added by the SQLite driver when it coerces DATE columns to time.Time.
+func normDatePtr(s *string) *string {
+	if s == nil || len(*s) <= 10 {
+		return s
+	}
+	v := (*s)[:10]
+	return &v
+}
+
+// normDateStr trims a date string to YYYY-MM-DD, discarding any time component.
+func normDateStr(s string) string {
+	if len(s) <= 10 {
+		return s
+	}
+	return s[:10]
 }
 
 func listSeasons(w http.ResponseWriter, r *http.Request) {
@@ -692,6 +714,7 @@ func listMatches(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
 			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt)
 		m.Completed = completed == 1
+		m.MatchDate = normDatePtr(m.MatchDate)
 		matches = append(matches, m)
 	}
 	if matches == nil {
@@ -713,9 +736,10 @@ func generateSchedule(w http.ResponseWriter, r *http.Request) {
 	// Parse start date
 	startDate, _ := time.Parse("2006-01-02", req.StartDate)
 
-	// Parse skip dates
+	// Parse skip dates — accept YYYY-MM-DD or ISO timestamp (driver may return either)
 	var skipDates []time.Time
 	for _, ds := range req.SkipDates {
+		ds = normDateStr(ds)
 		if t, err := time.Parse("2006-01-02", ds); err == nil {
 			skipDates = append(skipDates, t)
 		}
@@ -995,6 +1019,7 @@ func listSkippedWeeks(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var sw models.SkippedWeek
 		rows.Scan(&sw.ID, &sw.SeasonID, &sw.SkipDate, &sw.Reason)
+		sw.SkipDate = normDateStr(sw.SkipDate)
 		weeks = append(weeks, sw)
 	}
 	if weeks == nil {
@@ -1139,6 +1164,7 @@ func getMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.Completed = completed == 1
+	m.MatchDate = normDatePtr(m.MatchDate)
 	resRows, err := db.DB.Query(`
 		SELECT mr.id, mr.match_id, mr.player_id,
 		       p.first_name || ' ' || p.last_name, mr.team_id,

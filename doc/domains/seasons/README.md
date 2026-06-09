@@ -68,3 +68,22 @@ Activating a new season never silently closes the previous season.
 **Status:** `accepted`
 
 Season teams will be recorded directly rather than inferred from matches.
+
+## Deferred Enhancements
+
+### SEASONS-TODO-001 — Manual team selection in Edit Season
+
+**Status:** `deferred` — not MVP scope
+
+The "Use Teams From Prior Season" field in the Edit Season / New Season form currently
+pre-selects a prior season's teams at schedule-generation time. A future enhancement
+would add a dedicated "Select Teams" step where the operator explicitly picks which
+teams participate in the season before schedule generation runs.
+
+This requires:
+- A `season_teams` join table (approved design direction, see architecture-decisions.md)
+- A team-selection UI step in the season setup workflow
+- Validation that at least N teams are selected before generation is allowed
+
+Do not implement the manual selection workflow until the `season_teams` table and
+explicit season-participation design are finalized.

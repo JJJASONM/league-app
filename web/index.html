@@ -136,7 +136,6 @@
           <li class="nav-item"><a class="nav-link active" href="#" data-stab="schedule">Schedule Setup</a></li>
           <li class="nav-item"><a class="nav-link" href="#" data-stab="skips">Skip Weeks</a></li>
           <li class="nav-item"><a class="nav-link" href="#" data-stab="byes">Bye Requests</a></li>
-          <li class="nav-item"><a class="nav-link" href="#" data-stab="rules">Rules</a></li>
         </ul>
 
         <!-- Tab: Schedule Setup -->
@@ -240,12 +239,6 @@
           </div>
         </div>
 
-        <!-- Tab: Rules -->
-        <div id="stab-rules" class="card border-top-0 d-none" style="border-radius:0 0 12px 12px">
-          <div class="card-body">
-            <rules-editor id="rules-editor"></rules-editor>
-          </div>
-        </div>
 
       </div><!-- /season-mgmt -->
     </div>
@@ -445,7 +438,7 @@
         <h5 class="modal-title" id="season-modal-title">New Season</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" style="max-height:75vh;overflow-y:auto">
         <input type="hidden" id="season-id">
         <div class="row g-3 mb-3">
           <div class="col-md-6">
@@ -476,7 +469,12 @@
             <div class="form-text">Pre-selects which season's teams to use when generating the schedule.</div>
           </div>
         </div>
-        <div class="text-muted small"><i class="bi bi-info-circle"></i> End date is calculated automatically from the last scheduled match after you generate a schedule.</div>
+        <div class="text-muted small mb-3"><i class="bi bi-info-circle"></i> End date is calculated automatically from the last scheduled match after you generate a schedule.</div>
+        <div id="season-rules-section" class="d-none">
+          <hr class="my-2">
+          <h6 class="fw-semibold mb-2"><i class="bi bi-sliders"></i> Season Rules</h6>
+          <rules-editor id="rules-editor"></rules-editor>
+        </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

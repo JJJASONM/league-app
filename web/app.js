@@ -220,7 +220,7 @@ async function loadDashboard() {
     const nextDate = upcoming[0].match_date;
     weeklyItems.push(actionItem('warn','bi-file-earmark-text',
       `Scoresheets not yet created for ${upcoming.length} upcoming match${upcoming.length>1?'es':''}`,
-      `Next match date: ${nextDate}. Generate scoresheets before league night.`,
+      `Next match date: ${displayDate(nextDate)}. Generate scoresheets before league night.`,
       `<button class="btn btn-sm btn-outline-secondary action-btn" disabled title="Coming soon">Scoresheets (soon)</button>`));
   }
 
@@ -262,7 +262,7 @@ async function loadDashboard() {
     <thead><tr><th>Date</th><th>Home</th><th>Away</th></tr></thead>
     <tbody>${upcoming.length
       ? upcoming.map(m=>`<tr>
-          <td class="text-muted small">${m.match_date}</td>
+          <td class="text-muted small">${displayDate(m.match_date)}</td>
           <td>${m.home_team_name}</td>
           <td>${m.away_team_name}</td></tr>`).join('')
       : '<tr><td colspan="3" class="text-muted text-center py-3">No matches in the next 7 days</td></tr>'
@@ -317,19 +317,22 @@ const scheduleTypeFull = {
   blanket:   'Blanket (Empty Slots)'
 };
 
-// Format a YYYY-MM-DD or ISO date string as M/D/YYYY. Returns fallback if empty.
-function fmtDate(raw, fallback = 'TBD') {
+// Format a YYYY-MM-DD or ISO date string as "Jul 6, 2026". Returns fallback if empty.
+function displayDate(raw, fallback = 'TBD') {
   if (!raw) return fallback;
-  // Trim to date part in case a full ISO timestamp arrives
-  const d = new Date(raw.slice(0, 10) + 'T12:00:00');
-  if (isNaN(d)) return raw;
-  return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`;
+  const parts = raw.slice(0, 10).split('-').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return fallback;
+  const [y, mo, d] = parts;
+  const dt = new Date(y, mo - 1, d);
+  if (isNaN(dt)) return fallback;
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// fmtDate kept for season date-range display (delegates to displayDate).
+function fmtDate(raw, fallback = 'TBD') { return displayDate(raw, fallback); }
+
 function fmtDateRange(start, end) {
-  const s = fmtDate(start, '—');
-  const e = fmtDate(end, 'TBD');
-  return `${s} – ${e}`;
+  return `${displayDate(start, '—')} – ${displayDate(end, 'TBD')}`;
 }
 
 async function loadSeasons() {
@@ -376,12 +379,17 @@ async function loadSeasons() {
       </td>
       <td>${schedInfo}</td>
       <td class="text-end" style="white-space:nowrap">
-        <button class="btn btn-outline-primary btn-sm py-0 me-1" onclick="manageSeason(${s.id})">
+        <button class="btn btn-outline-primary btn-sm py-0 me-1" onclick="manageSeason(${s.id})"
+          title="Manage: schedule, skip weeks, bye requests, activation">
           <i class="bi bi-sliders"></i> Manage
         </button>
         ${!s.active ? `<button class="btn btn-outline-success btn-sm py-0 me-1" onclick="activateSeason(${s.id})">Activate</button>` : ''}
-        <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editSeason(${s.id})"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteSeason(${s.id})"><i class="bi bi-trash"></i></button>
+        <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editSeason(${s.id})"
+          title="Edit Details: name, start date, schedule type, rules">
+          <i class="bi bi-pencil"></i> Edit Details
+        </button>
+        <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteSeason(${s.id})"
+          title="Delete this season and all its matches"><i class="bi bi-trash"></i></button>
       </td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" class="text-center text-muted py-3">No seasons yet. Click "New Season" to add one.</td></tr>';
@@ -396,20 +404,25 @@ function openNewSeason() {
   const sel = document.getElementById('season-copy-from');
   sel.innerHTML = '<option value="">— All teams in league —</option>' +
     allSeasons.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+  // Rules are not available until the season is saved and has an ID
+  document.getElementById('season-rules-section').classList.add('d-none');
   openModal('season-modal');
 }
 
 function editSeason(id) {
   const s = allSeasons.find(x => x.id === id);
   if (!s) return;
-  document.getElementById('season-modal-title').textContent = 'Edit Season';
+  document.getElementById('season-modal-title').textContent = 'Edit Season Details';
   document.getElementById('season-id').value = s.id;
   document.getElementById('season-name').value = s.name;
-  document.getElementById('season-start').value = s.start_date || '';
+  document.getElementById('season-start').value = s.start_date ? s.start_date.slice(0, 10) : '';
   document.getElementById('season-type').value = s.schedule_type || 'double_rr';
   const sel = document.getElementById('season-copy-from');
   sel.innerHTML = '<option value="">— All teams in league —</option>' +
     allSeasons.filter(x => x.id !== id).map(x => `<option value="${x.id}">${x.name}</option>`).join('');
+  // Show rules section for existing seasons only
+  document.getElementById('season-rules-section').classList.remove('d-none');
+  document.getElementById('rules-editor').loadSeason(id);
   openModal('season-modal');
 }
 
@@ -434,7 +447,7 @@ async function saveSeason() {
     activeSeason = allSeasons.find(s => s.active) || null;
     document.getElementById('active-season-label').textContent =
       activeSeason ? '📅 ' + activeSeason.name : 'No active season';
-    loadSeasons();
+    await loadSeasons();
     // If new season: open management panel with copy-from pre-selected
     if (!id && saved?.id) {
       manageSeason(saved.id, copyFrom);
@@ -469,6 +482,14 @@ async function manageSeason(id, preselectedFromSeasonId) {
   currentMgmtSeasonId = id;
   const s = allSeasons.find(x => x.id === id);
   if (!s) return;
+
+  // Ensure the Seasons section is the active view (panel lives inside it).
+  if (!document.getElementById('section-seasons').classList.contains('active')) {
+    document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('[data-section]').forEach(el => el.classList.remove('active'));
+    document.getElementById('section-seasons').classList.add('active');
+    document.querySelector('[data-section="seasons"]')?.classList.add('active');
+  }
 
   // ── Header ──
   document.getElementById('season-mgmt').classList.remove('d-none');
@@ -510,7 +531,6 @@ async function manageSeason(id, preselectedFromSeasonId) {
   await Promise.all([
     loadSkippedWeeks(id),
     loadByeRequests(id),
-    document.getElementById('rules-editor').loadSeason(id),
   ]);
 }
 
@@ -619,7 +639,7 @@ async function loadSkippedWeeks(seasonId) {
   const tbody = document.querySelector('#skips-table tbody');
   tbody.innerHTML = skips.length
     ? skips.map(sk => `<tr data-skip-date="${sk.skip_date}">
-        <td>${sk.skip_date}</td>
+        <td>${displayDate(sk.skip_date)}</td>
         <td>${sk.reason || '<span class="text-muted">—</span>'}</td>
         <td class="text-end">
           <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteSkippedWeek(${sk.id})"><i class="bi bi-trash"></i></button>
@@ -1051,7 +1071,7 @@ async function loadSchedule() {
 
   document.getElementById('schedule-content').innerHTML = weeks.length ? weeks.map(w => `
     <div class="card mb-2">
-      <div class="card-header week-header py-1">Week ${w} — ${byWeek[w][0].match_date||'TBD'}</div>
+      <div class="card-header week-header py-1">Week ${w} — ${displayDate(byWeek[w][0].match_date)}</div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0">
           <thead><tr><th>Home</th><th class="text-center">vs</th><th>Away</th><th>Status</th><th></th></tr></thead>
@@ -1252,7 +1272,7 @@ async function loadLineupWeeks() {
   weekSel.innerHTML =
     '<option value="0">⭐ Default Lineup</option>' +
     (sorted.length
-      ? sorted.map(w => `<option value="${w}">Week ${w} — ${weeks[w]}</option>`).join('')
+      ? sorted.map(w => `<option value="${w}">Week ${w} — ${displayDate(weeks[w])}</option>`).join('')
       : '');
   loadLineupForWeek();
 }
@@ -1361,7 +1381,7 @@ function renderLineupCard(match, plansByTeam, seasonId, weekNum) {
     <div class="card">
       <div class="card-header py-2 fw-semibold small d-flex justify-content-between">
         <span>${match.home_team_name} <span class="text-muted fw-normal">vs</span> ${match.away_team_name}</span>
-        <span class="text-muted">Week ${match.week_number}${match.match_date?' · '+match.match_date:''}</span>
+        <span class="text-muted">Week ${match.week_number}${match.match_date?' · '+displayDate(match.match_date):''}</span>
       </div>
       <div class="card-body">
         <div class="row g-3">
@@ -1604,7 +1624,7 @@ function renderScoresheet(existingRounds) {
   // ── No-print toolbar ──
   let html = `<div class="no-print d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
     <div class="d-flex align-items-center gap-2">
-      <span class="fw-semibold small">Week ${m.week_number}${m.match_date?' · '+m.match_date:''}</span>
+      <span class="fw-semibold small">Week ${m.week_number}${m.match_date?' · '+displayDate(m.match_date):''}</span>
       ${m.completed
         ? '<span class="badge bg-success">Completed</span>'
         : '<span class="badge bg-secondary">Pending</span>'}
@@ -1628,7 +1648,7 @@ function renderScoresheet(existingRounds) {
   html += `<div class="ss-title-bar">
     <span class="ss-main-title">${leagueName} Scoresheet</span>
     <div class="ss-title-meta">
-      <span>${m.match_date || 'Date TBD'}</span>
+      <span>${displayDate(m.match_date, 'Date TBD')}</span>
       ${m.match_number != null ? `<span class="ss-match-num">${m.match_number}</span>` : ''}
     </div>
   </div>`;

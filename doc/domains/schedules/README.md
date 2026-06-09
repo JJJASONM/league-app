@@ -16,6 +16,20 @@ Planned holidays and later emergencies use the same concept. Store a controlled
 reason code and optional `notes`. The UI may display labels such as Holiday,
 Weather, or Location Closure, but database records store stable codes.
 
+Current confirmed behavior:
+
+- A skipped date applies only to its season.
+- Schedule generation omits skipped dates and shifts later league weeks forward.
+- Consecutive skipped dates are supported.
+- Regeneration deletes unplayed matches only; completed matches are preserved.
+
+## Date Contract
+
+API and form-control dates use `YYYY-MM-DD`. The backend normalizes SQLite DATE
+values and accepts legacy ISO timestamps when reading skip dates. User-visible
+dates use the shared frontend `displayDate()` formatter; compact poster dates
+remain a deliberate print-layout exception.
+
 ## Pushback
 
 A pushback inserts one or more complete No Play league weeks at a selected
