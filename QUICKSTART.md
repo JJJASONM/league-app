@@ -40,7 +40,7 @@ league_app.exe --port 9090            # use a different port
 league_app.exe --data C:\MyLeagueData # custom data directory
 ```
 
-## Workflow
+## Current Workflow
 
 1. **Seasons** → Create a season, set it as Active
 2. **Teams** → Add your teams
@@ -49,6 +49,11 @@ league_app.exe --data C:\MyLeagueData # custom data directory
 5. **Match Entry** → Select season & match, enter games won/lost per player, Save
 6. **Standings** → Live team standings
 7. **Player Stats** → Individual win rates
+
+This workflow describes the application implemented today. The approved target
+adds rule snapshots, explicit season teams and rosters, schedule preview and
+pushback, match finalization, week close/reopen, season close, audit history,
+and future users and roles. See `doc/architecture-decisions.md`.
 
 ## Sharing with others
 
@@ -72,5 +77,6 @@ league_app/
 │   ├── scoring.go     # Win/loss/tie + standings calc
 │   └── scheduling.go  # Round-robin generator
 ├── handlers/api.go    # All REST endpoints
-└── web/index.html     # Embedded SPA (Bootstrap 5)
+├── web/index.html     # Embedded SPA (Bootstrap 5)
+└── doc/               # Schema and target workflow documentation
 ```

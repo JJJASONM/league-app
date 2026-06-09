@@ -2,6 +2,12 @@
 
 Analysis date: 2026-06-03
 
+**Document status:** Research and current-schema mapping. Some recommended
+fields predate the approved domain-first season roster and rule snapshot design.
+Use `doc/architecture-decisions.md` as the authority for future architecture,
+while this document remains the authority for interpreting the FileMaker
+exports and confirmed legacy formulas.
+
 Source exports:
 
 - `C:\Users\admin\OneDrive\Documents\tableExport.pdf`

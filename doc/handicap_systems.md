@@ -2,6 +2,10 @@
 
 Research date: 2026-06-02
 
+**Document status:** Handicap research and formula comparison. Rule ownership,
+season snapshots, status labels, and administrative workflow are governed by
+`doc/architecture-decisions.md` and `doc/domains/rules/README.md`.
+
 This document compares handicap systems that are relevant to a local pool league app. It separates systems with usable formulas from systems that publish race charts or inputs but keep the actual rating algorithm proprietary.
 
 ## Executive Summary

@@ -1,125 +1,166 @@
 ---
-title: Pool League Manager — Entity Relationship Diagram
+title: Pool League Manager - Current Implemented Database
 ---
 erDiagram
 
     leagues {
-        int     id          PK
-        text    name
-        text    game_format     "8ball | 9ball | 10ball | straight"
-        text    day_of_week     "Monday … Sunday"
+        int id PK
+        text name UK
+        text game_format
+        text day_of_week
         datetime created_at
     }
 
     teams {
-        int     id          PK
-        int     league_id   FK
-        text    name
-        int     captain_id  FK  "→ players.id (nullable)"
+        int id PK
+        int league_id FK
+        text name
+        text team_number
+        int captain_id
         datetime created_at
     }
 
     players {
-        int     id            PK
-        text    player_number     "e.g. 42 — locked once set"
-        text    first_name
-        text    last_name
-        text    phone
-        text    email
-        int     team_id       FK  "nullable — unassigned if null"
-        real    handicap          "8ball: Diff avg | 9ball: race-to"
-        int     admin_hold        "9ball only: 1 = Admin Discretion lock"
+        int id PK
+        text player_number
+        text first_name
+        text last_name
+        text phone
+        text email
+        int team_id FK
+        real handicap
+        int admin_hold
+        int active
+        text note
         datetime created_at
     }
 
     seasons {
-        int     id              PK
-        int     league_id       FK
-        text    name
-        date    start_date
-        date    end_date
-        int     active              "1 = current season for this league"
-        real    handicap_factor     "8ball: multiplier (e.g. 0.85) | 9ball: 0"
+        int id PK
+        int league_id FK
+        text name
+        date start_date
+        date end_date
+        int active
+        text schedule_type
+        int num_weeks
+        datetime created_at
+    }
+
+    season_rules {
+        int id PK
+        int season_id FK
+        text rule_key
+        text rule_label
+        text rule_value
+        datetime created_at
+    }
+
+    skipped_weeks {
+        int id PK
+        int season_id FK
+        date skip_date
+        text reason
+        datetime created_at
+    }
+
+    bye_requests {
+        int id PK
+        int season_id FK
+        int team_id FK
+        int week_number
+        text reason
+        int approved
         datetime created_at
     }
 
     matches {
-        int     id              PK
-        int     season_id       FK
-        int     home_team_id    FK
-        int     away_team_id    FK
-        date    match_date
-        int     week_number
-        int     match_number        "sequential # for the season"
-        text    table_numbers       "e.g. 1&2"
-        int     completed           "1 = results entered"
+        int id PK
+        int season_id FK
+        int home_team_id FK
+        int away_team_id FK
+        date match_date
+        int week_number
+        int match_number
+        text table_numbers
+        int completed
         datetime created_at
     }
 
     match_results {
-        int     id          PK
-        int     match_id    FK
-        int     player_id   FK
-        int     team_id     FK
-        int     sets_won        "9ball"
-        int     sets_lost       "9ball"
-        int     games_won       "8ball"
-        int     games_lost      "8ball"
-        real    diff            "8ball: point differential"
+        int id PK
+        int match_id FK
+        int player_id FK
+        int team_id FK
+        int sets_won
+        int sets_lost
+        int games_won
+        int games_lost
+        real diff
+        datetime created_at
+    }
+
+    round_results {
+        int id PK
+        int match_id FK
+        int round_number
+        int home_player_id FK
+        int away_player_id FK
+        int game1_home
+        int game1_away
+        int game2_home
+        int game2_away
+        int game3_home
+        int game3_away
+        real home_handicap_used
+        real away_handicap_used
+        int handicap_pts_used
+        text handicap_to
         datetime created_at
     }
 
     handicap_history {
-        int     id              PK
-        int     player_id       FK
-        real    old_handicap
-        real    new_handicap
-        date    effective_date
-        int     admin_hold          "1 = held at Admin Discretion"
-        text    note
+        int id PK
+        int player_id FK
+        real old_handicap
+        real new_handicap
+        date effective_date
+        int admin_hold
+        text note
         datetime created_at
     }
 
     lineup_plans {
-        int     id          PK
-        int     team_id     FK
-        int     player_id   FK
-        int     season_id   FK
-        int     week_number
-        int     is_sub          "1 = substitute"
-        int     sub_for_id  FK  "→ players.id — who they cover (nullable)"
+        int id PK
+        int team_id FK
+        int player_id FK
+        int season_id FK
+        int week_number
+        int is_sub
+        int sub_for_id FK
         datetime created_at
     }
 
-    %% ── Relationships ─────────────────────────────────────────
+    leagues ||--o{ teams : has
+    leagues ||--o{ seasons : has
+    teams ||--o{ players : current_assignment
+    teams ||--o{ bye_requests : requests
+    teams ||--o{ lineup_plans : plans
+    seasons ||--o{ season_rules : configures
+    seasons ||--o{ skipped_weeks : excludes
+    seasons ||--o{ bye_requests : receives
+    seasons ||--o{ matches : schedules
+    seasons ||--o{ lineup_plans : contains
+    matches ||--o{ match_results : records
+    matches ||--o{ round_results : records
+    teams ||--o{ match_results : represented_by
+    players ||--o{ match_results : plays
+    players ||--o{ round_results : home_player
+    players ||--o{ round_results : away_player
+    players ||--o{ handicap_history : history
+    players ||--o{ lineup_plans : assigned
 
-    leagues     ||--o{ teams             : "has"
-    leagues     ||--o{ seasons           : "has"
-
-    teams       }o--|| leagues           : "belongs to"
-    teams       ||--o{ players           : "roster"
-    teams       ||--o{ lineup_plans      : "plans"
-
-    players     }o--o| teams             : "assigned to"
-    players     ||--o{ match_results     : "plays"
-    players     ||--o{ handicap_history  : "history"
-    players     ||--o{ lineup_plans      : "lined up"
-
-    seasons     }o--|| leagues           : "belongs to"
-    seasons     ||--o{ matches           : "schedule"
-    seasons     ||--o{ lineup_plans      : "in season"
-
-    matches     }o--|| seasons           : "in season"
-    matches     }o--|| teams             : "home"
-    matches     }o--|| teams             : "away"
-    matches     ||--o{ match_results     : "results"
-
-    match_results }o--|| matches         : "for match"
-    match_results }o--|| players         : "by player"
-    match_results }o--|| teams           : "for team"
-
-    handicap_history }o--|| players      : "tracks"
-
-    lineup_plans }o--|| teams            : "for team"
-    lineup_plans }o--|| players          : "player"
-    lineup_plans }o--|| seasons          : "in season"
+%% This ERD documents db/db.go today.
+%% Target concepts such as season_teams, season_rosters, users, controlled
+%% codes, audit entries, week workflow, and final snapshots are documented in
+%% doc/architecture-decisions.md and are not implemented yet.

@@ -362,3 +362,24 @@
   .poster-outer, .poster-teams-box { border-width: 10px; padding: 18px; box-shadow: none; }
   .poster-inner { padding: 14px 18px; }
 }
+
+/* ── Season Rules (grouped settings) ──────────────────────────────────────── */
+.rule-group-hdr {
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: #3a5299;
+  padding: .4rem 0 .3rem;
+  margin-bottom: .4rem;
+  border-bottom: 1.5px solid #e0e6f0;
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+}
+.rule-group-hdr i { font-size: .9rem; }
+.rule-row td { vertical-align: middle; padding: .45rem .5rem; }
+.rule-row td:first-child { font-size: .82rem; }
+.rule-label { font-weight: 500; color: #222; margin-bottom: 1px; }
+.rule-help  { font-size: .72rem; color: #888; line-height: 1.35; }
+.rule-ctrl  { min-width: 110px; }

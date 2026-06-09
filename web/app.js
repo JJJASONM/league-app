@@ -392,8 +392,9 @@ function openNewSeason() {
   document.getElementById('season-id').value = '';
   document.getElementById('season-name').value = '';
   document.getElementById('season-start').value = '';
+  document.getElementById('season-type').value = 'double_rr';
   const sel = document.getElementById('season-copy-from');
-  sel.innerHTML = '<option value="">— Don\'t copy (use all league teams) —</option>' +
+  sel.innerHTML = '<option value="">— All teams in league —</option>' +
     allSeasons.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
   openModal('season-modal');
 }
@@ -405,8 +406,9 @@ function editSeason(id) {
   document.getElementById('season-id').value = s.id;
   document.getElementById('season-name').value = s.name;
   document.getElementById('season-start').value = s.start_date || '';
+  document.getElementById('season-type').value = s.schedule_type || 'double_rr';
   const sel = document.getElementById('season-copy-from');
-  sel.innerHTML = '<option value="">— Don\'t copy (use all league teams) —</option>' +
+  sel.innerHTML = '<option value="">— All teams in league —</option>' +
     allSeasons.filter(x => x.id !== id).map(x => `<option value="${x.id}">${x.name}</option>`).join('');
   openModal('season-modal');
 }
@@ -415,9 +417,10 @@ async function saveSeason() {
   const id = document.getElementById('season-id').value;
   const copyFrom = parseInt(document.getElementById('season-copy-from').value) || 0;
   const body = {
-    name:       document.getElementById('season-name').value.trim(),
-    start_date: document.getElementById('season-start').value || null,
-    league_id:  activeLeague?.id
+    name:          document.getElementById('season-name').value.trim(),
+    start_date:    document.getElementById('season-start').value || null,
+    schedule_type: document.getElementById('season-type').value || 'double_rr',
+    league_id:     activeLeague?.id
   };
   if (!body.name)      { toast('Name is required','warning'); return; }
   if (!body.league_id) { toast('No active league selected','warning'); return; }
@@ -507,7 +510,7 @@ async function manageSeason(id, preselectedFromSeasonId) {
   await Promise.all([
     loadSkippedWeeks(id),
     loadByeRequests(id),
-    loadSeasonRules(id)
+    document.getElementById('rules-editor').loadSeason(id),
   ]);
 }
 
@@ -595,7 +598,7 @@ async function generateSchedule() {
     from_season_id:   fromSeason
   };
 
-  if (!confirm(`This will replace any existing schedule for this season. Continue?`)) return;
+  if (!confirm(`This will replace all unplayed matches for this season. Completed matches are preserved. Continue?`)) return;
 
   try {
     const res = await api('POST', '/matches/generate', body);
@@ -701,57 +704,6 @@ async function deleteByeRequest(id) {
     await api('DELETE', `/seasons/${currentMgmtSeasonId}/bye-requests/${id}`);
     toast('Removed');
     await loadByeRequests(currentMgmtSeasonId);
-  } catch(e) { toast(e.message, 'danger'); }
-}
-
-// ── Season Rules ──────────────────────────────────────────────────────────────
-async function loadSeasonRules(seasonId) {
-  let rules = [];
-  try { rules = await api('GET', `/seasons/${seasonId}/rules`); } catch(_) {}
-  const tbody = document.querySelector('#rules-table tbody');
-  tbody.innerHTML = rules.length
-    ? rules.map(r => `<tr>
-        <td>${r.rule_label}</td>
-        <td>
-          <input type="text" class="form-control form-control-sm d-inline-block" style="width:100px"
-            value="${r.rule_value}" onchange="updateSeasonRule(${r.id}, this.value)">
-        </td>
-        <td class="text-end">
-          <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteSeasonRule(${r.id})"><i class="bi bi-trash"></i></button>
-        </td>
-      </tr>`).join('')
-    : '<tr><td colspan="3" class="text-muted text-center py-2">No rules yet</td></tr>';
-}
-
-async function addSeasonRule() {
-  if (!currentMgmtSeasonId) return;
-  const label = document.getElementById('rule-label-input').value.trim();
-  const value = document.getElementById('rule-value-input').value.trim();
-  if (!label) { toast('Rule description is required', 'warning'); return; }
-  // Generate a simple key from the label
-  const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-  try {
-    await api('POST', `/seasons/${currentMgmtSeasonId}/rules`, { rule_key: key, rule_label: label, rule_value: value });
-    document.getElementById('rule-label-input').value = '';
-    document.getElementById('rule-value-input').value = '';
-    toast('Rule added');
-    await loadSeasonRules(currentMgmtSeasonId);
-  } catch(e) { toast(e.message, 'danger'); }
-}
-
-async function updateSeasonRule(id, value) {
-  try {
-    await api('PUT', `/seasons/${currentMgmtSeasonId}/rules/${id}`, { rule_value: value });
-    toast('Rule updated');
-  } catch(e) { toast(e.message, 'danger'); }
-}
-
-async function deleteSeasonRule(id) {
-  if (!confirm('Remove this rule?')) return;
-  try {
-    await api('DELETE', `/seasons/${currentMgmtSeasonId}/rules/${id}`);
-    toast('Rule removed');
-    await loadSeasonRules(currentMgmtSeasonId);
   } catch(e) { toast(e.message, 'danger'); }
 }
 

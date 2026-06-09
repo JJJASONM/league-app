@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"league_app/backend/domains/rules"
 	"league_app/db"
 	"league_app/logic"
 	"league_app/models"
@@ -75,6 +76,9 @@ func Register(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("GET /api/lineup-plans", listLineupPlans)
 	mux.HandleFunc("POST /api/lineup-plans", saveTeamLineup)
 	mux.HandleFunc("DELETE /api/lineup-plans/{id}", deleteLineupPlan)
+
+	// Rule definitions — developer-owned, served by the backend
+	mux.HandleFunc("GET /api/rules/definitions", listRuleDefinitions)
 
 	// Standings & stats
 	mux.HandleFunc("GET /api/standings", getStandings)
@@ -563,16 +567,6 @@ func createSeason(w http.ResponseWriter, r *http.Request) {
 	}
 	s.ID, _ = res.LastInsertId()
 
-	// Seed default rules for the new season
-	defaultRules := [][]string{
-		{"max_scoresheet_handicap", "Max handicap shown on scoresheet", "4.5"},
-		{"max_match_handicap", "Max handicap for any match", "15"},
-	}
-	for _, dr := range defaultRules {
-		db.DB.Exec(`INSERT OR IGNORE INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`,
-			s.ID, dr[0], dr[1], dr[2])
-	}
-
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, s)
 }
@@ -882,6 +876,12 @@ func assignMatchTeams(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "assigned"})
 }
 
+// ─── Rule Definitions ─────────────────────────────────────────────────────────
+
+func listRuleDefinitions(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, rules.Definitions())
+}
+
 // ─── Season Rules ─────────────────────────────────────────────────────────────
 
 func listSeasonRules(w http.ResponseWriter, r *http.Request) {
@@ -923,8 +923,11 @@ func createSeasonRule(w http.ResponseWriter, r *http.Request) {
 	}
 	ru.SeasonID = sid
 	if ru.RuleKey == "" {
-		// generate a key from label
 		ru.RuleKey = fmt.Sprintf("rule_%d", time.Now().UnixMilli())
+	}
+	if err := rules.ValidateValue(ru.RuleKey, ru.RuleValue); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	res, err := db.DB.Exec(
 		`INSERT OR REPLACE INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`,
@@ -948,6 +951,14 @@ func updateSeasonRule(w http.ResponseWriter, r *http.Request) {
 	if err := decode(r, &ru); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
+	}
+	var ruleKey string
+	db.DB.QueryRow(`SELECT rule_key FROM season_rules WHERE id=?`, rid).Scan(&ruleKey)
+	if ruleKey != "" {
+		if verr := rules.ValidateValue(ruleKey, ru.RuleValue); verr != nil {
+			jsonError(w, verr.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	db.DB.Exec(`UPDATE season_rules SET rule_label=?, rule_value=? WHERE id=?`,
 		ru.RuleLabel, ru.RuleValue, rid)
@@ -1121,8 +1132,7 @@ func getMatch(w http.ResponseWriter, r *http.Request) {
 	}
 	var m models.Match
 	var completed int
-	err = db.DB.QueryRow(matchSelect+` WHERE m.id=?`, id,
-	).Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
+	err = db.DB.QueryRow(matchSelect+` WHERE m.id=?`, id).Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
 		&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt)
 	if err != nil {
 		jsonError(w, "match not found", 404)
@@ -1279,39 +1289,59 @@ func getStandings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, standings)
 }
 
+// seasonMultiplier returns the handicap_multiplier rule value for a season,
+// defaulting to logic.Multiplier (2.55) if the rule is absent or invalid.
+func seasonMultiplier(seasonID int64) float64 {
+	var val string
+	db.DB.QueryRow(
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_multiplier'`,
+		seasonID).Scan(&val)
+	if val == "" {
+		return logic.Multiplier
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil || f <= 0 {
+		return logic.Multiplier
+	}
+	return f
+}
+
 // ─── 8-Ball Round Results ─────────────────────────────────────────────────────
 
-// computePairingResult fills the computed fields on a RoundResult:
-//   - HandicapPts: round(abs(homeHC − awayHC) × 2.55)
-//   - HandicapTo:  "home" | "away" | "" (who receives the spot)
-//   - HomeTotalPts / AwayTotalPts: raw point sum + handicap if applicable
-//   - PairingWinner: player with higher adjusted total
-func computePairingResult(rr *models.RoundResult) {
+// computePairingResult fills the derived/computed fields on a RoundResult.
+// multiplier is the season's handicap_multiplier (default logic.Multiplier = 2.55).
+// If a handicap snapshot is stored on the row, that is preferred over current
+// player handicap so historical scoresheets are stable.
+func computePairingResult(rr *models.RoundResult, multiplier float64) {
 	homeRaw := rr.Game1Home + rr.Game2Home + rr.Game3Home
 	awayRaw := rr.Game1Away + rr.Game2Away + rr.Game3Away
 
-	// Prefer snapshot handicap (recorded at match time) if available;
-	// fall back to current player handicap for older rows without a snapshot.
-	homeHC := rr.HomeHandicap
-	if rr.HomeHandicapUsed != nil {
-		homeHC = *rr.HomeHandicapUsed
+	// Use stored snapshot when available; otherwise fall back to current player HC.
+	if rr.HandicapPtsUsed != nil && rr.HandicapToUsed != nil {
+		// Snapshot present — use it directly, no recomputation needed.
+		rr.HandicapPts = *rr.HandicapPtsUsed
+		rr.HandicapTo = *rr.HandicapToUsed
+	} else {
+		homeHC := rr.HomeHandicap
+		if rr.HomeHandicapUsed != nil {
+			homeHC = *rr.HomeHandicapUsed
+		}
+		awayHC := rr.AwayHandicap
+		if rr.AwayHandicapUsed != nil {
+			awayHC = *rr.AwayHandicapUsed
+		}
+		spot := logic.CalcSpotM(homeHC, awayHC, multiplier)
+		rr.HandicapPts = spot.Pts
+		rr.HandicapTo = spot.To
 	}
-	awayHC := rr.AwayHandicap
-	if rr.AwayHandicapUsed != nil {
-		awayHC = *rr.AwayHandicapUsed
-	}
-
-	spot := logic.CalcSpot(homeHC, awayHC)
-	rr.HandicapPts = spot.Pts
-	rr.HandicapTo = spot.To
 
 	homeAdj := homeRaw
 	awayAdj := awayRaw
-	switch spot.To {
+	switch rr.HandicapTo {
 	case "home":
-		homeAdj += spot.Pts
+		homeAdj += rr.HandicapPts
 	case "away":
-		awayAdj += spot.Pts
+		awayAdj += rr.HandicapPts
 	}
 
 	rr.HomeTotalPts = homeAdj
@@ -1333,6 +1363,14 @@ func getRounds(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid id", 400)
 		return
 	}
+
+	// Look up the season multiplier so historical scoresheets use the right value
+	// when there is no snapshot (older rows). New rows have snapshots so this only
+	// matters as a fallback.
+	var seasonID int64
+	db.DB.QueryRow(`SELECT season_id FROM matches WHERE id=?`, id).Scan(&seasonID)
+	mult := seasonMultiplier(seasonID)
+
 	rows, err := db.DB.Query(`
 		SELECT rr.id, rr.match_id, rr.round_number,
 		       rr.home_player_id, hp.first_name||' '||hp.last_name, hp.handicap,
@@ -1366,7 +1404,7 @@ func getRounds(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		computePairingResult(&rr)
+		computePairingResult(&rr, mult)
 		rounds = append(rounds, rr)
 	}
 	if rounds == nil {
@@ -1408,8 +1446,13 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 
 	// Replace all round results for this match
 	tx.Exec(`DELETE FROM round_results WHERE match_id=?`, matchID)
+	// Look up this season's handicap multiplier once before iterating rounds
+	var saveSeasonID int64
+	db.DB.QueryRow(`SELECT season_id FROM matches WHERE id=?`, matchID).Scan(&saveSeasonID)
+	saveMult := seasonMultiplier(saveSeasonID)
+
 	for _, rr := range req.Rounds {
-		spot := logic.CalcSpot(playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID])
+		spot := logic.CalcSpotM(playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID], saveMult)
 		_, err := tx.Exec(`
 			INSERT INTO round_results
 			  (match_id, round_number, home_player_id, away_player_id,
@@ -1455,7 +1498,7 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 			case a == 10:
 				ensure(rr.AwayPlayerID).gw++
 				ensure(rr.HomePlayerID).gl++
-			// If neither is 10 the game wasn't entered yet — skip
+				// If neither is 10 the game wasn't entered yet — skip
 			}
 		}
 	}

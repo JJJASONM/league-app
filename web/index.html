@@ -114,7 +114,7 @@
               </div>
               <div class="ms-auto d-flex gap-2 flex-wrap">
                 <button class="btn btn-sm btn-outline-secondary" id="season-mgmt-set-active-btn"
-                  onclick="activateMgmtSeason()" style="display:none!important">
+                  onclick="activateMgmtSeason()" style="display:none">
                   <i class="bi bi-lightning"></i> Set Active
                 </button>
                 <button class="btn btn-sm btn-outline-primary" onclick="goToSchedule()">
@@ -243,23 +243,7 @@
         <!-- Tab: Rules -->
         <div id="stab-rules" class="card border-top-0 d-none" style="border-radius:0 0 12px 12px">
           <div class="card-body">
-            <div class="row g-2 mb-3 align-items-end">
-              <div class="col">
-                <label class="form-label small mb-1">Rule Description</label>
-                <input type="text" class="form-control form-control-sm" id="rule-label-input" placeholder="e.g. Max handicap on scoresheet">
-              </div>
-              <div class="col-auto">
-                <label class="form-label small mb-1">Value</label>
-                <input type="text" class="form-control form-control-sm" id="rule-value-input" placeholder="4.5" style="width:90px">
-              </div>
-              <div class="col-auto">
-                <button class="btn btn-primary btn-sm" onclick="addSeasonRule()"><i class="bi bi-plus-lg"></i> Add Rule</button>
-              </div>
-            </div>
-            <table class="table table-sm mb-0" id="rules-table">
-              <thead><tr><th>Rule</th><th>Value</th><th></th></tr></thead>
-              <tbody><tr><td colspan="3" class="text-muted text-center py-2">Loading…</td></tr></tbody>
-            </table>
+            <rules-editor id="rules-editor"></rules-editor>
           </div>
         </div>
 
@@ -469,22 +453,30 @@
             <input type="text" class="form-control" id="season-name" placeholder="e.g. Fall 2026">
           </div>
           <div class="col-md-6">
-            <label class="form-label">Start Date <span class="text-muted small">(used when generating schedule)</span></label>
+            <label class="form-label">Start Date <span class="text-muted small">(first match date)</span></label>
             <input type="date" class="form-control" id="season-start">
           </div>
         </div>
-        <div class="row g-3">
+        <div class="row g-3 mb-3">
           <div class="col-md-6">
-            <label class="form-label">Copy Teams From Season</label>
-            <select class="form-select" id="season-copy-from">
-              <option value="">— Don't copy (use all league teams) —</option>
+            <label class="form-label">Schedule Type</label>
+            <select class="form-select" id="season-type">
+              <option value="single_rr">Single Round Robin</option>
+              <option value="double_rr" selected>Double Round Robin</option>
+              <option value="split">Split Season</option>
+              <option value="custom">Custom (Fixed Weeks)</option>
+              <option value="blanket">Blanket (Empty Slots)</option>
             </select>
-            <div class="form-text">Pre-selects a prior season in the schedule generator so only those teams are scheduled.</div>
           </div>
-          <div class="col-md-6 d-flex align-items-end">
-            <div class="text-muted small"><i class="bi bi-info-circle"></i> End date is calculated automatically from the last scheduled match after you generate a schedule.</div>
+          <div class="col-md-6">
+            <label class="form-label">Use Teams From Prior Season</label>
+            <select class="form-select" id="season-copy-from">
+              <option value="">— All teams in league —</option>
+            </select>
+            <div class="form-text">Pre-selects which season's teams to use when generating the schedule.</div>
           </div>
         </div>
+        <div class="text-muted small"><i class="bi bi-info-circle"></i> End date is calculated automatically from the last scheduled match after you generate a schedule.</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -644,5 +636,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/app.js" defer></script>
+    <script type="module" src="/domains/rules/index.js"></script>
 </body>
 </html>

@@ -55,6 +55,27 @@ func CalcSpot(homeHC, awayHC float64) SpotResult {
 	return SpotResult{Pts: pts, To: to}
 }
 
+
+// CalcSpotM is like CalcSpot but accepts a custom multiplier, allowing
+// per-season handicap_multiplier rule values to override the default 2.55.
+// Pass logic.Multiplier as the multiplier to get default behaviour.
+func CalcSpotM(homeHC, awayHC, multiplier float64) SpotResult {
+	diff := homeHC - awayHC
+	pts := int(math.Round(math.Abs(diff) * multiplier))
+
+	var to string
+	switch {
+	case homeHC < awayHC:
+		to = "home"
+	case awayHC < homeHC:
+		to = "away"
+	default:
+		to = ""
+	}
+
+	return SpotResult{Pts: pts, To: to}
+}
+
 // ─── Legacy skill-level helper (kept for backward compatibility) ──────────────
 
 // HandicapAdjustment returns the bonus games awarded to the weaker player using

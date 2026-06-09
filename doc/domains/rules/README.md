@@ -1,0 +1,79 @@
+# Rules
+
+## Overview
+
+**Owner:** `rules`
+**Status:** `draft`
+**Current version:** `0.1`
+**Last reviewed:** `2026-06-08`
+
+The Rules domain defines configurable league behavior, validates editable rule
+values, resolves inherited values, and creates a locked season snapshot.
+Handicaps, schedules, and matches apply those values within their own domains.
+
+## Public Interface
+
+Target entry points:
+
+```text
+web/domains/rules/index.js
+backend/domains/rules/public.go
+```
+
+The backend returns rule definitions, editable values, validation errors, and
+effective values with their source scope.
+
+## Rule Definition
+
+Each developer-defined rule has:
+
+- Permanent key
+- Editable label
+- Explicit type
+- Validation metadata
+- Default value
+- Status and version
+- What/why/input/output explanation
+
+Rule keys cannot be changed after creation. Labels may change because business
+logic uses keys, not labels.
+
+## Scope And Snapshot
+
+```text
+system default -> league -> season
+```
+
+The most specific configured value wins. The API identifies the source of the
+effective value. Season creation snapshots effective values; season activation
+locks the snapshot.
+
+## Questions
+
+### RULES-Q001 - Mid-season amendments
+
+**Status:** `open`
+**Opened:** `2026-06-08`
+**Resolved:** `pending`
+**Related commit:** `pending`
+
+**Context:** Locations, emergencies, or mistakes may require an active season
+to change.
+
+**Resolution:** Define whether amendments create a dated version, require
+special authorization, or apply only to unplayed matches.
+
+## Decision History
+
+### 2026-06-08 - Developer-owned definitions
+
+**Status:** `accepted`
+
+Developers control meaning, types, and validation. Authorized users edit
+permitted values only.
+
+### 2026-06-08 - Lock season snapshot at activation
+
+**Status:** `accepted`
+
+A season keeps a stable ruleset after approval. Amendment details remain open.

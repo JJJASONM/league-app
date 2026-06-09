@@ -250,5 +250,9 @@ CREATE INDEX IF NOT EXISTS idx_lineup_team_week  ON lineup_plans(team_id, week_n
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs
 	}
+
+	// Clean up stale rule keys seeded by older versions (now handled by frontend defaults)
+	DB.Exec(`DELETE FROM season_rules WHERE rule_key IN ('max_scoresheet_handicap','max_match_handicap')`)
+
 	return nil
 }
