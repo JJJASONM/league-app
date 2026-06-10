@@ -504,11 +504,18 @@ func TestGetSeason_StartDateIsYYYYMMDD(t *testing.T) {
 
 // ─── Skip date and match date normalization ───────────────────────────────────
 
-// seedScheduleFixture creates a league, 3 teams, and one season with the given
-// start date. Returns (leagueID, seasonID) for use in schedule generation tests.
+// seedScheduleFixture creates a league, 3 teams (odd), and one season.
+// Returns (leagueID, seasonID).
 func seedScheduleFixture(t *testing.T, srv *httptest.Server, startDate string) (leagueID, seasonID int64) {
+	leagueID, seasonID, _ = seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	return
+}
+
+// seedScheduleFixtureWithTeams creates a league, the named teams, and one season.
+// Returns (leagueID, seasonID, []teamID).
+func seedScheduleFixtureWithTeams(t *testing.T, srv *httptest.Server, startDate string, teamNames ...string) (leagueID, seasonID int64, teamIDs []int64) {
 	t.Helper()
-	postDecode := func(path, body string) map[string]any {
+	pd := func(path, body string) map[string]any {
 		resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("POST %s: %v", path, err)
@@ -518,12 +525,13 @@ func seedScheduleFixture(t *testing.T, srv *httptest.Server, startDate string) (
 		json.NewDecoder(resp.Body).Decode(&m)
 		return m
 	}
-	lg := postDecode("/api/leagues", `{"name":"Sched League","game_format":"8ball"}`)
+	lg := pd("/api/leagues", `{"name":"Sched League","game_format":"8ball"}`)
 	leagueID = int64(lg["id"].(float64))
-	postDecode("/api/teams", fmt.Sprintf(`{"league_id":%d,"name":"Alpha"}`, leagueID))
-	postDecode("/api/teams", fmt.Sprintf(`{"league_id":%d,"name":"Bravo"}`, leagueID))
-	postDecode("/api/teams", fmt.Sprintf(`{"league_id":%d,"name":"Charlie"}`, leagueID))
-	s := postDecode("/api/seasons", fmt.Sprintf(`{"league_id":%d,"name":"Test Season","start_date":%q}`, leagueID, startDate))
+	for _, name := range teamNames {
+		tm := pd("/api/teams", fmt.Sprintf(`{"league_id":%d,"name":%q}`, leagueID, name))
+		teamIDs = append(teamIDs, int64(tm["id"].(float64)))
+	}
+	s := pd("/api/seasons", fmt.Sprintf(`{"league_id":%d,"name":"Test Season","start_date":%q}`, leagueID, startDate))
 	seasonID = int64(s["id"].(float64))
 	return
 }
@@ -717,4 +725,549 @@ func TestGenerateSchedule_PreservesCompletedMatches(t *testing.T) {
 		}
 	}
 	t.Fatalf("completed match %d was deleted during regeneration", completedID)
+}
+
+// ─── Bye request validation ───────────────────────────────────────────────────
+
+// postByeRequest is a helper that sends a POST /seasons/{id}/bye-requests.
+func postByeRequest(t *testing.T, srv *httptest.Server, seasonID, teamID int64, weekNum int) *http.Response {
+	t.Helper()
+	body := fmt.Sprintf(`{"team_id":%d,"week_number":%d,"reason":"test"}`, teamID, weekNum)
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api/seasons/%d/bye-requests", srv.URL, seasonID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST bye-request: %v", err)
+	}
+	return resp
+}
+
+// approveByeRequest approves the bye request with the given id.
+func approveByeRequest(t *testing.T, srv *httptest.Server, seasonID, byeID int64) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPut,
+		fmt.Sprintf("%s/api/seasons/%d/bye-requests/%d", srv.URL, seasonID, byeID),
+		strings.NewReader(`{"approved":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT approve: %v", err)
+	}
+	resp.Body.Close()
+}
+
+// matchesInWeek filters matches for a specific week number.
+func matchesInWeek(matches []map[string]any, week int) []map[string]any {
+	var out []map[string]any
+	for _, m := range matches {
+		if wn, ok := m["week_number"].(float64); ok && int(wn) == week {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// teamAppearsInMatches returns true if teamID is home or away in any of the matches.
+func teamAppearsInMatches(teamID int64, matches []map[string]any) bool {
+	for _, m := range matches {
+		if int64(m["home_team_id"].(float64)) == teamID ||
+			int64(m["away_team_id"].(float64)) == teamID {
+			return true
+		}
+	}
+	return false
+}
+
+func TestByeRequest_EvenTeamCountRejected(t *testing.T) {
+	srv := testServer(t)
+	// Two teams = even → bye request must be rejected.
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo")
+	resp := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("even-team bye request: want 400, got %d", resp.StatusCode)
+	}
+	var result map[string]string
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["error"] == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+func TestByeRequest_TeamFromAnotherLeagueRejected(t *testing.T) {
+	srv := testServer(t)
+	// Create first league with 3 teams and a season.
+	_, seasonID, _ := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+
+	// Create a second league and team.
+	lg2Resp, _ := http.Post(srv.URL+"/api/leagues", "application/json",
+		strings.NewReader(`{"name":"Other League","game_format":"8ball"}`))
+	var lg2 map[string]any
+	json.NewDecoder(lg2Resp.Body).Decode(&lg2)
+	lg2Resp.Body.Close()
+	lg2ID := int64(lg2["id"].(float64))
+
+	tm2Resp, _ := http.Post(srv.URL+"/api/teams", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Outsider"}`, lg2ID)))
+	var tm2 map[string]any
+	json.NewDecoder(tm2Resp.Body).Decode(&tm2)
+	tm2Resp.Body.Close()
+	foreignTeamID := int64(tm2["id"].(float64))
+
+	resp := postByeRequest(t, srv, seasonID, foreignTeamID, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("foreign-team bye request: want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestByeRequest_DuplicateRejected(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+
+	r1 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusCreated {
+		t.Fatalf("first request: want 201, got %d", r1.StatusCode)
+	}
+
+	r2 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
+	defer r2.Body.Close()
+	if r2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("duplicate request: want 400, got %d", r2.StatusCode)
+	}
+}
+
+func TestByeRequest_ApprovedHonoredInSchedule(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-07-06"
+	// 3 teams (odd) → one natural bye per week.
+	// With Alpha(1), Bravo(2), Charlie(3) and single_rr:
+	//   Week 1: Bravo vs Charlie  (Alpha bye)
+	//   Week 2: Alpha vs Charlie  (Bravo bye)
+	//   Week 3: Alpha vs Bravo    (Charlie bye)
+	// Request Charlie's bye moved to week 1.
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	charlieID := teamIDs[2]
+
+	// Create and approve the bye request.
+	r := postByeRequest(t, srv, seasonID, charlieID, 1)
+	var created map[string]any
+	json.NewDecoder(r.Body).Decode(&created)
+	r.Body.Close()
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create bye: want 201, got %d", r.StatusCode)
+	}
+	byeID := int64(created["id"].(float64))
+	approveByeRequest(t, srv, seasonID, byeID)
+
+	matches := generateAndGetMatches(t, srv, seasonID, startDate, nil)
+	week1 := matchesInWeek(matches, 1)
+	if len(week1) == 0 {
+		t.Fatal("no matches in week 1")
+	}
+	if teamAppearsInMatches(charlieID, week1) {
+		t.Errorf("Charlie should have the bye in week 1 but appears in a match")
+	}
+	// Exactly one match in week 1 (3 teams → 1 match per week).
+	if len(week1) != 1 {
+		t.Errorf("week 1: want 1 match, got %d", len(week1))
+	}
+}
+
+func TestByeRequest_UnapprovedIgnoredInSchedule(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-07-06"
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	charlieID := teamIDs[2]
+
+	// Create but do NOT approve the bye request for week 1.
+	r := postByeRequest(t, srv, seasonID, charlieID, 1)
+	r.Body.Close()
+
+	matches := generateAndGetMatches(t, srv, seasonID, startDate, nil)
+	week1 := matchesInWeek(matches, 1)
+	// Without approval, the natural rotation applies: Charlie appears in week 1.
+	if !teamAppearsInMatches(charlieID, week1) {
+		t.Error("unapproved request should have no effect; Charlie should play in week 1")
+	}
+}
+
+func TestByeRequest_NaturalByeNotDuplicated(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-07-06"
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	charlieID := teamIDs[2]
+
+	r := postByeRequest(t, srv, seasonID, charlieID, 1)
+	var created map[string]any
+	json.NewDecoder(r.Body).Decode(&created)
+	r.Body.Close()
+	approveByeRequest(t, srv, seasonID, int64(created["id"].(float64)))
+
+	matches := generateAndGetMatches(t, srv, seasonID, startDate, nil)
+	// Total matches for single_rr with 3 teams = 3 (one per week).
+	if len(matches) != 3 {
+		t.Errorf("expected 3 matches, got %d — bye request must not create extra bye", len(matches))
+	}
+	// Every week has exactly 1 match.
+	for week := 1; week <= 3; week++ {
+		if n := len(matchesInWeek(matches, week)); n != 1 {
+			t.Errorf("week %d: want 1 match, got %d", week, n)
+		}
+	}
+}
+
+// ─── Player assignment (no duplicate) ────────────────────────────────────────
+
+func TestAssignExistingPlayer_NamePreserved(t *testing.T) {
+	srv := testServer(t)
+
+	// Create a league, team, and an unassigned player.
+	lgResp, _ := http.Post(srv.URL+"/api/leagues", "application/json",
+		strings.NewReader(`{"name":"Test League","game_format":"8ball"}`))
+	var lg map[string]any
+	json.NewDecoder(lgResp.Body).Decode(&lg)
+	lgResp.Body.Close()
+	lgID := int64(lg["id"].(float64))
+
+	tmResp, _ := http.Post(srv.URL+"/api/teams", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Team A"}`, lgID)))
+	var tm map[string]any
+	json.NewDecoder(tmResp.Body).Decode(&tm)
+	tmResp.Body.Close()
+	teamID := int64(tm["id"].(float64))
+
+	pResp, _ := http.Post(srv.URL+"/api/players", "application/json",
+		strings.NewReader(`{"first_name":"Jane","last_name":"Doe","handicap":1.5}`))
+	var player map[string]any
+	json.NewDecoder(pResp.Body).Decode(&player)
+	pResp.Body.Close()
+	playerID := int64(player["id"].(float64))
+
+	// Assign the player to the team using first_name/last_name (the correct approach).
+	body := fmt.Sprintf(`{"first_name":"Jane","last_name":"Doe","handicap":1.5,"team_id":%d}`, teamID)
+	req, _ := http.NewRequest(http.MethodPut,
+		fmt.Sprintf("%s/api/players/%d", srv.URL, playerID),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT player: want 200, got %d", resp.StatusCode)
+	}
+
+	// Verify the name is still intact after assignment.
+	getResp, _ := http.Get(fmt.Sprintf("%s/api/players/%d", srv.URL, playerID))
+	var updated map[string]any
+	json.NewDecoder(getResp.Body).Decode(&updated)
+	getResp.Body.Close()
+
+	if fn, _ := updated["first_name"].(string); fn != "Jane" {
+		t.Errorf("first_name: want %q, got %q", "Jane", fn)
+	}
+	if ln, _ := updated["last_name"].(string); ln != "Doe" {
+		t.Errorf("last_name: want %q, got %q", "Doe", ln)
+	}
+	if tid, _ := updated["team_id"].(float64); int64(tid) != teamID {
+		t.Errorf("team_id: want %d, got %v", teamID, updated["team_id"])
+	}
+
+	// Verify no duplicate player was created.
+	allResp, _ := http.Get(srv.URL + "/api/players")
+	var all []map[string]any
+	json.NewDecoder(allResp.Body).Decode(&all)
+	allResp.Body.Close()
+	if len(all) != 1 {
+		t.Errorf("expected 1 player, got %d — assignment must not create duplicates", len(all))
+	}
+}
+
+// ─── Bye request conflict and scope enforcement ───────────────────────────────
+
+// putByeApproval sends PUT .../bye-requests/{byeID} with {approved:approved}.
+// Caller must close the returned response body.
+func putByeApproval(t *testing.T, srv *httptest.Server, seasonID, byeID int64, approved bool) *http.Response {
+	t.Helper()
+	body := fmt.Sprintf(`{"approved":%v}`, approved)
+	req, _ := http.NewRequest(http.MethodPut,
+		fmt.Sprintf("%s/api/seasons/%d/bye-requests/%d", srv.URL, seasonID, byeID),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT bye-approval: %v", err)
+	}
+	return resp
+}
+
+// deleteByeReq sends DELETE .../seasons/{sid}/bye-requests/{bid}.
+func deleteByeReq(t *testing.T, srv *httptest.Server, seasonID, byeID int64) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodDelete,
+		fmt.Sprintf("%s/api/seasons/%d/bye-requests/%d", srv.URL, seasonID, byeID),
+		nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE bye-request: %v", err)
+	}
+	return resp
+}
+
+// listByes returns the decoded bye requests for the given season.
+func listByes(t *testing.T, srv *httptest.Server, seasonID int64) []map[string]any {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/bye-requests", srv.URL, seasonID))
+	if err != nil {
+		t.Fatalf("GET bye-requests: %v", err)
+	}
+	defer resp.Body.Close()
+	var byes []map[string]any
+	json.NewDecoder(resp.Body).Decode(&byes)
+	return byes
+}
+
+// TestByeRequest_ConflictPreventsApproval verifies that a second approved bye
+// for the same week is rejected even though the request itself was accepted.
+func TestByeRequest_ConflictPreventsApproval(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+
+	// Approve Alpha for week 1.
+	r1 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
+	var b1 map[string]any
+	json.NewDecoder(r1.Body).Decode(&b1)
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusCreated {
+		t.Fatalf("create Alpha bye: want 201, got %d", r1.StatusCode)
+	}
+	resp := putByeApproval(t, srv, seasonID, int64(b1["id"].(float64)), true)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve Alpha: want 200, got %d", resp.StatusCode)
+	}
+
+	// Record Bravo for week 1 — creation must succeed.
+	r2 := postByeRequest(t, srv, seasonID, teamIDs[1], 1)
+	var b2 map[string]any
+	json.NewDecoder(r2.Body).Decode(&b2)
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusCreated {
+		t.Fatalf("create Bravo bye: want 201, got %d", r2.StatusCode)
+	}
+
+	// Approving Bravo must be rejected because Alpha already holds week 1.
+	resp2 := putByeApproval(t, srv, seasonID, int64(b2["id"].(float64)), true)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("approve conflict: want 400, got %d", resp2.StatusCode)
+	}
+	var errBody map[string]string
+	json.NewDecoder(resp2.Body).Decode(&errBody)
+	if errBody["error"] == "" {
+		t.Error("expected a non-empty error message")
+	}
+}
+
+// TestByeRequest_RejectedApprovalRemainsUnapproved verifies the bye request stays
+// unapproved after a conflict rejection.
+func TestByeRequest_RejectedApprovalRemainsUnapproved(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+
+	r1 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
+	var b1 map[string]any
+	json.NewDecoder(r1.Body).Decode(&b1)
+	r1.Body.Close()
+	putByeApproval(t, srv, seasonID, int64(b1["id"].(float64)), true).Body.Close()
+
+	r2 := postByeRequest(t, srv, seasonID, teamIDs[1], 1)
+	var b2 map[string]any
+	json.NewDecoder(r2.Body).Decode(&b2)
+	r2.Body.Close()
+	bravoID := int64(b2["id"].(float64))
+
+	// Attempt (rejected) approval.
+	putByeApproval(t, srv, seasonID, bravoID, true).Body.Close()
+
+	// Confirm Bravo's request is still unapproved.
+	byes := listByes(t, srv, seasonID)
+	for _, b := range byes {
+		if int64(b["id"].(float64)) == bravoID {
+			if app, _ := b["approved"].(bool); app {
+				t.Error("Bravo bye should remain unapproved after conflict rejection")
+			}
+			return
+		}
+	}
+	t.Fatal("Bravo bye request not found in list")
+}
+
+// TestByeRequest_DifferentWeeksCanBothBeApproved verifies independent week slots.
+func TestByeRequest_DifferentWeeksCanBothBeApproved(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+
+	r1 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
+	var b1 map[string]any
+	json.NewDecoder(r1.Body).Decode(&b1)
+	r1.Body.Close()
+
+	r2 := postByeRequest(t, srv, seasonID, teamIDs[1], 2)
+	var b2 map[string]any
+	json.NewDecoder(r2.Body).Decode(&b2)
+	r2.Body.Close()
+
+	resp1 := putByeApproval(t, srv, seasonID, int64(b1["id"].(float64)), true)
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("approve Alpha week 1: want 200, got %d", resp1.StatusCode)
+	}
+
+	resp2 := putByeApproval(t, srv, seasonID, int64(b2["id"].(float64)), true)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("approve Bravo week 2: want 200, got %d", resp2.StatusCode)
+	}
+}
+
+// TestByeRequest_Week0CannotBeApproved verifies TBD requests are not approvable.
+func TestByeRequest_Week0CannotBeApproved(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+
+	r := postByeRequest(t, srv, seasonID, teamIDs[0], 0)
+	var b map[string]any
+	json.NewDecoder(r.Body).Decode(&b)
+	r.Body.Close()
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create week-0 bye: want 201, got %d", r.StatusCode)
+	}
+
+	resp := putByeApproval(t, srv, seasonID, int64(b["id"].(float64)), true)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("approve week-0: want 400, got %d", resp.StatusCode)
+	}
+	var errBody map[string]string
+	json.NewDecoder(resp.Body).Decode(&errBody)
+	if errBody["error"] == "" {
+		t.Error("expected non-empty error message for week-0 approval")
+	}
+}
+
+// TestByeRequest_WrongSeasonUpdateRejected verifies season scope on updates.
+func TestByeRequest_WrongSeasonUpdateRejected(t *testing.T) {
+	srv := testServer(t)
+
+	// Season 1: 3-team league with a bye request.
+	_, season1ID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	r := postByeRequest(t, srv, season1ID, teamIDs[0], 1)
+	var b map[string]any
+	json.NewDecoder(r.Body).Decode(&b)
+	r.Body.Close()
+	byeID := int64(b["id"].(float64))
+
+	// Season 2: a separate season in a different league.
+	lgResp, _ := http.Post(srv.URL+"/api/leagues", "application/json",
+		strings.NewReader(`{"name":"Other League","game_format":"8ball"}`))
+	var lg map[string]any
+	json.NewDecoder(lgResp.Body).Decode(&lg)
+	lgResp.Body.Close()
+	s2Resp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Other Season"}`, int64(lg["id"].(float64)))))
+	var s2 map[string]any
+	json.NewDecoder(s2Resp.Body).Decode(&s2)
+	s2Resp.Body.Close()
+	season2ID := int64(s2["id"].(float64))
+
+	// Try to update bye via season 2's URL — must be 404.
+	resp := putByeApproval(t, srv, season2ID, byeID, true)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("cross-season update: want 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestByeRequest_WrongSeasonDeleteRejected verifies season scope on deletes.
+func TestByeRequest_WrongSeasonDeleteRejected(t *testing.T) {
+	srv := testServer(t)
+
+	_, season1ID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	r := postByeRequest(t, srv, season1ID, teamIDs[0], 1)
+	var b map[string]any
+	json.NewDecoder(r.Body).Decode(&b)
+	r.Body.Close()
+	byeID := int64(b["id"].(float64))
+
+	lgResp, _ := http.Post(srv.URL+"/api/leagues", "application/json",
+		strings.NewReader(`{"name":"Other League","game_format":"8ball"}`))
+	var lg map[string]any
+	json.NewDecoder(lgResp.Body).Decode(&lg)
+	lgResp.Body.Close()
+	s2Resp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Other Season"}`, int64(lg["id"].(float64)))))
+	var s2 map[string]any
+	json.NewDecoder(s2Resp.Body).Decode(&s2)
+	s2Resp.Body.Close()
+	season2ID := int64(s2["id"].(float64))
+
+	resp := deleteByeReq(t, srv, season2ID, byeID)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("cross-season delete: want 404, got %d", resp.StatusCode)
+	}
+
+	// The request must still exist under season 1.
+	byes := listByes(t, srv, season1ID)
+	found := false
+	for _, by := range byes {
+		if int64(by["id"].(float64)) == byeID {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("bye request was incorrectly deleted via wrong season URL")
+	}
+}
+
+// TestByeRequest_DeterministicScheduleHonorsApproved confirms schedule generation
+// honors the single approved request when a competing unapproved request exists
+// for the same week.
+func TestByeRequest_DeterministicScheduleHonorsApproved(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-07-06"
+	// 3 teams: Week 1 natural bye = Alpha, Week 2 = Bravo, Week 3 = Charlie.
+	// Approve Alpha for week 1 (no change); also record Bravo for week 1 (unapproved).
+	// Schedule must still give week 1 to Alpha (the approved one).
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	alphaID := teamIDs[0]
+	bravoID := teamIDs[1]
+
+	r1 := postByeRequest(t, srv, seasonID, alphaID, 1)
+	var b1 map[string]any
+	json.NewDecoder(r1.Body).Decode(&b1)
+	r1.Body.Close()
+	putByeApproval(t, srv, seasonID, int64(b1["id"].(float64)), true).Body.Close()
+
+	// Bravo requests week 1 but is NOT approved.
+	r2 := postByeRequest(t, srv, seasonID, bravoID, 1)
+	r2.Body.Close()
+
+	matches := generateAndGetMatches(t, srv, seasonID, startDate, nil)
+	week1 := matchesInWeek(matches, 1)
+	if len(week1) == 0 {
+		t.Fatal("no matches in week 1")
+	}
+	// Alpha should have the bye — approved request wins.
+	if teamAppearsInMatches(alphaID, week1) {
+		t.Error("Alpha should have the week-1 bye (approved request) but appears in a match")
+	}
+	// Bravo must play (unapproved request ignored).
+	if !teamAppearsInMatches(bravoID, week1) {
+		t.Error("Bravo should play in week 1 (unapproved request ignored)")
+	}
 }

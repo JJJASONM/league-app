@@ -744,10 +744,26 @@ func generateSchedule(w http.ResponseWriter, r *http.Request) {
 			skipDates = append(skipDates, t)
 		}
 	}
+	// Load approved bye requests (specific week only) to influence team rotation.
+	byeByWeek := make(map[int]int64)
+	byeRows, _ := db.DB.Query(
+		`SELECT team_id, week_number FROM bye_requests WHERE season_id=? AND approved=1 AND week_number > 0`,
+		req.SeasonID)
+	if byeRows != nil {
+		for byeRows.Next() {
+			var tid int64
+			var wn int
+			byeRows.Scan(&tid, &wn)
+			byeByWeek[wn] = tid
+		}
+		byeRows.Close()
+	}
+
 	opts := logic.ScheduleOptions{
 		StartDate: startDate,
 		SkipDates: skipDates,
 		NumWeeks:  req.NumWeeks,
+		ByeByWeek: byeByWeek,
 	}
 
 	var entries []logic.ScheduleEntry
@@ -1106,9 +1122,42 @@ func createByeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b.SeasonID = sid
+
+	// Resolve the league for this season.
+	var leagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM seasons WHERE id=?`, sid).Scan(&leagueID); err != nil {
+		jsonError(w, "season not found", 404)
+		return
+	}
+
+	// Bye requests only make sense for seasons with an odd number of teams
+	// (one team naturally sits out each week in the round-robin rotation).
+	var teamCount int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM teams WHERE league_id=?`, leagueID).Scan(&teamCount)
+	if teamCount%2 == 0 {
+		jsonError(w, fmt.Sprintf("bye requests require an odd number of teams in the league (%d teams — even)", teamCount), 400)
+		return
+	}
+
+	// Ensure the requested team belongs to this season's league.
+	var teamLeagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM teams WHERE id=?`, b.TeamID).Scan(&teamLeagueID); err != nil || teamLeagueID != leagueID {
+		jsonError(w, "team does not belong to this season's league", 400)
+		return
+	}
+
+	// Reject duplicates with a clear message instead of silently ignoring.
+	var dup int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM bye_requests WHERE season_id=? AND team_id=? AND week_number=?`,
+		sid, b.TeamID, b.WeekNumber).Scan(&dup)
+	if dup > 0 {
+		jsonError(w, "a bye request already exists for this team and week", 400)
+		return
+	}
+
 	res, err := db.DB.Exec(
-		`INSERT OR IGNORE INTO bye_requests (season_id, team_id, week_number, reason) VALUES (?,?,?,?)`,
-		b.SeasonID, b.TeamID, b.WeekNumber, b.Reason)
+		`INSERT INTO bye_requests (season_id, team_id, week_number, reason) VALUES (?,?,?,?)`,
+		sid, b.TeamID, b.WeekNumber, b.Reason)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -1119,6 +1168,11 @@ func createByeRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func updateByeRequest(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid season id", 400)
+		return
+	}
 	bid, err := pathID(r, "bid")
 	if err != nil {
 		jsonError(w, "invalid bye id", 400)
@@ -1129,23 +1183,76 @@ func updateByeRequest(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
+
+	// Load stored week_number to validate before changing approved status.
+	// Also enforces season scope — returns 404 if the request belongs to another season.
+	var weekNum int
+	switch err := db.DB.QueryRow(
+		`SELECT week_number FROM bye_requests WHERE id=? AND season_id=?`, bid, sid).Scan(&weekNum); err {
+	case nil:
+	case sql.ErrNoRows:
+		jsonError(w, "bye request not found", 404)
+		return
+	default:
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
 	approved := 0
 	if b.Approved {
 		approved = 1
 	}
-	db.DB.Exec(`UPDATE bye_requests SET week_number=?, reason=?, approved=? WHERE id=?`,
-		b.WeekNumber, b.Reason, approved, bid)
+
+	if approved == 1 {
+		// Week 0 (TBD) requests cannot be approved — a specific week is required.
+		if weekNum == 0 {
+			jsonError(w, "cannot approve a TBD (week 0) request; set a specific week first", 400)
+			return
+		}
+		// Only one approved bye per season+week to match the single natural bye slot.
+		var conflict int
+		db.DB.QueryRow(
+			`SELECT COUNT(*) FROM bye_requests WHERE season_id=? AND week_number=? AND approved=1 AND id!=?`,
+			sid, weekNum, bid).Scan(&conflict)
+		if conflict > 0 {
+			jsonError(w, fmt.Sprintf("another team already has an approved bye for week %d; unapprove it first", weekNum), 400)
+			return
+		}
+	}
+
+	res, err := db.DB.Exec(`UPDATE bye_requests SET approved=? WHERE id=? AND season_id=?`, approved, bid, sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		jsonError(w, "bye request not found", 404)
+		return
+	}
 	b.ID = bid
 	jsonOK(w, b)
 }
 
 func deleteByeRequest(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid season id", 400)
+		return
+	}
 	bid, err := pathID(r, "bid")
 	if err != nil {
 		jsonError(w, "invalid bye id", 400)
 		return
 	}
-	db.DB.Exec(`DELETE FROM bye_requests WHERE id=?`, bid)
+	res, err := db.DB.Exec(`DELETE FROM bye_requests WHERE id=? AND season_id=?`, bid, sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		jsonError(w, "bye request not found", 404)
+		return
+	}
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 

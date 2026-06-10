@@ -17,8 +17,9 @@ type ScheduleEntry struct {
 // ScheduleOptions holds parameters shared across all schedule generators.
 type ScheduleOptions struct {
 	StartDate time.Time
-	SkipDates []time.Time // calendar dates to skip when assigning week dates
-	NumWeeks  int         // for "custom": total weeks; 0 = full cycle
+	SkipDates []time.Time     // calendar dates to skip when assigning week dates
+	NumWeeks  int             // for "custom": total weeks; 0 = full cycle
+	ByeByWeek map[int]int64   // week number → team ID that should receive the natural bye (approved bye requests)
 }
 
 // SingleRoundRobin generates a schedule where each team plays every other team once.
@@ -152,12 +153,95 @@ func maxWeekNum(entries []ScheduleEntry) int {
 	return max
 }
 
+// applyByeRequests reorders week assignments so approved bye requests are honoured.
+// For odd-team schedules one team naturally sits out each week; byeByWeek maps a
+// requested week number to the team that should receive that week's natural bye.
+// Works by swapping the week numbers of the two affected rounds in the entry slice.
+func applyByeRequests(entries []ScheduleEntry, byeByWeek map[int]int64) []ScheduleEntry {
+	if len(byeByWeek) == 0 {
+		return entries
+	}
+
+	// Collect the set of all real team IDs in the schedule.
+	allTeams := make(map[int64]bool)
+	for _, e := range entries {
+		if e.HomeTeamID != 0 {
+			allTeams[e.HomeTeamID] = true
+		}
+		if e.AwayTeamID != 0 {
+			allTeams[e.AwayTeamID] = true
+		}
+	}
+
+	// For each week, discover which team has the natural bye (not in any match).
+	weekPlaying := make(map[int]map[int64]bool)
+	for _, e := range entries {
+		if weekPlaying[e.WeekNumber] == nil {
+			weekPlaying[e.WeekNumber] = make(map[int64]bool)
+		}
+		weekPlaying[e.WeekNumber][e.HomeTeamID] = true
+		weekPlaying[e.WeekNumber][e.AwayTeamID] = true
+	}
+	naturalBye := make(map[int]int64) // week → bye team
+	for w, playing := range weekPlaying {
+		for t := range allTeams {
+			if !playing[t] {
+				naturalBye[w] = t
+				break
+			}
+		}
+	}
+
+	// Build week-swap map to satisfy each approved request.
+	weekRemap := make(map[int]int)
+	for reqWeek, reqTeam := range byeByWeek {
+		if naturalBye[reqWeek] == reqTeam {
+			continue // already correct
+		}
+		// Find a natural-bye week for reqTeam that hasn't already been remapped.
+		srcWeek := 0
+		for w, t := range naturalBye {
+			if t == reqTeam {
+				if _, used := weekRemap[w]; !used {
+					srcWeek = w
+					break
+				}
+			}
+		}
+		if srcWeek == 0 {
+			continue // can't satisfy — skip
+		}
+		weekRemap[reqWeek] = srcWeek
+		weekRemap[srcWeek] = reqWeek
+		// Update naturalBye to reflect the swap for subsequent iterations.
+		old := naturalBye[reqWeek]
+		naturalBye[reqWeek] = reqTeam
+		naturalBye[srcWeek] = old
+	}
+
+	if len(weekRemap) == 0 {
+		return entries
+	}
+	result := make([]ScheduleEntry, len(entries))
+	for i, e := range entries {
+		if newWeek, ok := weekRemap[e.WeekNumber]; ok {
+			e.WeekNumber = newWeek
+		}
+		result[i] = e
+	}
+	return result
+}
+
 // assignDates maps sequential week numbers to actual calendar dates,
 // stepping by 7 days per week and skipping any dates in opts.SkipDates.
 func assignDates(entries []ScheduleEntry, opts ScheduleOptions) []ScheduleEntry {
 	if opts.StartDate.IsZero() {
-		return entries // no start date — leave dates blank
+		// Apply bye reordering even without dates (week numbers still matter).
+		return applyByeRequests(entries, opts.ByeByWeek)
 	}
+	// Honour approved bye requests by reordering week assignments before dates are fixed.
+	entries = applyByeRequests(entries, opts.ByeByWeek)
+
 	skipSet := make(map[string]bool, len(opts.SkipDates))
 	for _, d := range opts.SkipDates {
 		skipSet[d.Format("2006-01-02")] = true

@@ -30,6 +30,13 @@ participation from matches and stores a single `players.team_id`.
 A player may have one home team per season. Match-level substitute
 participation does not change the player's home team.
 
+When assigning an existing player to a team via `PUT /api/players/{id}`, the
+request body must include all fields the handler reads (`first_name`,
+`last_name`, `phone`, `email`, `handicap`, `admin_hold`, `team_id`). Omitting
+name fields causes them to be blanked — the API performs a full replacement,
+not a patch. The frontend `confirmAssign` function sends the full player record
+to prevent accidental data loss.
+
 ## Decision History
 
 ### 2026-06-08 - Make membership season-specific

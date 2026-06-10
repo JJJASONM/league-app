@@ -5,10 +5,45 @@
 **Owner:** `schedules`
 **Status:** `draft`
 **Current version:** `0.1`
-**Last reviewed:** `2026-06-08`
+**Last reviewed:** `2026-06-09`
 
 The Schedules domain generates, previews, adjusts, and shifts season schedules.
 It applies scheduling rules but does not define their meaning.
+
+## Bye Requests
+
+A bye request lets a team pre-register to take the natural sit-out slot in a
+specific league week. They apply only to seasons with an **odd number of teams**
+(the round-robin rotation always has exactly one team with no opponent each week).
+
+### Rules enforced by the backend
+
+| Rule | Behavior |
+|------|----------|
+| Even team count | `POST` rejected with 400 — no natural bye exists |
+| Team from another league | `POST` rejected with 400 |
+| Duplicate (same team + season + week) | `POST` rejected with 400 |
+| Week 0 (TBD) approval | `PUT` rejected with 400 — a specific week is required |
+| Conflict (two approved byes for the same week) | `PUT` rejected with 400; existing approval unchanged |
+| Wrong season URL on update/delete | `PUT`/`DELETE` returns 404 — requests are scoped by season |
+
+### Lifecycle
+
+1. Admin records a request. **Week must be set at creation time** — no editing
+   workflow exists. If created with week 0 (TBD), the request must be deleted
+   and recreated with a specific week before it can be approved.
+2. Admin approves — backend validates no conflict and week ≠ 0.
+3. At schedule generation, `applyByeRequests` swaps week numbers so the
+   approved team's natural bye falls in the requested week.
+4. Only one approved bye per season+week is enforced to match the single
+   natural bye slot. A second request may be recorded but cannot be approved
+   until the existing approval is removed.
+
+### Schedule application
+
+`logic.ScheduleOptions.ByeByWeek` (map[week→teamID]) carries approved byes
+into `assignDates`. `applyByeRequests` builds a week-swap table and remaps
+`WeekNumber` on each `ScheduleEntry` before dates are assigned.
 
 ## No Play Weeks
 
@@ -60,6 +95,17 @@ activation.
 are allowed during preview.
 
 ## Decision History
+
+### 2026-06-09 - One approved bye per season + week
+
+**Status:** `accepted`
+
+Only one team may hold an approved bye request for a given season and week,
+matching the single natural bye slot in the round-robin. A second request may
+be recorded but approval is rejected until the existing one is withdrawn.
+Week 0 (TBD) requests cannot be approved — a specific week is required before
+schedule generation can honor the request. Scope (season_id) is enforced on
+both update and delete to prevent cross-season mutations.
 
 ### 2026-06-08 - Shift entire league weeks
 

@@ -675,6 +675,33 @@ async function deleteSkippedWeek(id) {
 async function loadByeRequests(seasonId) {
   let byes = [];
   try { byes = await api('GET', `/seasons/${seasonId}/bye-requests`); } catch(_) {}
+
+  // Show a banner when the team count is even (bye requests cannot be applied).
+  const teamCount = allTeams.length;
+  const isEven = teamCount > 0 && teamCount % 2 === 0;
+  const banner = isEven
+    ? `<div class="alert alert-warning py-2 mb-2 small">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        <strong>${teamCount} teams in this league (even).</strong>
+        Bye requests require an odd number of teams — every team plays each week.
+      </div>`
+    : teamCount % 2 === 1
+      ? `<div class="alert alert-info py-2 mb-2 small">
+          <i class="bi bi-info-circle"></i>
+          ${teamCount} teams (odd) — one team sits out each week.
+          Approve a request below to assign which team gets the natural bye on a given week.
+        </div>`
+      : '';
+
+  const tableContainer = document.querySelector('#stab-byes .card-body');
+  let bannerEl = tableContainer.querySelector('.bye-banner');
+  if (!bannerEl) {
+    bannerEl = document.createElement('div');
+    bannerEl.className = 'bye-banner';
+    tableContainer.insertBefore(bannerEl, tableContainer.firstChild);
+  }
+  bannerEl.innerHTML = banner;
+
   const tbody = document.querySelector('#byes-table tbody');
   tbody.innerHTML = byes.length
     ? byes.map(b => `<tr>
@@ -715,6 +742,7 @@ async function toggleByeApproval(id, approved) {
   try {
     await api('PUT', `/seasons/${currentMgmtSeasonId}/bye-requests/${id}`, { approved });
     toast(approved ? 'Bye approved' : 'Bye unapproved');
+    await loadByeRequests(currentMgmtSeasonId);
   } catch(e) { toast(e.message, 'danger'); }
 }
 
@@ -878,11 +906,13 @@ async function confirmAssign() {
   const p = (await api('GET', `/players/${playerId}`));
   try {
     await api('PUT', `/players/${playerId}`, {
-      player_number: p.player_number,
-      name:          p.name,
-      handicap:      p.handicap,
-      admin_hold:    p.admin_hold,
-      team_id:       teamId
+      first_name: p.first_name,
+      last_name:  p.last_name,
+      phone:      p.phone,
+      email:      p.email,
+      handicap:   p.handicap,
+      admin_hold: p.admin_hold,
+      team_id:    teamId
     });
     closeModal('assign-modal');
     toast('Player assigned to team');
@@ -1069,26 +1099,68 @@ async function loadSchedule() {
   const isUnassigned = m => !m.home_team_id || m.home_team_name === '(unassigned)' ||
                             !m.away_team_id || m.away_team_name === '(unassigned)';
 
-  document.getElementById('schedule-content').innerHTML = weeks.length ? weeks.map(w => `
+  // Build the complete set of teams that appear anywhere in this season's schedule,
+  // so we can determine which team has a natural bye each week.
+  const seasonTeamIds = new Set();
+  const seasonTeamNames = {};
+  matches.forEach(m => {
+    if (m.home_team_id) { seasonTeamIds.add(m.home_team_id); seasonTeamNames[m.home_team_id] = m.home_team_name; }
+    if (m.away_team_id) { seasonTeamIds.add(m.away_team_id); seasonTeamNames[m.away_team_id] = m.away_team_name; }
+  });
+
+  document.getElementById('schedule-content').innerHTML = weeks.length ? weeks.map(w => {
+    const playingThisWeek = new Set();
+    byWeek[w].forEach(m => {
+      if (m.home_team_id) playingThisWeek.add(m.home_team_id);
+      if (m.away_team_id) playingThisWeek.add(m.away_team_id);
+    });
+    const byeTeams = [...seasonTeamIds].filter(id => !playingThisWeek.has(id));
+    const byeRow = byeTeams.length
+      ? `<tr class="table-light">
+          <td colspan="4" class="text-muted small fst-italic ps-3 py-1">
+            <i class="bi bi-person-x me-1"></i>Bye: ${byeTeams.map(id => seasonTeamNames[id] || '?').join(', ')}
+          </td>
+          <td></td>
+        </tr>`
+      : '';
+
+    return `
     <div class="card mb-2">
       <div class="card-header week-header py-1">Week ${w} — ${displayDate(byWeek[w][0].match_date)}</div>
       <div class="card-body p-0">
-        <table class="table table-sm mb-0">
-          <thead><tr><th>Home</th><th class="text-center">vs</th><th>Away</th><th>Status</th><th></th></tr></thead>
-          <tbody>${byWeek[w].map(m => `<tr>
-            <td>${m.home_team_name || '<span class="text-muted fst-italic">(unassigned)</span>'}</td>
-            <td class="text-center text-muted">vs</td>
-            <td>${m.away_team_name || '<span class="text-muted fst-italic">(unassigned)</span>'}</td>
-            <td>${m.completed
-              ? '<span class="badge bg-success">Done</span>'
-              : '<span class="badge bg-secondary">Pending</span>'}</td>
-            <td class="text-end">${isUnassigned(m)
-              ? `<button class="btn btn-outline-primary btn-sm py-0" onclick="openAssignMatchTeams(${m.id})"><i class="bi bi-people"></i> Assign</button>`
-              : ''}</td>
-          </tr>`).join('')}</tbody>
+        <table class="table table-sm mb-0" style="table-layout:fixed">
+          <colgroup>
+            <col style="width:37%">
+            <col style="width:5%">
+            <col style="width:37%">
+            <col style="width:11%">
+            <col style="width:10%">
+          </colgroup>
+          <thead><tr>
+            <th>Home</th>
+            <th class="text-center">vs</th>
+            <th>Away</th>
+            <th>Status</th>
+            <th></th>
+          </tr></thead>
+          <tbody>
+            ${byWeek[w].map(m => `<tr>
+              <td class="text-truncate">${m.home_team_name || '<span class="text-muted fst-italic">(unassigned)</span>'}</td>
+              <td class="text-center text-muted">vs</td>
+              <td class="text-truncate">${m.away_team_name || '<span class="text-muted fst-italic">(unassigned)</span>'}</td>
+              <td>${m.completed
+                ? '<span class="badge bg-success">Done</span>'
+                : '<span class="badge bg-secondary">Pending</span>'}</td>
+              <td class="text-end">${isUnassigned(m)
+                ? `<button class="btn btn-outline-primary btn-sm py-0" onclick="openAssignMatchTeams(${m.id})"><i class="bi bi-people"></i> Assign</button>`
+                : ''}</td>
+            </tr>`).join('')}
+            ${byeRow}
+          </tbody>
         </table>
       </div>
-    </div>`).join('')
+    </div>`;
+  }).join('')
   : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons → Manage → Schedule.</div>';
 }
 
@@ -1975,23 +2047,68 @@ async function loadPlayerStats() {
 }
 
 // ── Leagues management modal ──────────────────────────────────────────────────
-function openLeagueModal() {
-  renderLeaguesTable();
+
+// Fetches team counts for every known league and re-renders the table + checklist.
+// Called on open and after every add/delete so counts stay accurate.
+async function refreshLeaguesTable() {
+  const counts = {};
+  await Promise.all(allLeagues.map(async l => {
+    try {
+      const ts = await api('GET', `/teams?league_id=${l.id}`);
+      counts[l.id] = ts.length;
+    } catch(_) { counts[l.id] = 0; }
+  }));
+  renderLeaguesTable(counts);
+}
+
+async function openLeagueModal() {
+  await refreshLeaguesTable();
   openModal('league-modal');
 }
 
-function renderLeaguesTable() {
+function renderLeaguesTable(counts = {}) {
   const formatLabel = { '8ball':'8-Ball','9ball':'9-Ball','10ball':'10-Ball','straight':'Straight' };
   const tbody = document.querySelector('#leagues-table tbody');
-  tbody.innerHTML = allLeagues.map(l => `
+  tbody.innerHTML = allLeagues.map(l => {
+    const n = counts[l.id] ?? '—';
+    const teamOk = typeof n === 'number' && n >= 2;
+    const teamBadge = typeof n === 'number'
+      ? `<span class="badge ${teamOk ? 'bg-success' : 'bg-warning text-dark'}" style="font-size:.7rem">
+          ${teamOk ? '<i class="bi bi-check-lg"></i> ' : '<i class="bi bi-exclamation-triangle"></i> '}${n} team${n !== 1 ? 's' : ''}
+        </span>`
+      : '<span class="text-muted small">—</span>';
+    return `
     <tr ${activeLeague && l.id === activeLeague.id ? 'class="table-primary"' : ''}>
       <td class="fw-semibold">${l.name}</td>
       <td>${formatLabel[l.game_format]||l.game_format}</td>
       <td>${l.day_of_week||'—'}</td>
+      <td>${teamBadge}</td>
       <td class="text-end">
         <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteLeague(${l.id})"><i class="bi bi-trash"></i></button>
       </td>
-    </tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted py-2">No leagues yet</td></tr>';
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="text-center text-muted py-2">No leagues yet</td></tr>';
+
+  // Verification checklist per league.
+  const checklist = document.getElementById('league-checklist');
+  if (!checklist) return;
+  checklist.innerHTML = allLeagues.map(l => {
+    const n = counts[l.id] ?? 0;
+    const hasTeams  = n >= 2;
+    const needsOdd  = n > 0 && n % 2 === 1;
+    const item = (ok, text) =>
+      `<li class="${ok ? 'text-success' : 'text-muted'}">
+        <i class="bi ${ok ? 'bi-check-circle-fill' : 'bi-circle'} me-1"></i>${text}
+      </li>`;
+    return `<div class="mb-2">
+      <div class="fw-semibold small mb-1">${l.name}</div>
+      <ul class="list-unstyled ms-1 mb-0" style="font-size:.82rem">
+        ${item(n >= 2, `At least 2 teams configured (${n} now)`)}
+        ${item(needsOdd, `Odd team count enables natural bye rotation (${n} teams)`)}
+        ${item(false, 'Review teams and rosters before generating a season schedule')}
+      </ul>
+    </div>`;
+  }).join('') || '<div class="text-muted small">No leagues to check.</div>';
 }
 
 async function addLeague() {
@@ -2009,7 +2126,7 @@ async function addLeague() {
     sel.innerHTML = allLeagues.map(l =>
       `<option value="${l.id}" ${activeLeague && l.id === activeLeague.id ? 'selected' : ''}>${l.name}</option>`
     ).join('');
-    renderLeaguesTable();
+    await refreshLeaguesTable();
   } catch(e) { toast(e.message,'danger'); }
 }
 
@@ -2030,7 +2147,7 @@ async function deleteLeague(id) {
       `<option value="${l.id}" ${activeLeague && l.id === activeLeague.id ? 'selected' : ''}>${l.name}</option>`
     ).join('') || '<option value="">No leagues</option>';
     if (activeLeague) await loadLeagueData();
-    renderLeaguesTable();
+    await refreshLeaguesTable();
     loadSection('dashboard');
   } catch(e) { toast(e.message,'danger'); }
 }

@@ -292,10 +292,11 @@
 }
 .poster-wk    { width: 24px; color: #aaa; font-size: .68rem; text-align: center; }
 .poster-date  { width: 44px; font-weight: 600; font-size: .78rem; }
-.poster-pairings { white-space: normal; }
+.poster-pairings { white-space: normal; line-height: 1.7; }
 .poster-pairing {
   display: inline-block;
-  margin-right: 8px;
+  margin-right: 14px;
+  margin-bottom: 1px;
   font-size: .8rem;
   font-weight: 700;
   color: #111;
