@@ -291,9 +291,12 @@
           <button class="btn btn-sm btn-outline-secondary" onclick="closeSchedulePoster()">
             <i class="bi bi-arrow-left"></i> Table View
           </button>
-          <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">
-            <i class="bi bi-printer"></i> Print
-          </button>
+          <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+            <span class="text-muted" style="font-size:.75rem"><i class="bi bi-info-circle"></i> For full color, enable <strong>Background graphics</strong> in the print dialog.</span>
+            <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">
+              <i class="bi bi-printer"></i> Print
+            </button>
+          </div>
         </div>
         <div id="poster-print-area">
           <div id="poster-content"></div>
@@ -472,6 +475,14 @@
           </div>
         </div>
         <div class="text-muted small mb-3"><i class="bi bi-info-circle"></i> End date is calculated automatically from the last scheduled match after you generate a schedule.</div>
+
+        <!-- Team confirmation list — visible only when creating a new season -->
+        <div id="season-new-teams" class="d-none">
+          <hr class="my-2">
+          <h6 class="fw-semibold mb-1"><i class="bi bi-people"></i> Teams in this season</h6>
+          <div id="season-new-teams-list" class="small"></div>
+        </div>
+
         <div id="season-rules-section" class="d-none">
           <hr class="my-2">
           <h6 class="fw-semibold mb-2"><i class="bi bi-sliders"></i> Season Rules</h6>

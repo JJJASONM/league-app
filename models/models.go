@@ -48,15 +48,60 @@ type Team struct {
 // EndDate is computed from the last scheduled match date (not user-entered).
 // ScheduleType: "single_rr" | "double_rr" | "split" | "custom" | "blanket"
 type Season struct {
-	ID           int64     `json:"id"`
-	LeagueID     int64     `json:"league_id"`
-	Name         string    `json:"name"`
-	StartDate    *string   `json:"start_date"`
-	EndDate      *string   `json:"end_date"`  // computed after schedule generation
-	Active       bool      `json:"active"`
-	ScheduleType string    `json:"schedule_type"`
-	NumWeeks     int       `json:"num_weeks"`  // used for "custom" and "blanket" types
-	CreatedAt    time.Time `json:"created_at"`
+	ID            int64     `json:"id"`
+	LeagueID      int64     `json:"league_id"`
+	Name          string    `json:"name"`
+	StartDate     *string   `json:"start_date"`
+	EndDate       *string   `json:"end_date"`       // computed after schedule generation
+	Active        bool      `json:"active"`
+	ScheduleType  string    `json:"schedule_type"`
+	NumWeeks      int       `json:"num_weeks"`       // used for "custom" and "blanket" types
+	ScheduleStale bool      `json:"schedule_stale"`  // true when season_teams changed after generation
+	TeamsManaged  bool      `json:"teams_managed"`   // false = legacy season; true = explicit team management
+	ActivatedAt   *string   `json:"activated_at,omitempty"` // set once on first activation; persistent setup lock
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// SeasonTeam is a team explicitly selected to participate in a season.
+// SeasonName is an editable draft snapshot of the team name for this season.
+// CaptainID must reference a player on this team's season roster.
+type SeasonTeam struct {
+	ID          int64   `json:"id"`
+	SeasonID    int64   `json:"season_id"`
+	TeamID      int64   `json:"team_id"`
+	TeamName    string  `json:"team_name"`              // from teams table (permanent)
+	SeasonName  string  `json:"season_name"`            // season-specific snapshot
+	CaptainID   *int64  `json:"captain_id"`
+	CaptainName string  `json:"captain_name,omitempty"`
+	RosterCount int     `json:"roster_count"`
+}
+
+// SeasonRosterEntry is one player on a team's season roster.
+type SeasonRosterEntry struct {
+	ID         int64   `json:"id"`
+	SeasonID   int64   `json:"season_id"`
+	TeamID     int64   `json:"team_id"`
+	TeamName   string  `json:"team_name,omitempty"`
+	PlayerID   int64   `json:"player_id"`
+	PlayerName string  `json:"player_name,omitempty"`
+	Handicap   float64 `json:"handicap,omitempty"`
+}
+
+// ChecklistItem is one structured issue in a season setup checklist.
+// Code is stable and machine-readable; Message is human-readable.
+// TeamID is non-zero when the issue is specific to one team.
+type ChecklistItem struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	TeamID  int64  `json:"team_id,omitempty"`
+}
+
+// SetupChecklist is the response for GET /api/seasons/{id}/checklist.
+// CanActivate is true when Blockers is empty.
+type SetupChecklist struct {
+	Blockers    []ChecklistItem `json:"blockers"`
+	Warnings    []ChecklistItem `json:"warnings"`
+	CanActivate bool            `json:"can_activate"`
 }
 
 // SeasonRule is a configurable rule for a season (e.g. max scoresheet handicap).

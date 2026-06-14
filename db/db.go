@@ -219,14 +219,53 @@ CREATE TABLE IF NOT EXISTS lineup_plans (
     UNIQUE(team_id, week_number, season_id, player_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_players_team      ON players(team_id);
-CREATE INDEX IF NOT EXISTS idx_teams_league      ON teams(league_id);
-CREATE INDEX IF NOT EXISTS idx_seasons_league    ON seasons(league_id);
-CREATE INDEX IF NOT EXISTS idx_matches_season    ON matches(season_id);
-CREATE INDEX IF NOT EXISTS idx_results_match     ON match_results(match_id);
-CREATE INDEX IF NOT EXISTS idx_results_player    ON match_results(player_id);
-CREATE INDEX IF NOT EXISTS idx_hc_history_player ON handicap_history(player_id);
-CREATE INDEX IF NOT EXISTS idx_lineup_team_week  ON lineup_plans(team_id, week_number, season_id);
+-- Season teams: explicit team participation per season, with name/captain snapshots
+CREATE TABLE IF NOT EXISTS season_teams (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id   INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    team_id     INTEGER NOT NULL REFERENCES teams(id),
+    season_name TEXT    NOT NULL DEFAULT '',  -- season-specific team name snapshot (editable draft)
+    captain_id  INTEGER REFERENCES players(id),
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(season_id, team_id)
+);
+
+-- Season rosters: players assigned to a team for one season
+-- UNIQUE(season_id, player_id) enforces one team per player per season
+-- FK (season_id, team_id) ensures the team is registered in season_teams
+CREATE TABLE IF NOT EXISTS season_rosters (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id  INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    team_id    INTEGER NOT NULL REFERENCES teams(id),
+    player_id  INTEGER NOT NULL REFERENCES players(id),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(season_id, player_id),
+    FOREIGN KEY (season_id, team_id) REFERENCES season_teams(season_id, team_id)
+);
+
+-- Trigger enforces the same FK on databases created before the FK was added.
+CREATE TRIGGER IF NOT EXISTS trg_season_roster_team_exists
+BEFORE INSERT ON season_rosters
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'team is not participating in this season')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM season_teams
+        WHERE season_id = NEW.season_id AND team_id = NEW.team_id
+    );
+END;
+
+CREATE INDEX IF NOT EXISTS idx_players_team       ON players(team_id);
+CREATE INDEX IF NOT EXISTS idx_teams_league       ON teams(league_id);
+CREATE INDEX IF NOT EXISTS idx_seasons_league     ON seasons(league_id);
+CREATE INDEX IF NOT EXISTS idx_matches_season     ON matches(season_id);
+CREATE INDEX IF NOT EXISTS idx_results_match      ON match_results(match_id);
+CREATE INDEX IF NOT EXISTS idx_results_player     ON match_results(player_id);
+CREATE INDEX IF NOT EXISTS idx_hc_history_player  ON handicap_history(player_id);
+CREATE INDEX IF NOT EXISTS idx_lineup_team_week   ON lineup_plans(team_id, week_number, season_id);
+CREATE INDEX IF NOT EXISTS idx_season_teams_sid   ON season_teams(season_id);
+CREATE INDEX IF NOT EXISTS idx_season_rosters_sid ON season_rosters(season_id);
+CREATE INDEX IF NOT EXISTS idx_season_rosters_pid ON season_rosters(player_id);
 `
 	if _, err := DB.Exec(schema); err != nil {
 		return err
@@ -246,6 +285,13 @@ CREATE INDEX IF NOT EXISTS idx_lineup_team_week  ON lineup_plans(team_id, week_n
 		`ALTER TABLE teams   ADD COLUMN team_number TEXT    NOT NULL DEFAULT ''`,
 		`ALTER TABLE players ADD COLUMN active      INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE players ADD COLUMN note        TEXT    NOT NULL DEFAULT ''`,
+		// Schedule staleness flag: set when season_teams change after schedule generation
+		`ALTER TABLE seasons ADD COLUMN schedule_stale INTEGER NOT NULL DEFAULT 0`,
+		// teams_managed=1 marks new seasons as using explicit team management;
+		// DEFAULT 0 keeps all pre-Phase-One seasons in legacy (bypass) mode.
+		`ALTER TABLE seasons ADD COLUMN teams_managed INTEGER NOT NULL DEFAULT 0`,
+		// activated_at is the persistent setup lock — set once on first activation.
+		`ALTER TABLE seasons ADD COLUMN activated_at DATETIME`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs

@@ -27,7 +27,7 @@ function loadSection(sec) {
     case 'seasons':   loadSeasons(); break;
     case 'teams':     loadTeams(); break;
     case 'players':   loadPlayers(); break;
-    case 'schedule':  populateSeasonSelect('schedule-season-select', loadSchedule); break;
+    case 'schedule':  populateScheduleSeasonSelect(); break;
     case 'lineup':    loadLineupSection(); break;
     case 'entry':     populateSeasonSelect('entry-season-select', loadEntryMatches); break;
     case 'standings': populateSeasonSelect('standings-season-select', loadStandings); break;
@@ -404,8 +404,29 @@ function openNewSeason() {
   const sel = document.getElementById('season-copy-from');
   sel.innerHTML = '<option value="">— All teams in league —</option>' +
     allSeasons.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-  // Rules are not available until the season is saved and has an ID
-  document.getElementById('season-rules-section').classList.add('d-none');
+
+  // Show team confirmation list (read-only; all league teams are used).
+  const teamsSection = document.getElementById('season-new-teams');
+  const teamsList    = document.getElementById('season-new-teams-list');
+  if (allTeams.length === 0) {
+    teamsList.innerHTML =
+      '<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>' +
+      'No teams in this league yet. Add teams before generating a schedule.</span>';
+  } else {
+    teamsList.innerHTML =
+      `<div class="mb-1 text-muted">All ${allTeams.length} team${allTeams.length !== 1 ? 's' : ''} will be included:</div>` +
+      `<div class="d-flex flex-wrap gap-2">` +
+      allTeams.map(t =>
+        `<span class="badge bg-light text-dark border"><i class="bi bi-people-fill me-1 text-secondary"></i>${t.name}</span>`
+      ).join('') +
+      `</div>`;
+  }
+  teamsSection.classList.remove('d-none');
+
+  // Show rules in "pending" mode — changes are buffered until the season is saved.
+  document.getElementById('season-rules-section').classList.remove('d-none');
+  document.getElementById('rules-editor').initNew();
+
   openModal('season-modal');
 }
 
@@ -420,7 +441,9 @@ function editSeason(id) {
   const sel = document.getElementById('season-copy-from');
   sel.innerHTML = '<option value="">— All teams in league —</option>' +
     allSeasons.filter(x => x.id !== id).map(x => `<option value="${x.id}">${x.name}</option>`).join('');
-  // Show rules section for existing seasons only
+  // Team confirmation is only shown when creating a new season.
+  document.getElementById('season-new-teams').classList.add('d-none');
+  // Show rules for existing seasons.
   document.getElementById('season-rules-section').classList.remove('d-none');
   document.getElementById('rules-editor').loadSeason(id);
   openModal('season-modal');
@@ -441,6 +464,10 @@ async function saveSeason() {
     let saved;
     if (id) saved = await api('PUT', `/seasons/${id}`, body);
     else    saved = await api('POST', '/seasons', body);
+    // Flush any rule changes that were staged before the season record existed.
+    if (!id && saved?.id) {
+      await document.getElementById('rules-editor').flushPending(saved.id);
+    }
     closeModal('season-modal');
     toast('Season saved');
     allSeasons = await api('GET', `/seasons?league_id=${activeLeague.id}`);
@@ -460,10 +487,15 @@ async function activateSeason(id) {
     await api('POST', `/seasons/${id}/activate`);
     toast('Season activated');
     allSeasons = await api('GET', `/seasons?league_id=${activeLeague.id}`);
-    activeSeason = allSeasons.find(s => s.active);
+    activeSeason = allSeasons.find(s => s.active) || null;
     document.getElementById('active-season-label').textContent =
       activeSeason ? '📅 ' + activeSeason.name : 'No active season';
-    loadSeasons();
+    // Update the manage panel immediately if it is showing this season.
+    if (currentMgmtSeasonId === id) {
+      document.getElementById('season-mgmt-set-active-btn').style.display = 'none';
+      document.getElementById('season-mgmt-active').classList.remove('d-none');
+    }
+    await loadSeasons();
   } catch(e) { toast(e.message,'danger'); }
 }
 
@@ -543,27 +575,20 @@ function activateMgmtSeason() {
   if (currentMgmtSeasonId) activateSeason(currentMgmtSeasonId);
 }
 
-// Quick-nav from manage panel → Schedule tab (with season pre-selected)
+// Quick-nav from manage panel → Schedule tab (admin preview; bypasses active-only filter).
 function goToSchedule() {
   if (!currentMgmtSeasonId) return;
-  // Switch to the Schedule section and select this season
+  const id = currentMgmtSeasonId;
   navTo('schedule');
-  // Give the section a tick to render, then set the selector and load
-  setTimeout(() => {
-    const sel = document.getElementById('schedule-season-select');
-    if (sel) { sel.value = currentMgmtSeasonId; loadSchedule(); }
-  }, 50);
+  setTimeout(() => populateScheduleSeasonSelect(id), 50);
 }
 
-// Quick-nav from manage panel → Schedule tab, then open poster
+// Quick-nav from manage panel → Schedule tab, then open poster.
 function goToPoster() {
   if (!currentMgmtSeasonId) return;
+  const id = currentMgmtSeasonId;
   navTo('schedule');
-  setTimeout(() => {
-    const sel = document.getElementById('schedule-season-select');
-    if (sel) { sel.value = currentMgmtSeasonId; loadSchedule(); }
-    openSchedulePoster();
-  }, 100);
+  setTimeout(() => { populateScheduleSeasonSelect(id); openSchedulePoster(); }, 100);
 }
 
 function showSeasonTab(tab) {
@@ -1087,6 +1112,39 @@ function populateSeasonSelect(selId, callback) {
   if (callback) callback();
 }
 
+// Populate the user-facing Schedule page selector.
+// Without a previewSeasonId, shows only active seasons (user-facing mode).
+// With a previewSeasonId (called from the manage panel), shows that season
+// regardless of active status so admins can preview draft schedules.
+function populateScheduleSeasonSelect(previewSeasonId = null) {
+  const sel       = document.getElementById('schedule-season-select');
+  const contentEl = document.getElementById('schedule-content');
+
+  if (previewSeasonId !== null) {
+    const s = allSeasons.find(x => x.id === previewSeasonId);
+    if (s) {
+      sel.innerHTML = `<option value="${s.id}">${s.name}${s.active ? '' : ' (draft)'}</option>`;
+      sel.value = s.id;
+      loadSchedule();
+      return;
+    }
+  }
+
+  // User-facing: active seasons only.
+  const active = allSeasons.filter(s => s.active);
+  if (active.length === 0) {
+    sel.innerHTML = '<option value="">— No active season —</option>';
+    contentEl.innerHTML = `<div class="text-center py-5 text-muted">
+      <i class="bi bi-calendar-x" style="font-size:2rem"></i>
+      <div class="mt-2 fw-semibold">No active season</div>
+      <div class="small mt-1">Go to <a href="#" onclick="navTo('seasons');return false;" class="text-decoration-none">Seasons</a> to activate one.</div>
+    </div>`;
+    return;
+  }
+  sel.innerHTML = active.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+  loadSchedule();
+}
+
 // ── Schedule ──────────────────────────────────────────────────────────────────
 async function loadSchedule() {
   const seasonId = document.getElementById('schedule-season-select').value;
@@ -1179,7 +1237,7 @@ const POSTER_BALLS = [
 ];
 
 function pocketHTML() {
-  return ['tl','tr','ml','mr','bl','br'].map(p =>
+  return ['tl','tm','tr','bl','bm','br'].map(p =>
     `<div class="poster-pocket poster-pocket-${p}"></div>`
   ).join('');
 }

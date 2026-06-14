@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"league_app/backend/domains/rules"
+	"league_app/backend/domains/seasons"
 	"league_app/db"
 	"league_app/logic"
 	"league_app/models"
@@ -61,6 +62,18 @@ func Register(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("POST /api/seasons/{id}/bye-requests", createByeRequest)
 	mux.HandleFunc("PUT /api/seasons/{id}/bye-requests/{bid}", updateByeRequest)
 	mux.HandleFunc("DELETE /api/seasons/{id}/bye-requests/{bid}", deleteByeRequest)
+
+	// Season teams and rosters
+	mux.HandleFunc("GET /api/seasons/{id}/teams", listSeasonTeams)
+	mux.HandleFunc("POST /api/seasons/{id}/teams", addSeasonTeam)
+	mux.HandleFunc("GET /api/seasons/{id}/previous", getPreviousSeasonTeams)
+	mux.HandleFunc("PUT /api/seasons/{id}/teams/{tid}", updateSeasonTeam)
+	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}", removeSeasonTeam)
+	mux.HandleFunc("GET /api/seasons/{id}/teams/{tid}/roster", listSeasonRoster)
+	mux.HandleFunc("POST /api/seasons/{id}/teams/{tid}/roster", addRosterPlayer)
+	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}", removeRosterPlayer)
+	mux.HandleFunc("GET /api/seasons/{id}/players/available", listAvailablePlayers)
+	mux.HandleFunc("GET /api/seasons/{id}/checklist", getSeasonChecklist)
 
 	// Matches — scoped to ?season_id= (season implies league)
 	mux.HandleFunc("GET /api/matches", listMatches)
@@ -498,14 +511,16 @@ func deleteTeam(w http.ResponseWriter, r *http.Request) {
 
 // ─── Seasons — scoped to league_id ───────────────────────────────────────────
 
-const seasonCols = `id, league_id, name, start_date, end_date, active, schedule_type, num_weeks, created_at`
+const seasonCols = `id, league_id, name, start_date, end_date, active, schedule_type, num_weeks, COALESCE(schedule_stale,0), COALESCE(teams_managed,0), activated_at, created_at`
 
 func scanSeason(row interface{ Scan(...any) error }) (models.Season, error) {
 	var s models.Season
-	var active int
+	var active, stale, managed int
 	err := row.Scan(&s.ID, &s.LeagueID, &s.Name, &s.StartDate, &s.EndDate,
-		&active, &s.ScheduleType, &s.NumWeeks, &s.CreatedAt)
+		&active, &s.ScheduleType, &s.NumWeeks, &stale, &managed, &s.ActivatedAt, &s.CreatedAt)
 	s.Active = active == 1
+	s.ScheduleStale = stale == 1
+	s.TeamsManaged = managed == 1
 	if s.ScheduleType == "" {
 		s.ScheduleType = "double_rr"
 	}
@@ -581,13 +596,14 @@ func createSeason(w http.ResponseWriter, r *http.Request) {
 		s.ScheduleType = "double_rr"
 	}
 	res, err := db.DB.Exec(
-		`INSERT INTO seasons (league_id, name, start_date, schedule_type, num_weeks) VALUES (?,?,?,?,?)`,
+		`INSERT INTO seasons (league_id, name, start_date, schedule_type, num_weeks, teams_managed) VALUES (?,?,?,?,?,1)`,
 		s.LeagueID, s.Name, s.StartDate, s.ScheduleType, s.NumWeeks)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
 	s.ID, _ = res.LastInsertId()
+	s.TeamsManaged = true
 
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, s)
@@ -658,6 +674,23 @@ func activateSeason(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "season not found", 404)
 		return
 	}
+
+	// Enforce checklist blockers when season_teams is in use.
+	checklist, clErr := seasons.Checklist(db.DB, id)
+	if clErr != nil {
+		jsonError(w, clErr.Error(), 500)
+		return
+	}
+	if !checklist.CanActivate {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":    "season cannot be activated; resolve all blockers first",
+			"blockers": checklist.Blockers,
+		})
+		return
+	}
+
 	tx, err := db.DB.Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -665,7 +698,8 @@ func activateSeason(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	tx.Exec(`UPDATE seasons SET active=0 WHERE league_id=?`, leagueID)
-	tx.Exec(`UPDATE seasons SET active=1 WHERE id=?`, id)
+	// Set activated_at once on first activation (persistent setup lock).
+	tx.Exec(`UPDATE seasons SET active=1, activated_at=COALESCE(activated_at, CURRENT_TIMESTAMP) WHERE id=?`, id)
 	if err := tx.Commit(); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -780,7 +814,14 @@ func generateSchedule(w http.ResponseWriter, r *http.Request) {
 		// Collect team IDs
 		var teamIDs []int64
 		if req.FromSeasonID > 0 {
-			// Use teams that appeared in a prior season's schedule
+			// Prior-season schedule inference is legacy-only; managed seasons always use season_teams.
+			var genTeamsManaged int
+			db.DB.QueryRow(`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, req.SeasonID).Scan(&genTeamsManaged)
+			if genTeamsManaged == 1 {
+				jsonError(w, "managed seasons generate from season_teams; from_season_id is not supported", 400)
+				return
+			}
+			// Legacy: use teams that appeared in a prior season's schedule.
 			rows, err := db.DB.Query(`
 				SELECT DISTINCT home_team_id FROM matches WHERE season_id=? AND home_team_id IS NOT NULL
 				UNION
@@ -797,20 +838,39 @@ func generateSchedule(w http.ResponseWriter, r *http.Request) {
 			}
 			rows.Close()
 		} else {
-			rows, err := db.DB.Query(`
-				SELECT t.id FROM teams t
-				JOIN seasons s ON s.league_id = t.league_id
-				WHERE s.id=? ORDER BY t.id`, req.SeasonID)
-			if err != nil {
-				jsonError(w, err.Error(), 500)
+			// Managed seasons always use season_teams; legacy seasons fall back to all league teams.
+			var teamsManaged int
+			db.DB.QueryRow(`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, req.SeasonID).Scan(&teamsManaged)
+			var stRows *sql.Rows
+			var stErr error
+			var stCount int
+			db.DB.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=?`, req.SeasonID).Scan(&stCount)
+			if teamsManaged == 1 {
+				if stCount == 0 {
+					jsonError(w, "no teams registered in this season; add teams before generating a schedule", 400)
+					return
+				}
+				stRows, stErr = db.DB.Query(
+					`SELECT team_id FROM season_teams WHERE season_id=? ORDER BY id`, req.SeasonID)
+			} else if stCount > 0 {
+				stRows, stErr = db.DB.Query(
+					`SELECT team_id FROM season_teams WHERE season_id=? ORDER BY id`, req.SeasonID)
+			} else {
+				stRows, stErr = db.DB.Query(`
+					SELECT t.id FROM teams t
+					JOIN seasons s ON s.league_id = t.league_id
+					WHERE s.id=? ORDER BY t.id`, req.SeasonID)
+			}
+			if stErr != nil {
+				jsonError(w, stErr.Error(), 500)
 				return
 			}
-			for rows.Next() {
+			for stRows.Next() {
 				var id int64
-				rows.Scan(&id)
+				stRows.Scan(&id)
 				teamIDs = append(teamIDs, id)
 			}
-			rows.Close()
+			stRows.Close()
 		}
 		if len(teamIDs) < 2 {
 			jsonError(w, "need at least 2 teams in this league to generate a schedule", 400)
@@ -874,8 +934,8 @@ func generateSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update season: schedule_type, num_weeks, end_date
-	tx.Exec(`UPDATE seasons SET schedule_type=?, num_weeks=?, end_date=? WHERE id=?`,
+	// Update season: schedule_type, num_weeks, end_date; reset stale flag
+	tx.Exec(`UPDATE seasons SET schedule_type=?, num_weeks=?, end_date=?, schedule_stale=0 WHERE id=?`,
 		req.ScheduleType, req.NumWeeks, nullStr(lastDate), req.SeasonID)
 
 	if err := tx.Commit(); err != nil {
@@ -1130,12 +1190,22 @@ func createByeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bye requests only make sense for seasons with an odd number of teams
-	// (one team naturally sits out each week in the round-robin rotation).
+	// Bye requests only make sense for seasons with an odd number of participating teams.
+	// Managed seasons use season_teams count exclusively; legacy seasons fall back to all league teams.
+	var byeTeamsManaged int
+	db.DB.QueryRow(`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, sid).Scan(&byeTeamsManaged)
 	var teamCount int
-	db.DB.QueryRow(`SELECT COUNT(*) FROM teams WHERE league_id=?`, leagueID).Scan(&teamCount)
+	var stCount int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=?`, sid).Scan(&stCount)
+	if byeTeamsManaged == 1 {
+		teamCount = stCount
+	} else if stCount > 0 {
+		teamCount = stCount
+	} else {
+		db.DB.QueryRow(`SELECT COUNT(*) FROM teams WHERE league_id=?`, leagueID).Scan(&teamCount)
+	}
 	if teamCount%2 == 0 {
-		jsonError(w, fmt.Sprintf("bye requests require an odd number of teams in the league (%d teams — even)", teamCount), 400)
+		jsonError(w, fmt.Sprintf("bye requests require an odd number of teams (%d teams — even)", teamCount), 400)
 		return
 	}
 
@@ -1144,6 +1214,16 @@ func createByeRequest(w http.ResponseWriter, r *http.Request) {
 	if err := db.DB.QueryRow(`SELECT league_id FROM teams WHERE id=?`, b.TeamID).Scan(&teamLeagueID); err != nil || teamLeagueID != leagueID {
 		jsonError(w, "team does not belong to this season's league", 400)
 		return
+	}
+
+	// For managed seasons, the team must also be registered in season_teams.
+	if byeTeamsManaged == 1 {
+		var inSeason int
+		db.DB.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=? AND team_id=?`, sid, b.TeamID).Scan(&inSeason)
+		if inSeason == 0 {
+			jsonError(w, "team is not registered in this season", 400)
+			return
+		}
 	}
 
 	// Reject duplicates with a clear message instead of silently ignoring.
@@ -1558,6 +1638,13 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Block scoresheet entry when either team has fewer than 3 season-roster players.
+	// Only enforced when season_teams is in use (see RosterEligible for details).
+	if ok, msg := seasons.RosterEligible(db.DB, matchID, 3); !ok {
+		jsonError(w, msg, http.StatusUnprocessableEntity)
+		return
+	}
+
 	// Collect all player IDs to look up their current handicaps
 	playerIDs := make(map[int64]float64)
 	for _, rr := range req.Rounds {
@@ -1837,4 +1924,654 @@ func deleteLineupPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	db.DB.Exec(`DELETE FROM lineup_plans WHERE id=?`, id)
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// ─── Season Teams ──────────────────────────────────────────────────────────────
+
+// seasonTeamRow scans one row from season_teams into a SeasonTeam.
+const seasonTeamSelect = `
+	SELECT st.id, st.season_id, st.team_id, t.name,
+	       CASE WHEN st.season_name != '' THEN st.season_name ELSE t.name END,
+	       st.captain_id,
+	       COALESCE(cp.first_name||' '||cp.last_name, ''),
+	       (SELECT COUNT(*) FROM season_rosters sr
+	        WHERE sr.season_id = st.season_id AND sr.team_id = st.team_id)
+	FROM season_teams st
+	JOIN teams t ON t.id = st.team_id
+	LEFT JOIN players cp ON cp.id = st.captain_id`
+
+func scanSeasonTeam(row interface{ Scan(...any) error }) (models.SeasonTeam, error) {
+	var st models.SeasonTeam
+	err := row.Scan(&st.ID, &st.SeasonID, &st.TeamID, &st.TeamName,
+		&st.SeasonName, &st.CaptainID, &st.CaptainName, &st.RosterCount)
+	return st, err
+}
+
+func listSeasonTeams(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	rows, err := db.DB.Query(seasonTeamSelect+` WHERE st.season_id=? ORDER BY st.id`, sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer rows.Close()
+	var out []models.SeasonTeam
+	for rows.Next() {
+		if st, err := scanSeasonTeam(rows); err == nil {
+			out = append(out, st)
+		}
+	}
+	if out == nil {
+		out = []models.SeasonTeam{}
+	}
+	jsonOK(w, out)
+}
+
+// addSeasonTeamRequest is the POST body for adding a team to a draft season.
+// Exactly one of (FromTeamID+FromSeasonID) or Name must be set.
+type addSeasonTeamRequest struct {
+	FromTeamID   int64  `json:"from_team_id"`   // copy existing team from a prior season
+	FromSeasonID int64  `json:"from_season_id"` // season the team last played in (0 = use team.players)
+	Name         string `json:"name"`           // new team name (creates a teams record)
+}
+
+// markStaleIfScheduled sets schedule_stale=1 when unplayed matches already exist.
+func markStaleIfScheduled(seasonID int64) {
+	var n int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND completed=0`, seasonID).Scan(&n)
+	if n > 0 {
+		db.DB.Exec(`UPDATE seasons SET schedule_stale=1 WHERE id=?`, seasonID)
+	}
+}
+
+// isDraftSeason returns false when the season's setup has been locked by activation.
+// activated_at is set once on first activation and never cleared; it survives
+// another season becoming active (deactivation does not reset it).
+func isDraftSeason(seasonID int64) bool {
+	var activatedAt *string
+	db.DB.QueryRow(`SELECT activated_at FROM seasons WHERE id=?`, seasonID).Scan(&activatedAt)
+	return activatedAt == nil
+}
+
+func addSeasonTeam(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	if !isDraftSeason(sid) {
+		jsonError(w, "cannot modify teams in an active season", 422)
+		return
+	}
+
+	var req addSeasonTeamRequest
+	if err := decode(r, &req); err != nil {
+		jsonError(w, "invalid body", 400)
+		return
+	}
+
+	var leagueID int64
+	var startDate *string
+	var draftTeamsManaged int
+	if err := db.DB.QueryRow(`SELECT league_id, start_date, COALESCE(teams_managed,0) FROM seasons WHERE id=?`, sid).Scan(&leagueID, &startDate, &draftTeamsManaged); err != nil {
+		jsonError(w, "season not found", 404)
+		return
+	}
+
+	// For managed seasons, from_team_id always requires from_season_id.
+	// New teams must be created via the name path; from_team_id copies from a prior season only.
+	if draftTeamsManaged == 1 && req.FromTeamID > 0 && req.FromSeasonID == 0 {
+		jsonError(w, "managed seasons require from_season_id with from_team_id; use name to create a new team", 400)
+		return
+	}
+
+	// When from_season_id is provided, it must be the immediately previous season.
+	if req.FromTeamID > 0 && req.FromSeasonID > 0 {
+		prev, prevErr := seasons.PreviousSeason(db.DB, sid, leagueID, normDatePtr(startDate))
+		if prevErr != nil {
+			jsonError(w, prevErr.Error(), 500)
+			return
+		}
+		if prev == nil || prev.ID != req.FromSeasonID {
+			jsonError(w, "from_season_id must be the immediately previous season", 400)
+			return
+		}
+	}
+
+	tx, err := db.DB.Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer tx.Rollback()
+
+	var teamID int64
+	var seasonName string
+	var captainID *int64
+
+	if req.FromTeamID > 0 {
+		// ── Copy from a prior season ──────────────────────────────────────────
+		// Verify the team belongs to this league.
+		var tLID int64
+		if err := tx.QueryRow(`SELECT league_id FROM teams WHERE id=?`, req.FromTeamID).Scan(&tLID); err != nil || tLID != leagueID {
+			jsonError(w, "team not found in this league", 400)
+			return
+		}
+		teamID = req.FromTeamID
+
+		// Prefer name/captain from prior season_teams; fall back to teams row.
+		if req.FromSeasonID > 0 {
+			// Verify team participated in the previous season when it was managed.
+			var prevManaged int
+			tx.QueryRow(`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, req.FromSeasonID).Scan(&prevManaged)
+			if prevManaged == 1 {
+				var inPrev int
+				tx.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=? AND team_id=?`,
+					req.FromSeasonID, teamID).Scan(&inPrev)
+				if inPrev == 0 {
+					jsonError(w, "team did not participate in the previous season", 400)
+					return
+				}
+			}
+			tx.QueryRow(
+				`SELECT CASE WHEN season_name != '' THEN season_name ELSE t.name END, captain_id
+				 FROM season_teams st JOIN teams t ON t.id=st.team_id
+				 WHERE st.season_id=? AND st.team_id=?`,
+				req.FromSeasonID, teamID).Scan(&seasonName, &captainID)
+		}
+		if seasonName == "" {
+			tx.QueryRow(`SELECT name FROM teams WHERE id=?`, teamID).Scan(&seasonName)
+		}
+
+		// Insert season_teams row.
+		res, err := tx.Exec(
+			`INSERT OR IGNORE INTO season_teams (season_id, team_id, season_name, captain_id)
+			 VALUES (?,?,?,?)`, sid, teamID, seasonName, captainID)
+		if err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			jsonError(w, "team is already in this season", 400)
+			return
+		}
+
+		// Copy roster from prior season_rosters; fall back to players.team_id.
+		var copiedFromRoster bool
+		if req.FromSeasonID > 0 {
+			rr, _ := tx.Query(
+				`SELECT player_id FROM season_rosters WHERE season_id=? AND team_id=?`,
+				req.FromSeasonID, teamID)
+			if rr != nil {
+				for rr.Next() {
+					var pid int64
+					rr.Scan(&pid)
+					tx.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+						sid, teamID, pid)
+					copiedFromRoster = true
+				}
+				rr.Close()
+			}
+		}
+		if !copiedFromRoster && draftTeamsManaged == 0 {
+			// Legacy fallback: copy all active players currently on this team.
+			pr, _ := tx.Query(`SELECT id FROM players WHERE team_id=? AND COALESCE(active,1)=1`, teamID)
+			if pr != nil {
+				for pr.Next() {
+					var pid int64
+					pr.Scan(&pid)
+					tx.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+						sid, teamID, pid)
+				}
+				pr.Close()
+			}
+		}
+
+	} else if strings.TrimSpace(req.Name) != "" {
+		// ── Create a brand-new team ───────────────────────────────────────────
+		res, err := tx.Exec(`INSERT INTO teams (league_id, name) VALUES (?,?)`, leagueID, req.Name)
+		if err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		teamID, _ = res.LastInsertId()
+		seasonName = req.Name
+
+		if _, err := tx.Exec(
+			`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,?)`,
+			sid, teamID, seasonName); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+	} else {
+		jsonError(w, "provide from_team_id (copy) or name (new team)", 400)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	markStaleIfScheduled(sid)
+
+	row := db.DB.QueryRow(seasonTeamSelect+` WHERE st.season_id=? AND st.team_id=?`, sid, teamID)
+	st, _ := scanSeasonTeam(row)
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, st)
+}
+
+// updateSeasonTeamRequest is the PUT body for season team metadata.
+type updateSeasonTeamRequest struct {
+	SeasonName string `json:"season_name"`
+	CaptainID  *int64 `json:"captain_id"`
+}
+
+func updateSeasonTeam(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	tid, err := pathID(r, "tid")
+	if err != nil {
+		jsonError(w, "invalid team id", 400)
+		return
+	}
+	if !isDraftSeason(sid) {
+		jsonError(w, "cannot modify teams in an active season", 422)
+		return
+	}
+	var req updateSeasonTeamRequest
+	if err := decode(r, &req); err != nil {
+		jsonError(w, "invalid body", 400)
+		return
+	}
+	// If captain is being set, verify they are on the season roster.
+	if req.CaptainID != nil {
+		var onRoster int
+		db.DB.QueryRow(
+			`SELECT COUNT(*) FROM season_rosters WHERE season_id=? AND team_id=? AND player_id=?`,
+			sid, tid, *req.CaptainID).Scan(&onRoster)
+		if onRoster == 0 {
+			jsonError(w, "captain must be on this team's season roster", 400)
+			return
+		}
+	}
+	res, err := db.DB.Exec(
+		`UPDATE season_teams SET season_name=?, captain_id=? WHERE season_id=? AND team_id=?`,
+		req.SeasonName, req.CaptainID, sid, tid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		jsonError(w, "team not found in this season", 404)
+		return
+	}
+	row := db.DB.QueryRow(seasonTeamSelect+` WHERE st.season_id=? AND st.team_id=?`, sid, tid)
+	st, _ := scanSeasonTeam(row)
+	jsonOK(w, st)
+}
+
+func removeSeasonTeam(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	tid, err := pathID(r, "tid")
+	if err != nil {
+		jsonError(w, "invalid team id", 400)
+		return
+	}
+	if !isDraftSeason(sid) {
+		jsonError(w, "cannot modify teams in an active season", 422)
+		return
+	}
+
+	tx, err := db.DB.Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer tx.Rollback()
+
+	// Remove from season_rosters first (cascade would handle ON DELETE CASCADE
+	// from seasons, but here we delete from season_teams which doesn't cascade).
+	tx.Exec(`DELETE FROM season_rosters WHERE season_id=? AND team_id=?`, sid, tid)
+	res, err := tx.Exec(`DELETE FROM season_teams WHERE season_id=? AND team_id=?`, sid, tid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		jsonError(w, "team not found in this season", 404)
+		return
+	}
+
+	// Delete the teams record only when the team has never appeared in any match.
+	var matchCount int
+	tx.QueryRow(
+		`SELECT COUNT(*) FROM matches WHERE home_team_id=? OR away_team_id=?`, tid, tid,
+	).Scan(&matchCount)
+	if matchCount == 0 {
+		// Also check other seasons' season_teams (team may exist in another draft).
+		var otherSeason int
+		tx.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE team_id=?`, tid).Scan(&otherSeason)
+		if otherSeason == 0 {
+			tx.Exec(`UPDATE players SET team_id=NULL WHERE team_id=?`, tid)
+			tx.Exec(`DELETE FROM teams WHERE id=?`, tid)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	markStaleIfScheduled(sid)
+	jsonOK(w, map[string]string{"status": "removed"})
+}
+
+// ── Season Rosters ─────────────────────────────────────────────────────────────
+
+func listSeasonRoster(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	tid, err := pathID(r, "tid")
+	if err != nil {
+		jsonError(w, "invalid team id", 400)
+		return
+	}
+	rows, err := db.DB.Query(`
+		SELECT sr.id, sr.season_id, sr.team_id, t.name,
+		       sr.player_id, p.first_name||' '||p.last_name, p.handicap
+		FROM season_rosters sr
+		JOIN teams t ON t.id = sr.team_id
+		JOIN players p ON p.id = sr.player_id
+		WHERE sr.season_id=? AND sr.team_id=?
+		ORDER BY p.last_name, p.first_name`, sid, tid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer rows.Close()
+	var out []models.SeasonRosterEntry
+	for rows.Next() {
+		var e models.SeasonRosterEntry
+		rows.Scan(&e.ID, &e.SeasonID, &e.TeamID, &e.TeamName, &e.PlayerID, &e.PlayerName, &e.Handicap)
+		out = append(out, e)
+	}
+	if out == nil {
+		out = []models.SeasonRosterEntry{}
+	}
+	jsonOK(w, out)
+}
+
+type addRosterPlayerRequest struct {
+	PlayerID int64 `json:"player_id"`
+}
+
+func addRosterPlayer(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	tid, err := pathID(r, "tid")
+	if err != nil {
+		jsonError(w, "invalid team id", 400)
+		return
+	}
+	if !isDraftSeason(sid) {
+		jsonError(w, "cannot modify rosters in an active season", 422)
+		return
+	}
+
+	var req addRosterPlayerRequest
+	if err := decode(r, &req); err != nil {
+		jsonError(w, "invalid body", 400)
+		return
+	}
+	if req.PlayerID == 0 {
+		jsonError(w, "player_id is required", 400)
+		return
+	}
+
+	// Verify team is in this season.
+	var stID int64
+	if err := db.DB.QueryRow(
+		`SELECT id FROM season_teams WHERE season_id=? AND team_id=?`, sid, tid,
+	).Scan(&stID); err != nil {
+		jsonError(w, "team is not in this season", 400)
+		return
+	}
+
+	// Enforce one team per player per season.
+	var existingTeam int64
+	db.DB.QueryRow(
+		`SELECT COALESCE(team_id,0) FROM season_rosters WHERE season_id=? AND player_id=?`,
+		sid, req.PlayerID).Scan(&existingTeam)
+	if existingTeam != 0 && existingTeam != tid {
+		jsonError(w, "player is already on another team in this season", 400)
+		return
+	}
+
+	res, err := db.DB.Exec(
+		`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+		sid, tid, req.PlayerID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	rID, _ := res.LastInsertId()
+
+	var entry models.SeasonRosterEntry
+	db.DB.QueryRow(`
+		SELECT sr.id, sr.season_id, sr.team_id, t.name,
+		       sr.player_id, p.first_name||' '||p.last_name, p.handicap
+		FROM season_rosters sr
+		JOIN teams t ON t.id = sr.team_id
+		JOIN players p ON p.id = sr.player_id
+		WHERE sr.id=?`, rID,
+	).Scan(&entry.ID, &entry.SeasonID, &entry.TeamID, &entry.TeamName,
+		&entry.PlayerID, &entry.PlayerName, &entry.Handicap)
+
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, entry)
+}
+
+func removeRosterPlayer(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	tid, err := pathID(r, "tid")
+	if err != nil {
+		jsonError(w, "invalid team id", 400)
+		return
+	}
+	pid, err := pathID(r, "pid")
+	if err != nil {
+		jsonError(w, "invalid player id", 400)
+		return
+	}
+	if !isDraftSeason(sid) {
+		jsonError(w, "cannot modify rosters in an active season", 422)
+		return
+	}
+	res, err := db.DB.Exec(
+		`DELETE FROM season_rosters WHERE season_id=? AND team_id=? AND player_id=?`, sid, tid, pid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		jsonError(w, "roster entry not found", 404)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "removed"})
+}
+
+// ── Available Players ──────────────────────────────────────────────────────────
+
+func listAvailablePlayers(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+
+	// Resolve the league so we know which players to search.
+	var leagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM seasons WHERE id=?`, sid).Scan(&leagueID); err != nil {
+		jsonError(w, "season not found", 404)
+		return
+	}
+
+	// Correction 4: return all active system players not already rostered in this
+	// season — including players with no team or players from other leagues.
+	rows, err := db.DB.Query(`
+		SELECT p.id, p.player_number, p.first_name, p.last_name,
+		       p.first_name||' '||p.last_name,
+		       COALESCE(p.phone,''), COALESCE(p.email,''),
+		       p.team_id, COALESCE(t.name,''), COALESCE(t.league_id,0),
+		       p.handicap, p.admin_hold, COALESCE(p.active,1), COALESCE(p.note,''),
+		       p.created_at
+		FROM players p
+		LEFT JOIN teams t ON t.id = p.team_id
+		WHERE p.id NOT IN (
+		        SELECT player_id FROM season_rosters WHERE season_id=?
+		      )
+		  AND COALESCE(p.active,1) = 1
+		ORDER BY p.last_name, p.first_name`, sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer rows.Close()
+	var players []models.Player
+	for rows.Next() {
+		var p models.Player
+		var adminHold, activeInt int
+		rows.Scan(&p.ID, &p.PlayerNumber, &p.FirstName, &p.LastName, &p.Name,
+			&p.Phone, &p.Email, &p.TeamID, &p.TeamName, &p.LeagueID,
+			&p.Handicap, &adminHold, &activeInt, &p.Note, &p.CreatedAt)
+		p.AdminHold = adminHold == 1
+		p.Active = activeInt == 1
+		players = append(players, p)
+	}
+	if players == nil {
+		players = []models.Player{}
+	}
+	jsonOK(w, players)
+}
+
+// ── Previous Season ────────────────────────────────────────────────────────────
+
+type previousSeasonResponse struct {
+	Season *models.Season      `json:"season"`
+	Teams  []previousTeamEntry `json:"teams"`
+}
+
+type previousTeamEntry struct {
+	TeamID     int64  `json:"team_id"`
+	TeamName   string `json:"team_name"`
+	SeasonName string `json:"season_name"`
+	CaptainID  *int64 `json:"captain_id"`
+}
+
+func getPreviousSeasonTeams(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+
+	var leagueID int64
+	var startDate *string
+	if err := db.DB.QueryRow(`SELECT league_id, start_date FROM seasons WHERE id=?`, sid).
+		Scan(&leagueID, &startDate); err != nil {
+		jsonError(w, "season not found", 404)
+		return
+	}
+	startDate = normDatePtr(startDate)
+
+	prev, err := seasons.PreviousSeason(db.DB, sid, leagueID, startDate)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	resp := previousSeasonResponse{Season: prev, Teams: []previousTeamEntry{}}
+	if prev == nil {
+		jsonOK(w, resp)
+		return
+	}
+
+	// Prefer season_teams from the previous season; fall back to match participants.
+	var stCount int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=?`, prev.ID).Scan(&stCount)
+
+	if stCount > 0 {
+		rows, err := db.DB.Query(`
+			SELECT st.team_id, t.name,
+			       CASE WHEN st.season_name != '' THEN st.season_name ELSE t.name END,
+			       st.captain_id
+			FROM season_teams st JOIN teams t ON t.id=st.team_id
+			WHERE st.season_id=? ORDER BY st.id`, prev.ID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var e previousTeamEntry
+				rows.Scan(&e.TeamID, &e.TeamName, &e.SeasonName, &e.CaptainID)
+				resp.Teams = append(resp.Teams, e)
+			}
+		}
+	} else {
+		// Fall back: distinct teams that appeared in the prior season's matches.
+		rows, err := db.DB.Query(`
+			SELECT DISTINCT t.id, t.name FROM teams t
+			JOIN matches m ON (m.home_team_id=t.id OR m.away_team_id=t.id)
+			WHERE m.season_id=? ORDER BY t.name`, prev.ID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var e previousTeamEntry
+				rows.Scan(&e.TeamID, &e.TeamName)
+				e.SeasonName = e.TeamName
+				resp.Teams = append(resp.Teams, e)
+			}
+		}
+	}
+
+	jsonOK(w, resp)
+}
+
+// ── Setup Checklist ────────────────────────────────────────────────────────────
+
+func getSeasonChecklist(w http.ResponseWriter, r *http.Request) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	c, err := seasons.Checklist(db.DB, sid)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			jsonError(w, err.Error(), 404)
+		} else {
+			jsonError(w, err.Error(), 500)
+		}
+		return
+	}
+	jsonOK(w, c)
 }

@@ -44,6 +44,9 @@ erDiagram
         int active
         text schedule_type
         int num_weeks
+        int schedule_stale
+        int teams_managed
+        datetime activated_at
         datetime created_at
     }
 
@@ -141,6 +144,23 @@ erDiagram
         datetime created_at
     }
 
+    season_teams {
+        int id PK
+        int season_id FK
+        int team_id FK
+        text season_name
+        int captain_id FK
+        datetime created_at
+    }
+
+    season_rosters {
+        int id PK
+        int season_id FK
+        int team_id FK
+        int player_id FK
+        datetime created_at
+    }
+
     leagues ||--o{ teams : has
     leagues ||--o{ seasons : has
     teams ||--o{ players : current_assignment
@@ -159,8 +179,12 @@ erDiagram
     players ||--o{ round_results : away_player
     players ||--o{ handicap_history : history
     players ||--o{ lineup_plans : assigned
+    seasons ||--o{ season_teams : participates
+    teams ||--o{ season_teams : in_season
+    season_teams ||--o{ season_rosters : roster
+    players ||--o{ season_rosters : rostered_as
 
 %% This ERD documents db/db.go today.
-%% Target concepts such as season_teams, season_rosters, users, controlled
-%% codes, audit entries, week workflow, and final snapshots are documented in
+%% Target concepts such as users, controlled codes, audit entries,
+%% week workflow, and final snapshots are documented in
 %% doc/architecture-decisions.md and are not implemented yet.

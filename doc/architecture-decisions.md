@@ -53,9 +53,9 @@ Create draft season and configure rules
 -> activate immediately
 ```
 
-All active league teams are selected by default for a new season. The admin may
-remove teams before activation. Season participation will be explicit rather
-than inferred from scheduled matches.
+Season participation is explicit. Teams are registered in `season_teams` before
+activation. The setup checklist enforces minimum participation rules and
+schedule readiness before the season can go live.
 
 Rules and team membership are locked when the season activates. Controlled
 administrative workflows may alter the active schedule without silently

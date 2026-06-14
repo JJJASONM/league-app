@@ -14,18 +14,27 @@ reopening, and final standings snapshots.
 
 ```text
 Draft
--> configure rules
--> select/create teams
--> assign players to home teams
--> set start date
--> configure schedule requests and No Play weeks
--> generate and preview schedule
--> approve
--> activate immediately
+-> name season + set start date
+-> configure rules (shown in New Season form; buffered until save)
+-> save → season record created; buffered rules saved immediately
+-> add participating teams (from prior season or new)
+-> assign players to season roster per team; set captain per team
+-> manage: schedule generation, skip weeks, bye requests
+-> resolve all checklist blockers
+-> activate
 ```
 
-The admin owns setup. All active league teams are initially selected, and may
-be removed before activation.
+The admin owns setup. Team participation is explicit: each team must be
+registered in `season_teams` before the checklist passes. Teams can be added
+from a prior season (copies roster) or created new.
+
+### New Season Rules
+
+The New Season form shows the same rule controls as Edit Season Details.
+Rule changes made before clicking "Save & Continue" are buffered in the
+`<rules-editor>` web component's `#pendingRules` map. `flushPending(seasonId)`
+is called immediately after the season record is created and saves all buffered
+rules via `POST /seasons/{id}/rules`.
 
 ## Active Season
 
@@ -69,21 +78,77 @@ Activating a new season never silently closes the previous season.
 
 Season teams will be recorded directly rather than inferred from matches.
 
+## Activation Enforcement
+
+`POST /api/seasons/{id}/activate` runs the setup checklist before proceeding.
+For managed seasons (`teams_managed=1`), all blocker checks must pass or the
+handler returns `422 Unprocessable Entity` with:
+
+```json
+{
+  "error": "season cannot be activated; resolve all blockers first",
+  "blockers": [
+    { "code": "NO_SCHEDULE", "message": "...", "team_id": 0 }
+  ]
+}
+```
+
+Stable blocker codes: `TEAMS_TOO_FEW`, `TEAM_NO_PLAYERS`, `TEAM_NO_CAPTAIN`,
+`CAPTAIN_NOT_ON_ROSTER`, `SCHEDULE_STALE`, `NO_SCHEDULE`, `NO_END_DATE`.
+
+Warning codes (do not block activation): `TEAM_FEW_PLAYERS`.
+
+**Legacy bypass:** Seasons with `teams_managed=0` (the `DEFAULT` for all rows
+created before Phase One) skip all checklist enforcement and always return
+`can_activate=true`. This is not a zero-team check — it is an explicit column
+flag. New seasons created via the API always get `teams_managed=1`.
+
+**Setup lock:** First activation sets `activated_at=CURRENT_TIMESTAMP` on the
+season row. This timestamp is never cleared. `isDraftSeason()` checks
+`activated_at IS NULL`, so the setup lock persists even after another season
+becomes active (deactivation does not re-enable editing).
+
+## Available Players
+
+`GET /api/seasons/{id}/players/available` returns all active system players not
+already rostered in the season. This includes unassigned players (no `team_id`)
+and players assigned to teams in other leagues. No league filter is applied.
+
+## Scoresheet Roster Eligibility
+
+`POST /api/matches/{id}/rounds` blocks scoresheet entry when either team in
+the match has fewer than 3 season-roster players. Returns `422` with a
+descriptive error. This check is skipped for legacy seasons with
+`teams_managed=0`.
+
+## Schedule Generation
+
+`POST /api/matches/generate` with a nonzero `from_season_id` uses prior-season
+match records to collect team IDs. For managed seasons (`teams_managed=1`) this
+path is rejected (400). Managed seasons always generate exclusively from
+`season_teams`; `from_season_id` must be omitted or zero.
+
+## Bye Requests
+
+`POST /api/seasons/{id}/bye-requests` validates:
+
+1. **Participating team count** — for managed seasons the count comes from
+   `season_teams` rows only. Legacy seasons fall back to all league teams when
+   no `season_teams` rows exist. An even count rejects the request.
+2. **League membership** — the requested team must belong to this season's league.
+3. **Season membership** (managed only) — the team must also appear in
+   `season_teams`. A league member that is not registered in the season is
+   rejected (400) with "team is not registered in this season".
+
 ## Deferred Enhancements
 
-### SEASONS-TODO-001 — Manual team selection in Edit Season
+### SEASONS-TODO-001 — Team-selection UI
 
-**Status:** `deferred` — not MVP scope
+**Status:** `deferred`
 
-The "Use Teams From Prior Season" field in the Edit Season / New Season form currently
-pre-selects a prior season's teams at schedule-generation time. A future enhancement
-would add a dedicated "Select Teams" step where the operator explicitly picks which
-teams participate in the season before schedule generation runs.
+The backend API for season teams and rosters is implemented. The frontend
+team-selection UI step has not been built. Currently operators must use the
+backend APIs or a future admin screen to register teams before activation.
 
-This requires:
-- A `season_teams` join table (approved design direction, see architecture-decisions.md)
-- A team-selection UI step in the season setup workflow
-- Validation that at least N teams are selected before generation is allowed
-
-Do not implement the manual selection workflow until the `season_teams` table and
-explicit season-participation design are finalized.
+Do not build the frontend team-selection workflow until the backend APIs are
+confirmed stable in production.

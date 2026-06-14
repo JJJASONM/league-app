@@ -1,5 +1,9 @@
 // <rules-editor> — light DOM Web Component for the Rules tab.
-// Public API: loadSeason(seasonId)
+// Public API:
+//   loadSeason(seasonId)  — load and edit rules for an existing season
+//   initNew()             — render defaults for a season not yet saved;
+//                           changes are buffered until flushPending() is called
+//   flushPending(seasonId)— save buffered changes after the season is created
 
 const GROUP_ICONS = {
   handicap:   'bi-calculator',
@@ -20,7 +24,8 @@ async function fetchDefinitions() {
 }
 
 class RulesEditor extends HTMLElement {
-  #seasonId = null;
+  #seasonId    = null;
+  #pendingRules = new Map(); // key → {label, value} — buffered when no season ID yet
 
   connectedCallback() {
     this.innerHTML = '<div class="text-muted text-center py-4 small">Loading rules…</div>';
@@ -28,23 +33,55 @@ class RulesEditor extends HTMLElement {
     this.addEventListener('click',  e => this.#onClick(e));
   }
 
+  // Load and edit rules for an existing season.
   async loadSeason(seasonId) {
     this.#seasonId = seasonId;
+    this.#pendingRules.clear();
     this.innerHTML = '<div class="text-muted text-center py-4 small">Loading rules…</div>';
     await this.#render();
+  }
+
+  // Render rule defaults for a season that hasn't been saved yet.
+  // Rule changes are buffered in #pendingRules until flushPending() is called.
+  async initNew() {
+    this.#seasonId = null;
+    this.#pendingRules.clear();
+    this.innerHTML = '<div class="text-muted text-center py-4 small">Loading rules…</div>';
+    await this.#render();
+  }
+
+  // Save all buffered rule changes to a newly created season, then bind to it.
+  async flushPending(seasonId) {
+    if (this.#pendingRules.size === 0) {
+      this.#seasonId = seasonId;
+      return;
+    }
+    this.#seasonId = seasonId;
+    await Promise.all([...this.#pendingRules.entries()].map(([key, v]) =>
+      api('POST', `/seasons/${seasonId}/rules`,
+        { rule_key: key, rule_label: v.label, rule_value: String(v.value) })
+        .catch(() => {})
+    ));
+    this.#pendingRules.clear();
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────────
 
   async #render() {
     const seasonId = this.#seasonId;
-    const [allRules, defs] = await Promise.all([
-      api('GET', `/seasons/${seasonId}/rules`).catch(() => []),
-      fetchDefinitions(),
-    ]);
+    let allRules = [];
+    if (seasonId) {
+      try { allRules = await api('GET', `/seasons/${seasonId}/rules`); } catch (_) {}
+    }
+    const defs = await fetchDefinitions();
 
+    // Build ruleMap: stored API values take precedence; pending values override
+    // defaults when no season exists yet.
     const ruleMap = {};
     allRules.forEach(r => { ruleMap[r.rule_key] = r; });
+    this.#pendingRules.forEach((v, k) => {
+      ruleMap[k] = { rule_key: k, rule_label: v.label, rule_value: v.value };
+    });
 
     const knownKeys = new Set(defs.map(d => d.key));
     const customRules = allRules.filter(r => !knownKeys.has(r.rule_key));
@@ -63,6 +100,12 @@ class RulesEditor extends HTMLElement {
     groups.forEach(g => g.defs.sort((a, b) => a.order - b.order));
 
     let html = '';
+    if (!seasonId) {
+      html += `<div class="alert alert-info py-2 px-3 mb-2" style="font-size:.82rem">
+        <i class="bi bi-info-circle me-1"></i>
+        Showing defaults — changes are saved when you create the season.
+      </div>`;
+    }
     for (const grp of groups) html += this.#renderGroup(grp, ruleMap);
     html += this.#renderCustomSection(customRules);
 
@@ -129,6 +172,13 @@ class RulesEditor extends HTMLElement {
   }
 
   #renderCustomSection(customRules) {
+    // Custom rules require a saved season ID — hide the add form in pending mode.
+    if (!this.#seasonId) {
+      return `<div class="text-muted small fst-italic py-1">
+        <i class="bi bi-info-circle me-1"></i>Custom rules can be added after saving the season.
+      </div>`;
+    }
+
     const rows = customRules.length
       ? customRules.map(r => `<tr>
           <td class="small">${r.rule_label}</td>
@@ -205,7 +255,11 @@ class RulesEditor extends HTMLElement {
   // ── API calls ────────────────────────────────────────────────────────────────
 
   async #saveSystemRule(key, label, value) {
-    if (!this.#seasonId) return;
+    if (!this.#seasonId) {
+      // No season yet — buffer the change; it will be saved by flushPending().
+      this.#pendingRules.set(key, { label, value });
+      return;
+    }
     try {
       await api('POST', `/seasons/${this.#seasonId}/rules`,
         { rule_key: key, rule_label: label, rule_value: String(value) });

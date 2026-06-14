@@ -2,6 +2,7 @@ package logic
 
 import (
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -156,13 +157,21 @@ func maxWeekNum(entries []ScheduleEntry) int {
 // applyByeRequests reorders week assignments so approved bye requests are honoured.
 // For odd-team schedules one team naturally sits out each week; byeByWeek maps a
 // requested week number to the team that should receive that week's natural bye.
-// Works by swapping the week numbers of the two affected rounds in the entry slice.
+//
+// The algorithm builds a full deterministic permutation of week numbers:
+//   1. For each approved request, map the team's natural-bye source week to the
+//      requested destination week.
+//   2. Pair the remaining unclaimed source weeks with the remaining unclaimed
+//      destination weeks in sorted order, preserving relative sequence.
+//
+// This handles independent and chained requests correctly regardless of the
+// non-deterministic iteration order of Go maps.
 func applyByeRequests(entries []ScheduleEntry, byeByWeek map[int]int64) []ScheduleEntry {
 	if len(byeByWeek) == 0 {
 		return entries
 	}
 
-	// Collect the set of all real team IDs in the schedule.
+	// Collect all real team IDs.
 	allTeams := make(map[int64]bool)
 	for _, e := range entries {
 		if e.HomeTeamID != 0 {
@@ -173,7 +182,7 @@ func applyByeRequests(entries []ScheduleEntry, byeByWeek map[int]int64) []Schedu
 		}
 	}
 
-	// For each week, discover which team has the natural bye (not in any match).
+	// Discover which team has the natural bye each week.
 	weekPlaying := make(map[int]map[int64]bool)
 	for _, e := range entries {
 		if weekPlaying[e.WeekNumber] == nil {
@@ -182,49 +191,68 @@ func applyByeRequests(entries []ScheduleEntry, byeByWeek map[int]int64) []Schedu
 		weekPlaying[e.WeekNumber][e.HomeTeamID] = true
 		weekPlaying[e.WeekNumber][e.AwayTeamID] = true
 	}
-	naturalBye := make(map[int]int64) // week → bye team
+	naturalByeWeek := make(map[int64]int) // team → week where it has the natural bye
 	for w, playing := range weekPlaying {
 		for t := range allTeams {
 			if !playing[t] {
-				naturalBye[w] = t
+				naturalByeWeek[t] = w
 				break
 			}
 		}
 	}
 
-	// Build week-swap map to satisfy each approved request.
-	weekRemap := make(map[int]int)
-	for reqWeek, reqTeam := range byeByWeek {
-		if naturalBye[reqWeek] == reqTeam {
-			continue // already correct
+	// All weeks in sorted order for deterministic output.
+	allWeeks := make([]int, 0, len(weekPlaying))
+	for w := range weekPlaying {
+		allWeeks = append(allWeeks, w)
+	}
+	sort.Ints(allWeeks)
+
+	// Sort requests by week so processing order is deterministic.
+	type byeReq struct {
+		week int
+		team int64
+	}
+	reqs := make([]byeReq, 0, len(byeByWeek))
+	for w, t := range byeByWeek {
+		reqs = append(reqs, byeReq{w, t})
+	}
+	sort.Slice(reqs, func(i, j int) bool { return reqs[i].week < reqs[j].week })
+
+	// srcToNew[originalWeek] = newWeek — where each source week's content ends up.
+	srcToNew := make(map[int]int)
+	usedAsNew := make(map[int]bool)
+
+	for _, req := range reqs {
+		srcWeek, ok := naturalByeWeek[req.team]
+		if !ok || usedAsNew[req.week] {
+			continue
 		}
-		// Find a natural-bye week for reqTeam that hasn't already been remapped.
-		srcWeek := 0
-		for w, t := range naturalBye {
-			if t == reqTeam {
-				if _, used := weekRemap[w]; !used {
-					srcWeek = w
-					break
-				}
-			}
-		}
-		if srcWeek == 0 {
-			continue // can't satisfy — skip
-		}
-		weekRemap[reqWeek] = srcWeek
-		weekRemap[srcWeek] = reqWeek
-		// Update naturalBye to reflect the swap for subsequent iterations.
-		old := naturalBye[reqWeek]
-		naturalBye[reqWeek] = reqTeam
-		naturalBye[srcWeek] = old
+		srcToNew[srcWeek] = req.week
+		usedAsNew[req.week] = true
 	}
 
-	if len(weekRemap) == 0 {
-		return entries
+	// Pair remaining unclaimed source weeks with unclaimed destination weeks,
+	// preserving their original relative order.
+	remainingSrc := make([]int, 0, len(allWeeks))
+	for _, w := range allWeeks {
+		if _, claimed := srcToNew[w]; !claimed {
+			remainingSrc = append(remainingSrc, w)
+		}
 	}
+	remainingNew := make([]int, 0, len(allWeeks))
+	for _, w := range allWeeks {
+		if !usedAsNew[w] {
+			remainingNew = append(remainingNew, w)
+		}
+	}
+	for i := range remainingNew {
+		srcToNew[remainingSrc[i]] = remainingNew[i]
+	}
+
 	result := make([]ScheduleEntry, len(entries))
 	for i, e := range entries {
-		if newWeek, ok := weekRemap[e.WeekNumber]; ok {
+		if newWeek, ok := srcToNew[e.WeekNumber]; ok {
 			e.WeekNumber = newWeek
 		}
 		result[i] = e

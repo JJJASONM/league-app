@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -507,8 +508,24 @@ func TestGetSeason_StartDateIsYYYYMMDD(t *testing.T) {
 // seedScheduleFixture creates a league, 3 teams (odd), and one season.
 // Returns (leagueID, seasonID).
 func seedScheduleFixture(t *testing.T, srv *httptest.Server, startDate string) (leagueID, seasonID int64) {
-	leagueID, seasonID, _ = seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	var teamIDs []int64
+	leagueID, seasonID, teamIDs = seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 	return
+}
+
+// ensureSeasonTeams inserts all teamIDs into season_teams via direct DB access.
+// Idempotent (INSERT OR IGNORE). Required for managed seasons before schedule
+// generation or bye validation.
+func ensureSeasonTeams(t *testing.T, seasonID int64, teamIDs []int64) {
+	t.Helper()
+	for _, tid := range teamIDs {
+		if _, err := db.DB.Exec(
+			`INSERT OR IGNORE INTO season_teams (season_id, team_id, season_name)
+			 SELECT ?, id, name FROM teams WHERE id=?`, seasonID, tid); err != nil {
+			t.Fatalf("ensureSeasonTeams: %v", err)
+		}
+	}
 }
 
 // seedScheduleFixtureWithTeams creates a league, the named teams, and one season.
@@ -782,6 +799,7 @@ func TestByeRequest_EvenTeamCountRejected(t *testing.T) {
 	srv := testServer(t)
 	// Two teams = even → bye request must be rejected.
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 	resp := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -797,7 +815,8 @@ func TestByeRequest_EvenTeamCountRejected(t *testing.T) {
 func TestByeRequest_TeamFromAnotherLeagueRejected(t *testing.T) {
 	srv := testServer(t)
 	// Create first league with 3 teams and a season.
-	_, seasonID, _ := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	_, seasonID, teamIDs1 := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs1)
 
 	// Create a second league and team.
 	lg2Resp, _ := http.Post(srv.URL+"/api/leagues", "application/json",
@@ -824,6 +843,7 @@ func TestByeRequest_TeamFromAnotherLeagueRejected(t *testing.T) {
 func TestByeRequest_DuplicateRejected(t *testing.T) {
 	srv := testServer(t)
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 
 	r1 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
 	r1.Body.Close()
@@ -848,6 +868,7 @@ func TestByeRequest_ApprovedHonoredInSchedule(t *testing.T) {
 	//   Week 3: Alpha vs Bravo    (Charlie bye)
 	// Request Charlie's bye moved to week 1.
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 	charlieID := teamIDs[2]
 
 	// Create and approve the bye request.
@@ -879,6 +900,7 @@ func TestByeRequest_UnapprovedIgnoredInSchedule(t *testing.T) {
 	srv := testServer(t)
 	const startDate = "2026-07-06"
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 	charlieID := teamIDs[2]
 
 	// Create but do NOT approve the bye request for week 1.
@@ -897,6 +919,7 @@ func TestByeRequest_NaturalByeNotDuplicated(t *testing.T) {
 	srv := testServer(t)
 	const startDate = "2026-07-06"
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 	charlieID := teamIDs[2]
 
 	r := postByeRequest(t, srv, seasonID, charlieID, 1)
@@ -1035,6 +1058,7 @@ func listByes(t *testing.T, srv *httptest.Server, seasonID int64) []map[string]a
 func TestByeRequest_ConflictPreventsApproval(t *testing.T) {
 	srv := testServer(t)
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 
 	// Approve Alpha for week 1.
 	r1 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
@@ -1077,6 +1101,7 @@ func TestByeRequest_ConflictPreventsApproval(t *testing.T) {
 func TestByeRequest_RejectedApprovalRemainsUnapproved(t *testing.T) {
 	srv := testServer(t)
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 
 	r1 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
 	var b1 map[string]any
@@ -1110,6 +1135,7 @@ func TestByeRequest_RejectedApprovalRemainsUnapproved(t *testing.T) {
 func TestByeRequest_DifferentWeeksCanBothBeApproved(t *testing.T) {
 	srv := testServer(t)
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 
 	r1 := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
 	var b1 map[string]any
@@ -1138,6 +1164,7 @@ func TestByeRequest_DifferentWeeksCanBothBeApproved(t *testing.T) {
 func TestByeRequest_Week0CannotBeApproved(t *testing.T) {
 	srv := testServer(t)
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 
 	r := postByeRequest(t, srv, seasonID, teamIDs[0], 0)
 	var b map[string]any
@@ -1165,6 +1192,7 @@ func TestByeRequest_WrongSeasonUpdateRejected(t *testing.T) {
 
 	// Season 1: 3-team league with a bye request.
 	_, season1ID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, season1ID, teamIDs)
 	r := postByeRequest(t, srv, season1ID, teamIDs[0], 1)
 	var b map[string]any
 	json.NewDecoder(r.Body).Decode(&b)
@@ -1197,6 +1225,7 @@ func TestByeRequest_WrongSeasonDeleteRejected(t *testing.T) {
 	srv := testServer(t)
 
 	_, season1ID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-07-06", "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, season1ID, teamIDs)
 	r := postByeRequest(t, srv, season1ID, teamIDs[0], 1)
 	var b map[string]any
 	json.NewDecoder(r.Body).Decode(&b)
@@ -1244,6 +1273,7 @@ func TestByeRequest_DeterministicScheduleHonorsApproved(t *testing.T) {
 	// Approve Alpha for week 1 (no change); also record Bravo for week 1 (unapproved).
 	// Schedule must still give week 1 to Alpha (the approved one).
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
 	alphaID := teamIDs[0]
 	bravoID := teamIDs[1]
 
@@ -1269,5 +1299,1135 @@ func TestByeRequest_DeterministicScheduleHonorsApproved(t *testing.T) {
 	// Bravo must play (unapproved request ignored).
 	if !teamAppearsInMatches(bravoID, week1) {
 		t.Error("Bravo should play in week 1 (unapproved request ignored)")
+	}
+}
+
+// TestByeRequest_TwoApprovedRequestsDifferentWeeks verifies that two approved
+// bye requests for different weeks are both honoured in the generated schedule.
+// This is the multi-request regression test for the pairwise-swap bug where the
+// second request was silently dropped when the displaced source week had already
+// been used in an earlier swap.
+//
+// 5 teams, single_rr natural byes:
+//
+//	week 1 = Alpha   week 2 = Delta   week 3 = Bravo   week 4 = Echo   week 5 = Charlie
+//
+// Approved: Echo   → week 1  (Echo natural week 4)
+//
+//	Bravo  → week 2  (Bravo natural week 3)
+func TestByeRequest_TwoApprovedRequestsDifferentWeeks(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-07-06"
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate,
+		"Alpha", "Bravo", "Charlie", "Delta", "Echo")
+	ensureSeasonTeams(t, seasonID, teamIDs)
+	echoID := teamIDs[4]
+	bravoID := teamIDs[1]
+
+	// Create and approve Echo for week 1.
+	r1 := postByeRequest(t, srv, seasonID, echoID, 1)
+	var b1 map[string]any
+	json.NewDecoder(r1.Body).Decode(&b1)
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusCreated {
+		t.Fatalf("create Echo bye: want 201, got %d", r1.StatusCode)
+	}
+	resp1 := putByeApproval(t, srv, seasonID, int64(b1["id"].(float64)), true)
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("approve Echo: want 200, got %d", resp1.StatusCode)
+	}
+
+	// Create and approve Bravo for week 2.
+	r2 := postByeRequest(t, srv, seasonID, bravoID, 2)
+	var b2 map[string]any
+	json.NewDecoder(r2.Body).Decode(&b2)
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusCreated {
+		t.Fatalf("create Bravo bye: want 201, got %d", r2.StatusCode)
+	}
+	resp2 := putByeApproval(t, srv, seasonID, int64(b2["id"].(float64)), true)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("approve Bravo: want 200, got %d", resp2.StatusCode)
+	}
+
+	matches := generateAndGetMatches(t, srv, seasonID, startDate, nil)
+
+	// Total: single_rr with 5 teams = 10 matches.
+	if len(matches) != 10 {
+		t.Errorf("total matches: want 10, got %d", len(matches))
+	}
+
+	week1 := matchesInWeek(matches, 1)
+	if len(week1) == 0 {
+		t.Fatal("no matches in week 1")
+	}
+	if teamAppearsInMatches(echoID, week1) {
+		t.Error("Echo should have the week-1 bye but appears in a match")
+	}
+
+	week2 := matchesInWeek(matches, 2)
+	if len(week2) == 0 {
+		t.Fatal("no matches in week 2")
+	}
+	if teamAppearsInMatches(bravoID, week2) {
+		t.Error("Bravo should have the week-2 bye but appears in a match")
+	}
+
+	// Regenerating should produce identical bye assignments (deterministic).
+	matches2 := generateAndGetMatches(t, srv, seasonID, startDate, nil)
+	if teamAppearsInMatches(echoID, matchesInWeek(matches2, 1)) {
+		t.Error("regeneration: Echo should still have week-1 bye")
+	}
+	if teamAppearsInMatches(bravoID, matchesInWeek(matches2, 2)) {
+		t.Error("regeneration: Bravo should still have week-2 bye")
+	}
+}
+
+// ─── Season Teams & Rosters (Phase One) ──────────────────────────────────────
+
+// postSeasonTeamFromID adds an existing team to a draft season via from_team_id.
+func postSeasonTeamFromID(t *testing.T, srv *httptest.Server, seasonID, teamID int64) *http.Response {
+	t.Helper()
+	body := fmt.Sprintf(`{"from_team_id":%d}`, teamID)
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, seasonID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST season team: %v", err)
+	}
+	return resp
+}
+
+// postNewSeasonTeam creates a brand-new team inside a draft season via name.
+func postNewSeasonTeam(t *testing.T, srv *httptest.Server, seasonID int64, name string) *http.Response {
+	t.Helper()
+	body := fmt.Sprintf(`{"name":%q}`, name)
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, seasonID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST new season team: %v", err)
+	}
+	return resp
+}
+
+// postRosterPlayer adds a player to a team's season roster.
+func postRosterPlayer(t *testing.T, srv *httptest.Server, seasonID, teamID, playerID int64) *http.Response {
+	t.Helper()
+	body := fmt.Sprintf(`{"player_id":%d}`, playerID)
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api/seasons/%d/teams/%d/roster", srv.URL, seasonID, teamID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST roster player: %v", err)
+	}
+	return resp
+}
+
+// httpDo sends an arbitrary request; body may be empty.
+func httpDo(t *testing.T, srv *httptest.Server, method, path, body string) *http.Response {
+	t.Helper()
+	var req *http.Request
+	if body != "" {
+		req, _ = http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req, _ = http.NewRequest(method, srv.URL+path, nil)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	return resp
+}
+
+// postActivateSeason POSTs /api/seasons/{id}/activate.
+func postActivateSeason(t *testing.T, srv *httptest.Server, seasonID int64) *http.Response {
+	t.Helper()
+	return httpDo(t, srv, http.MethodPost, fmt.Sprintf("/api/seasons/%d/activate", seasonID), "")
+}
+
+// getChecklist GETs /api/seasons/{id}/checklist and returns the decoded body map.
+func getChecklist(t *testing.T, srv *httptest.Server, seasonID int64) map[string]any {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/checklist", srv.URL, seasonID))
+	if err != nil {
+		t.Fatalf("GET checklist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("checklist: want 200, got %d", resp.StatusCode)
+	}
+	var c map[string]any
+	json.NewDecoder(resp.Body).Decode(&c)
+	return c
+}
+
+// createTestPlayer POSTs a player and returns their ID.
+func createTestPlayer(t *testing.T, srv *httptest.Server, first, last string) int64 {
+	t.Helper()
+	body := fmt.Sprintf(`{"first_name":%q,"last_name":%q,"handicap":0}`, first, last)
+	resp, err := http.Post(srv.URL+"/api/players", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST player: %v", err)
+	}
+	defer resp.Body.Close()
+	var p map[string]any
+	json.NewDecoder(resp.Body).Decode(&p)
+	return int64(p["id"].(float64))
+}
+
+// setPlayerTeam assigns a player to a team directly in the DB (avoids full-PUT field clobber).
+func setPlayerTeam(t *testing.T, playerID, teamID int64) {
+	t.Helper()
+	if _, err := db.DB.Exec(`UPDATE players SET team_id=? WHERE id=?`, teamID, playerID); err != nil {
+		t.Fatalf("setPlayerTeam: %v", err)
+	}
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+func TestSeasonTeams_AddAndList(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, _ := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Managed first season: only the name path is allowed.
+	r := postNewSeasonTeam(t, srv, seasonID, "Gamma")
+	if r.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		t.Fatalf("add team: want 201, got %d — %s", r.StatusCode, body)
+	}
+	var added map[string]any
+	json.NewDecoder(r.Body).Decode(&added)
+	r.Body.Close()
+	addedTeamID := int64(added["team_id"].(float64))
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, seasonID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var teams []map[string]any
+	json.NewDecoder(resp.Body).Decode(&teams)
+	if len(teams) != 1 {
+		t.Fatalf("want 1 season team, got %d", len(teams))
+	}
+	if int64(teams[0]["team_id"].(float64)) != addedTeamID {
+		t.Errorf("team_id: want %d, got %v", addedTeamID, teams[0]["team_id"])
+	}
+}
+
+func TestSeasonTeams_DuplicateRejected(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	// Downgrade to legacy mode so from_team_id works without from_season_id.
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, seasonID)
+
+	r1 := postSeasonTeamFromID(t, srv, seasonID, teamIDs[0])
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusCreated {
+		t.Fatalf("first add: want 201, got %d", r1.StatusCode)
+	}
+
+	r2 := postSeasonTeamFromID(t, srv, seasonID, teamIDs[0])
+	defer r2.Body.Close()
+	if r2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("duplicate add: want 400, got %d", r2.StatusCode)
+	}
+}
+
+func TestSeasonTeams_ActiveSeasonBlocked(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Lock the season by setting activated_at directly in DB (bypasses checklist).
+	// isDraftSeason checks activated_at IS NULL, so this simulates first activation.
+	if _, err := db.DB.Exec(
+		`UPDATE seasons SET active=1, activated_at=CURRENT_TIMESTAMP WHERE id=?`, seasonID); err != nil {
+		t.Fatalf("set activated_at: %v", err)
+	}
+
+	r := postSeasonTeamFromID(t, srv, seasonID, teamIDs[0])
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("add team to active season: want 422, got %d", r.StatusCode)
+	}
+}
+
+func TestSeasonRoster_AddAndList(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+
+	pID := createTestPlayer(t, srv, "Alice", "Smith")
+	setPlayerTeam(t, pID, teamIDs[0])
+
+	rr := postRosterPlayer(t, srv, seasonID, teamIDs[0], pID)
+	defer rr.Body.Close()
+	if rr.StatusCode != http.StatusCreated {
+		t.Fatalf("add roster player: want 201, got %d", rr.StatusCode)
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/teams/%d/roster", srv.URL, seasonID, teamIDs[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var roster []map[string]any
+	json.NewDecoder(resp.Body).Decode(&roster)
+	if len(roster) != 1 {
+		t.Fatalf("want 1 roster entry, got %d", len(roster))
+	}
+	if int64(roster[0]["player_id"].(float64)) != pID {
+		t.Errorf("player_id: want %d, got %v", pID, roster[0]["player_id"])
+	}
+}
+
+func TestSeasonRoster_DuplicateOnOtherTeamRejected(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, seasonID, teamIDs)
+
+	pID := createTestPlayer(t, srv, "Bob", "Jones")
+	setPlayerTeam(t, pID, teamIDs[0])
+
+	postRosterPlayer(t, srv, seasonID, teamIDs[0], pID).Body.Close()
+
+	// Same player on a different team must be rejected.
+	rr2 := postRosterPlayer(t, srv, seasonID, teamIDs[1], pID)
+	defer rr2.Body.Close()
+	if rr2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("cross-team duplicate: want 400, got %d", rr2.StatusCode)
+	}
+}
+
+func TestSeasonRoster_ActiveSeasonBlocked(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Lock the season by setting activated_at directly in DB (bypasses checklist).
+	// isDraftSeason checks activated_at IS NULL, so this simulates first activation.
+	if _, err := db.DB.Exec(
+		`UPDATE seasons SET active=1, activated_at=CURRENT_TIMESTAMP WHERE id=?`, seasonID); err != nil {
+		t.Fatalf("set activated_at: %v", err)
+	}
+
+	// Add team directly in DB (activated season cannot be modified via API).
+	if _, err := db.DB.Exec(
+		`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Alpha')`,
+		seasonID, teamIDs[0]); err != nil {
+		t.Fatalf("seed season_teams: %v", err)
+	}
+	pID := createTestPlayer(t, srv, "Carol", "Lee")
+	setPlayerTeam(t, pID, teamIDs[0])
+
+	rr := postRosterPlayer(t, srv, seasonID, teamIDs[0], pID)
+	defer rr.Body.Close()
+	if rr.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("roster add to active season: want 422, got %d", rr.StatusCode)
+	}
+}
+
+func TestSeasonTeams_RemoveTeam_ClearsRoster(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+	pID := createTestPlayer(t, srv, "Dan", "Brown")
+	setPlayerTeam(t, pID, teamIDs[0])
+	postRosterPlayer(t, srv, seasonID, teamIDs[0], pID).Body.Close()
+
+	del := httpDo(t, srv, http.MethodDelete,
+		fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, teamIDs[0]), "")
+	del.Body.Close()
+	if del.StatusCode != http.StatusOK {
+		t.Fatalf("delete season team: want 200, got %d", del.StatusCode)
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/teams/%d/roster", srv.URL, seasonID, teamIDs[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var roster []map[string]any
+	json.NewDecoder(resp.Body).Decode(&roster)
+	if len(roster) != 0 {
+		t.Errorf("roster after team removal: want 0, got %d", len(roster))
+	}
+}
+
+func TestSeasonTeams_UpdateCaptain(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+	pID := createTestPlayer(t, srv, "Eve", "Green")
+	setPlayerTeam(t, pID, teamIDs[0])
+	postRosterPlayer(t, srv, seasonID, teamIDs[0], pID).Body.Close()
+
+	body := fmt.Sprintf(`{"season_name":"Alpha A","captain_id":%d}`, pID)
+	upd := httpDo(t, srv, http.MethodPut,
+		fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, teamIDs[0]), body)
+	defer upd.Body.Close()
+	if upd.StatusCode != http.StatusOK {
+		t.Fatalf("update captain: want 200, got %d", upd.StatusCode)
+	}
+
+	var st map[string]any
+	json.NewDecoder(upd.Body).Decode(&st)
+	if int64(st["captain_id"].(float64)) != pID {
+		t.Errorf("captain_id: want %d, got %v", pID, st["captain_id"])
+	}
+}
+
+func TestSeasonTeams_UpdateCaptainNotOnRosterRejected(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+	// Player is created but NOT added to season roster.
+	pID := createTestPlayer(t, srv, "Frank", "White")
+	setPlayerTeam(t, pID, teamIDs[0])
+
+	body := fmt.Sprintf(`{"season_name":"Alpha","captain_id":%d}`, pID)
+	upd := httpDo(t, srv, http.MethodPut,
+		fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, teamIDs[0]), body)
+	defer upd.Body.Close()
+	if upd.StatusCode != http.StatusBadRequest {
+		t.Fatalf("captain not on roster: want 400, got %d", upd.StatusCode)
+	}
+}
+
+func TestSeasonTeams_CopyFromPriorWithRoster(t *testing.T) {
+	srv := testServer(t)
+	leagueID, prevSeasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, prevSeasonID, []int64{teamIDs[0]})
+	pID := createTestPlayer(t, srv, "Grace", "Hall")
+	setPlayerTeam(t, pID, teamIDs[0])
+	postRosterPlayer(t, srv, prevSeasonID, teamIDs[0], pID).Body.Close()
+
+	// Give the prior season an end_date so PreviousSeason can find it (correction 6).
+	if _, err := db.DB.Exec(`UPDATE seasons SET end_date='2026-09-30' WHERE id=?`, prevSeasonID); err != nil {
+		t.Fatalf("set end_date: %v", err)
+	}
+
+	// Create a new season in the same league.
+	s2Resp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Fall 2026","start_date":"2026-10-01"}`, leagueID)))
+	var s2 map[string]any
+	json.NewDecoder(s2Resp.Body).Decode(&s2)
+	s2Resp.Body.Close()
+	newSeasonID := int64(s2["id"].(float64))
+
+	// Copy team from prior season, preserving roster.
+	cpBody := fmt.Sprintf(`{"from_team_id":%d,"from_season_id":%d}`, teamIDs[0], prevSeasonID)
+	cp, _ := http.Post(fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, newSeasonID),
+		"application/json", strings.NewReader(cpBody))
+	cp.Body.Close()
+	if cp.StatusCode != http.StatusCreated {
+		t.Fatalf("copy team: want 201, got %d", cp.StatusCode)
+	}
+
+	rosterResp, _ := http.Get(
+		fmt.Sprintf("%s/api/seasons/%d/teams/%d/roster", srv.URL, newSeasonID, teamIDs[0]))
+	defer rosterResp.Body.Close()
+	var roster []map[string]any
+	json.NewDecoder(rosterResp.Body).Decode(&roster)
+
+	found := false
+	for _, e := range roster {
+		if int64(e["player_id"].(float64)) == pID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("copied roster must contain player %d; got %v", pID, roster)
+	}
+}
+
+func TestSeasonTeams_MarkStaleWhenMatchesExist(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-09-01"
+	_, seasonID := seedScheduleFixture(t, srv, startDate)
+
+	// Generate schedule (sets schedule_stale=0).
+	generateAndGetMatches(t, srv, seasonID, startDate, nil)
+
+	sResp, _ := http.Get(fmt.Sprintf("%s/api/seasons/%d", srv.URL, seasonID))
+	var s1 map[string]any
+	json.NewDecoder(sResp.Body).Decode(&s1)
+	sResp.Body.Close()
+	if s1["schedule_stale"].(bool) {
+		t.Fatal("schedule_stale should be false immediately after generation")
+	}
+
+	// Add a new team — unplayed matches exist so stale flag must be set.
+	postNewSeasonTeam(t, srv, seasonID, "Delta").Body.Close()
+
+	sResp2, _ := http.Get(fmt.Sprintf("%s/api/seasons/%d", srv.URL, seasonID))
+	var s2 map[string]any
+	json.NewDecoder(sResp2.Body).Decode(&s2)
+	sResp2.Body.Close()
+	if !s2["schedule_stale"].(bool) {
+		t.Error("schedule_stale must be true after adding a team when unplayed matches exist")
+	}
+}
+
+// TestSeasonChecklist_LegacySeason_CanActivate verifies correction 2:
+// a season with teams_managed=0 (legacy) bypasses all checklist enforcement.
+// The season is created via API (teams_managed=1) then downgraded in the DB
+// to simulate a pre-Phase-One record.
+func TestSeasonChecklist_LegacySeason_CanActivate(t *testing.T) {
+	srv := testServer(t)
+	sid := seedSeason(t, srv.URL)
+
+	// Downgrade to legacy mode (simulates seasons created before Phase One).
+	if _, err := db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, sid); err != nil {
+		t.Fatalf("set teams_managed=0: %v", err)
+	}
+
+	c := getChecklist(t, srv, sid)
+	if canActivate, _ := c["can_activate"].(bool); !canActivate {
+		t.Errorf("legacy season: want can_activate=true; got %v", c)
+	}
+	blockers, _ := c["blockers"].([]any)
+	if len(blockers) != 0 {
+		t.Errorf("legacy season: want no blockers, got %v", blockers)
+	}
+}
+
+// TestSeasonChecklist_ManagedNoTeams_BlocksTooFew verifies correction 1:
+// a managed season (teams_managed=1, set by createSeason) with no teams
+// returns TEAMS_TOO_FEW and cannot activate.
+func TestSeasonChecklist_ManagedNoTeams_BlocksTooFew(t *testing.T) {
+	srv := testServer(t)
+	sid := seedSeason(t, srv.URL)
+	// sid was created via API → teams_managed=1; no teams added yet.
+
+	c := getChecklist(t, srv, sid)
+	if canActivate, _ := c["can_activate"].(bool); canActivate {
+		t.Error("managed season with no teams: want can_activate=false")
+	}
+	blockers, _ := c["blockers"].([]any)
+	found := false
+	for _, b := range blockers {
+		bm := b.(map[string]any)
+		if bm["code"].(string) == "TEAMS_TOO_FEW" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected TEAMS_TOO_FEW blocker; got: %v", blockers)
+	}
+}
+
+func TestSeasonChecklist_TwoTeamsNoSchedule_Blocked(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, seasonID, teamIDs)
+
+	// One player per team on roster, set as captain.
+	for i, tid := range teamIDs {
+		pID := createTestPlayer(t, srv, fmt.Sprintf("P%d", i), "Tester")
+		setPlayerTeam(t, pID, tid)
+		postRosterPlayer(t, srv, seasonID, tid, pID).Body.Close()
+		httpDo(t, srv, http.MethodPut,
+			fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, tid),
+			fmt.Sprintf(`{"season_name":"Team%d","captain_id":%d}`, i, pID)).Body.Close()
+	}
+
+	c := getChecklist(t, srv, seasonID)
+	if canActivate, _ := c["can_activate"].(bool); canActivate {
+		t.Errorf("no schedule generated: want can_activate=false; got %v", c)
+	}
+
+	blockers, _ := c["blockers"].([]any)
+	found := false
+	for _, b := range blockers {
+		bm := b.(map[string]any)
+		if bm["code"].(string) == "NO_SCHEDULE" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected NO_SCHEDULE blocker; got: %v", blockers)
+	}
+}
+
+func TestSeasonChecklist_AllGood_CanActivate(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, seasonID, teamIDs)
+
+	for i, tid := range teamIDs {
+		pID := createTestPlayer(t, srv, fmt.Sprintf("Q%d", i), "Ready")
+		setPlayerTeam(t, pID, tid)
+		postRosterPlayer(t, srv, seasonID, tid, pID).Body.Close()
+		httpDo(t, srv, http.MethodPut,
+			fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, tid),
+			fmt.Sprintf(`{"season_name":"T%d","captain_id":%d}`, i, pID)).Body.Close()
+	}
+
+	// Generate a schedule (2 teams, 1 match).
+	genBody := fmt.Sprintf(`{"season_id":%d,"start_date":"2026-09-01","schedule_type":"single_rr"}`, seasonID)
+	genResp, err := http.Post(srv.URL+"/api/matches/generate", "application/json", strings.NewReader(genBody))
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	genResp.Body.Close()
+	if genResp.StatusCode != http.StatusOK {
+		t.Fatalf("generate: want 200, got %d", genResp.StatusCode)
+	}
+
+	c := getChecklist(t, srv, seasonID)
+	if canActivate, _ := c["can_activate"].(bool); !canActivate {
+		t.Errorf("happy path: want can_activate=true; checklist: %v", c)
+	}
+	blockers, _ := c["blockers"].([]any)
+	if len(blockers) != 0 {
+		t.Errorf("happy path: want no blockers, got %v", blockers)
+	}
+}
+
+func TestActivateSeason_BlockedByChecklist(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// One team only → TEAMS_TOO_FEW; no players → TEAM_NO_PLAYERS; no schedule → NO_SCHEDULE.
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+
+	act := postActivateSeason(t, srv, seasonID)
+	defer act.Body.Close()
+	if act.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("activate with blockers: want 422, got %d", act.StatusCode)
+	}
+
+	var body map[string]any
+	json.NewDecoder(act.Body).Decode(&body)
+	blockers, _ := body["blockers"].([]any)
+	if len(blockers) == 0 {
+		t.Error("expected blockers array in 422 response body")
+	}
+}
+
+func TestAvailablePlayers_ExcludesRostered(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+
+	p1 := createTestPlayer(t, srv, "Karl", "One")
+	p2 := createTestPlayer(t, srv, "Lara", "Two")
+	setPlayerTeam(t, p1, teamIDs[0])
+	setPlayerTeam(t, p2, teamIDs[0])
+
+	// Roster p1 only; p2 remains unrostered.
+	postRosterPlayer(t, srv, seasonID, teamIDs[0], p1).Body.Close()
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/players/available", srv.URL, seasonID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var players []map[string]any
+	json.NewDecoder(resp.Body).Decode(&players)
+
+	foundP1, foundP2 := false, false
+	for _, p := range players {
+		pid := int64(p["id"].(float64))
+		if pid == p1 {
+			foundP1 = true
+		}
+		if pid == p2 {
+			foundP2 = true
+		}
+	}
+	if foundP1 {
+		t.Error("rostered player must not appear in available list")
+	}
+	if !foundP2 {
+		t.Error("unrostered player must appear in available list")
+	}
+}
+
+func TestPreviousSeason_ReturnsNilWhenNoPrior(t *testing.T) {
+	srv := testServer(t)
+	sid := seedSeason(t, srv.URL)
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/previous", srv.URL, sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["season"] != nil {
+		t.Errorf("want null season when no prior exists, got %v", body["season"])
+	}
+	teams, _ := body["teams"].([]any)
+	if len(teams) != 0 {
+		t.Errorf("want empty teams list, got %d items", len(teams))
+	}
+}
+
+func TestPreviousSeason_ReturnsTeamsFromSeasonTeams(t *testing.T) {
+	srv := testServer(t)
+	leagueID, prevSeasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Register both teams in the prior season.
+	ensureSeasonTeams(t, prevSeasonID, teamIDs)
+
+	// Give the prior season an end_date so it qualifies as a previous season.
+	if _, err := db.DB.Exec(`UPDATE seasons SET end_date='2026-09-30' WHERE id=?`, prevSeasonID); err != nil {
+		t.Fatalf("set end_date: %v", err)
+	}
+
+	// Create a newer season.
+	s2Resp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(
+			`{"league_id":%d,"name":"Fall 2026","start_date":"2026-10-01"}`, leagueID)))
+	var s2 map[string]any
+	json.NewDecoder(s2Resp.Body).Decode(&s2)
+	s2Resp.Body.Close()
+	newSeasonID := int64(s2["id"].(float64))
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/previous", srv.URL, newSeasonID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["season"] == nil {
+		t.Fatal("want a previous season, got null")
+	}
+	teams, _ := body["teams"].([]any)
+	if len(teams) != 2 {
+		t.Errorf("want 2 prior teams, got %d", len(teams))
+	}
+}
+
+func TestSaveRounds_BlockedByInsufficientRoster(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Add both teams to season (enables roster enforcement).
+	ensureSeasonTeams(t, seasonID, teamIDs)
+
+	// Add 1 player per team (below the 3-player minimum).
+	for i, tid := range teamIDs {
+		pID := createTestPlayer(t, srv, fmt.Sprintf("Rnd%d", i), "Player")
+		setPlayerTeam(t, pID, tid)
+		postRosterPlayer(t, srv, seasonID, tid, pID).Body.Close()
+	}
+
+	// Insert a match directly so we have a match ID to target.
+	res, err := db.DB.Exec(
+		`INSERT INTO matches (season_id, home_team_id, away_team_id, match_date, week_number)
+		 VALUES (?,?,?,?,?)`,
+		seasonID, teamIDs[0], teamIDs[1], "2026-09-01", 1)
+	if err != nil {
+		t.Fatalf("insert match: %v", err)
+	}
+	matchID, _ := res.LastInsertId()
+
+	rr := httpDo(t, srv, http.MethodPost,
+		fmt.Sprintf("/api/matches/%d/rounds", matchID), `{"rounds":[]}`)
+	defer rr.Body.Close()
+	if rr.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("insufficient roster: want 422, got %d", rr.StatusCode)
+	}
+
+	var errBody map[string]string
+	json.NewDecoder(rr.Body).Decode(&errBody)
+	if errBody["error"] == "" {
+		t.Error("expected non-empty error message in 422 body")
+	}
+}
+
+// ─── Correction regression tests ─────────────────────────────────────────────
+
+// TestSeasonActivated_SetupLockedPersistently verifies correction 3:
+// activated_at is set once on first activation. Simulating a second season
+// becoming active (deactivating the first) must NOT re-enable setup on the
+// first season — isDraftSeason checks activated_at, not active.
+func TestSeasonActivated_SetupLockedPersistently(t *testing.T) {
+	srv := testServer(t)
+	leagueID, s1ID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Lock season 1 via DB (teams_managed=1 so API activation would need teams).
+	db.DB.Exec(`UPDATE seasons SET active=1, activated_at=CURRENT_TIMESTAMP WHERE id=?`, s1ID)
+
+	// Create season 2 and activate it (demotes s1 to active=0).
+	s2Resp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"S2","start_date":"2027-01-01"}`, leagueID)))
+	var s2 map[string]any
+	json.NewDecoder(s2Resp.Body).Decode(&s2)
+	s2Resp.Body.Close()
+	s2ID := int64(s2["id"].(float64))
+
+	// Set s2 active via DB (it has teams_managed=1 but no teams → checklist blocks API activate).
+	db.DB.Exec(`UPDATE seasons SET active=0 WHERE league_id=?`, leagueID)
+	db.DB.Exec(`UPDATE seasons SET active=1, activated_at=CURRENT_TIMESTAMP WHERE id=?`, s2ID)
+
+	// Now season 1 has active=0 but activated_at is still set.
+	// Adding a team to season 1 must still be rejected.
+	r := postSeasonTeamFromID(t, srv, s1ID, teamIDs[0])
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("add team to locked (deactivated) season: want 422, got %d", r.StatusCode)
+	}
+}
+
+// TestAvailablePlayers_IncludesUnassigned verifies correction 4:
+// players with no team_id (unassigned to any team) appear in available players.
+func TestAvailablePlayers_IncludesUnassigned(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	postSeasonTeamFromID(t, srv, seasonID, teamIDs[0]).Body.Close()
+
+	// Create a player with no team assigned.
+	pUnassigned := createTestPlayer(t, srv, "Zara", "Solo")
+	// pUnassigned has no team_id (created via API, no team_id in body).
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/players/available", srv.URL, seasonID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var players []map[string]any
+	json.NewDecoder(resp.Body).Decode(&players)
+
+	found := false
+	for _, p := range players {
+		if int64(p["id"].(float64)) == pUnassigned {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("unassigned player %d must appear in available list; got %d players", pUnassigned, len(players))
+	}
+}
+
+// TestAvailablePlayers_IncludesCrossLeague verifies correction 4:
+// players assigned to a team in a different league appear in available players.
+func TestAvailablePlayers_IncludesCrossLeague(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, _ := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Create a second league with a team and a player.
+	lg2Resp, _ := http.Post(srv.URL+"/api/leagues", "application/json",
+		strings.NewReader(`{"name":"Other League","game_format":"8ball"}`))
+	var lg2 map[string]any
+	json.NewDecoder(lg2Resp.Body).Decode(&lg2)
+	lg2Resp.Body.Close()
+	lg2ID := int64(lg2["id"].(float64))
+
+	tm2Resp, _ := http.Post(srv.URL+"/api/teams", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Outsiders"}`, lg2ID)))
+	var tm2 map[string]any
+	json.NewDecoder(tm2Resp.Body).Decode(&tm2)
+	tm2Resp.Body.Close()
+	otherTeamID := int64(tm2["id"].(float64))
+
+	pCrossLeague := createTestPlayer(t, srv, "Cross", "Player")
+	setPlayerTeam(t, pCrossLeague, otherTeamID)
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/players/available", srv.URL, seasonID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var players []map[string]any
+	json.NewDecoder(resp.Body).Decode(&players)
+
+	found := false
+	for _, p := range players {
+		if int64(p["id"].(float64)) == pCrossLeague {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("cross-league player %d must appear in available list; got %v players", pCrossLeague, len(players))
+	}
+}
+
+// TestSeasonTeams_FromSeasonID_MustBePreviousSeason verifies correction 5:
+// from_season_id must be the immediately previous season, not just any season.
+func TestSeasonTeams_FromSeasonID_MustBePreviousSeason(t *testing.T) {
+	srv := testServer(t)
+	leagueID, olderSeasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-01-01", "Alpha", "Bravo")
+
+	// Register team in older season.
+	postSeasonTeamFromID(t, srv, olderSeasonID, teamIDs[0]).Body.Close()
+	db.DB.Exec(`UPDATE seasons SET end_date='2026-06-01' WHERE id=?`, olderSeasonID)
+
+	// Create a middle season (not the draft) with its own end_date.
+	s2Resp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Middle","start_date":"2026-07-01"}`, leagueID)))
+	var s2m map[string]any
+	json.NewDecoder(s2Resp.Body).Decode(&s2m)
+	s2Resp.Body.Close()
+	middleSeasonID := int64(s2m["id"].(float64))
+	db.DB.Exec(`UPDATE seasons SET end_date='2026-12-31' WHERE id=?`, middleSeasonID)
+
+	// Create the draft season (start_date after middle).
+	draftResp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Draft","start_date":"2027-01-01"}`, leagueID)))
+	var draftS map[string]any
+	json.NewDecoder(draftResp.Body).Decode(&draftS)
+	draftResp.Body.Close()
+	draftSeasonID := int64(draftS["id"].(float64))
+
+	// Try to copy using the OLDER season (not the immediately previous one).
+	cpBody := fmt.Sprintf(`{"from_team_id":%d,"from_season_id":%d}`, teamIDs[0], olderSeasonID)
+	cp, _ := http.Post(fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, draftSeasonID),
+		"application/json", strings.NewReader(cpBody))
+	cp.Body.Close()
+	if cp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("non-prior from_season_id: want 400, got %d", cp.StatusCode)
+	}
+}
+
+// TestSeasonTeams_FromSeasonID_TeamNotInPrevSeason_Rejected verifies correction 5:
+// the team must have participated in the previous season.
+func TestSeasonTeams_FromSeasonID_TeamNotInPrevSeason_Rejected(t *testing.T) {
+	srv := testServer(t)
+	leagueID, prevSeasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// prevSeason has NO season_teams rows for teamIDs[0] — it was managed (created via API).
+	db.DB.Exec(`UPDATE seasons SET end_date='2026-09-30' WHERE id=?`, prevSeasonID)
+
+	// Create draft season.
+	draftResp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Draft","start_date":"2026-10-01"}`, leagueID)))
+	var draftS map[string]any
+	json.NewDecoder(draftResp.Body).Decode(&draftS)
+	draftResp.Body.Close()
+	draftSeasonID := int64(draftS["id"].(float64))
+
+	// Copy with from_season_id = prevSeason, but team is NOT in prevSeason's season_teams.
+	cpBody := fmt.Sprintf(`{"from_team_id":%d,"from_season_id":%d}`, teamIDs[0], prevSeasonID)
+	cp, _ := http.Post(fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, draftSeasonID),
+		"application/json", strings.NewReader(cpBody))
+	cp.Body.Close()
+	if cp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("team not in prev season: want 400, got %d", cp.StatusCode)
+	}
+}
+
+// TestSeasonRosters_DbLevelEnforcementTriggered verifies correction 7:
+// inserting into season_rosters without a matching season_teams row is blocked
+// at the database level by the trigger.
+func TestSeasonRosters_DbLevelEnforcementTriggered(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	pID := createTestPlayer(t, srv, "Trigger", "Test")
+
+	// Insert directly into season_rosters WITHOUT adding the team to season_teams first.
+	_, err := db.DB.Exec(
+		`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+		seasonID, teamIDs[0], pID)
+	if err == nil {
+		t.Fatal("expected trigger to reject insert into season_rosters without season_teams row")
+	}
+}
+
+// TestSeasonRosters_DbLevelEnforcementAllowsValid verifies correction 7:
+// inserting into season_rosters WITH a matching season_teams row succeeds.
+func TestSeasonRosters_DbLevelEnforcementAllowsValid(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Add the team to season_teams first (satisfies trigger condition).
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+
+	pID := createTestPlayer(t, srv, "Valid", "Insert")
+
+	// Insert directly into season_rosters WITH a matching season_teams row.
+	_, err := db.DB.Exec(
+		`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+		seasonID, teamIDs[0], pID)
+	if err != nil {
+		t.Fatalf("trigger should allow valid insert: %v", err)
+	}
+}
+
+// ─── Regression tests: corrections 1–4 ───────────────────────────────────────
+
+// TestCreateSeason_ResponseHasTeamsManagedTrue verifies that createSeason returns
+// teams_managed=true immediately, matching the persisted value (correction 4).
+func TestCreateSeason_ResponseHasTeamsManagedTrue(t *testing.T) {
+	srv := testServer(t)
+	lgResp, _ := http.Post(srv.URL+"/api/leagues", "application/json",
+		strings.NewReader(`{"name":"Test League","game_format":"8ball"}`))
+	var lg map[string]any
+	json.NewDecoder(lgResp.Body).Decode(&lg)
+	lgResp.Body.Close()
+
+	sResp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Spring 2026"}`, int64(lg["id"].(float64)))))
+	defer sResp.Body.Close()
+	if sResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create season: want 201, got %d", sResp.StatusCode)
+	}
+	var s map[string]any
+	json.NewDecoder(sResp.Body).Decode(&s)
+	if tm, _ := s["teams_managed"].(bool); !tm {
+		t.Errorf("create season response: want teams_managed=true, got %v", s["teams_managed"])
+	}
+}
+
+// TestScheduleGenerate_ManagedNoTeams_Rejected verifies that schedule generation
+// returns 400 for a managed season with no season_teams (correction 1).
+func TestScheduleGenerate_ManagedNoTeams_Rejected(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-09-01"
+	// seedScheduleFixtureWithTeams creates a managed season but does NOT register season_teams.
+	_, seasonID, _ := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+
+	body := fmt.Sprintf(`{"season_id":%d,"start_date":%q,"schedule_type":"single_rr"}`, seasonID, startDate)
+	resp, err := http.Post(srv.URL+"/api/matches/generate", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /matches/generate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("managed+no teams: want 400, got %d", resp.StatusCode)
+	}
+	var errBody map[string]string
+	json.NewDecoder(resp.Body).Decode(&errBody)
+	if errBody["error"] == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+// TestByeRequest_ManagedNoTeams_RejectsDespiteLeagueTeams verifies that bye
+// validation uses season_teams count for managed seasons even when the league
+// has odd teams (correction 2). A managed season with 0 season_teams has an
+// even (0) participating count and must reject bye requests.
+func TestByeRequest_ManagedNoTeams_RejectsDespiteLeagueTeams(t *testing.T) {
+	srv := testServer(t)
+	// 3 league teams (odd) but none registered in season_teams.
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo", "Charlie")
+
+	resp := postByeRequest(t, srv, seasonID, teamIDs[0], 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("managed+no season_teams: want 400, got %d", resp.StatusCode)
+	}
+	var errBody map[string]string
+	json.NewDecoder(resp.Body).Decode(&errBody)
+	if errBody["error"] == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+// TestSeasonTeams_ManagedRequiresFromSeasonIdAlways verifies that from_team_id
+// always requires from_season_id in managed seasons, regardless of whether a
+// prior season exists (correction 3).
+func TestSeasonTeams_ManagedRequiresFromSeasonIdAlways(t *testing.T) {
+	srv := testServer(t)
+	_, prevSeasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	// Give the previous season an end_date so PreviousSeason can find it.
+	db.DB.Exec(`UPDATE seasons SET end_date='2026-12-31' WHERE id=?`, prevSeasonID)
+
+	// Create a new draft season in the same league.
+	var leagueID int64
+	db.DB.QueryRow(`SELECT league_id FROM seasons WHERE id=?`, prevSeasonID).Scan(&leagueID)
+	sResp, _ := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"Next Season","start_date":"2027-01-10"}`, leagueID)))
+	var newSeason map[string]any
+	json.NewDecoder(sResp.Body).Decode(&newSeason)
+	sResp.Body.Close()
+	newSeasonID := int64(newSeason["id"].(float64))
+
+	// Attempt to add team without from_season_id → must be rejected.
+	body := fmt.Sprintf(`{"from_team_id":%d}`, teamIDs[0])
+	resp, _ := http.Post(fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, newSeasonID),
+		"application/json", strings.NewReader(body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("managed+prior season+no from_season_id: want 400, got %d", resp.StatusCode)
+	}
+}
+
+
+// TestSeasonTeams_ManagedFirstSeason_FromTeamIdRejected verifies that from_team_id
+// is rejected for a managed season even when no prior season exists; the only
+// allowed path for first-season team creation is the name field (correction 3).
+func TestSeasonTeams_ManagedFirstSeason_FromTeamIdRejected(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	// No prior season exists; from_team_id must still be rejected for managed seasons.
+	body := fmt.Sprintf(`{"from_team_id":%d}`, teamIDs[0])
+	resp, _ := http.Post(fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, seasonID),
+		"application/json", strings.NewReader(body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("managed first season+from_team_id: want 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestScheduleGenerate_ManagedRejectsFromSeasonId verifies that schedule generation
+// rejects a nonzero from_season_id for managed seasons; prior-season inference is
+// legacy-only (correction 1).
+func TestScheduleGenerate_ManagedRejectsFromSeasonId(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-09-01"
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, startDate, "Alpha", "Bravo", "Charlie")
+	ensureSeasonTeams(t, seasonID, teamIDs)
+
+	body := fmt.Sprintf(
+		`{"season_id":%d,"start_date":%q,"schedule_type":"single_rr","from_season_id":999}`,
+		seasonID, startDate)
+	resp, err := http.Post(srv.URL+"/api/matches/generate", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /matches/generate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("managed+from_season_id: want 400, got %d", resp.StatusCode)
+	}
+	var errBody map[string]string
+	json.NewDecoder(resp.Body).Decode(&errBody)
+	if errBody["error"] == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+// TestByeRequest_ManagedTeamNotInSeasonTeams_Rejected verifies that a bye request
+// for a team that belongs to the league but is not registered in season_teams is
+// rejected for managed seasons (correction 2).
+func TestByeRequest_ManagedTeamNotInSeasonTeams_Rejected(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo", "Charlie")
+	// Register only Alpha and Bravo; Charlie is in the league but not in season_teams.
+	ensureSeasonTeams(t, seasonID, teamIDs[:2])
+
+	// Charlie is not registered — bye request must be rejected.
+	resp := postByeRequest(t, srv, seasonID, teamIDs[2], 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("team not in season_teams: want 400, got %d", resp.StatusCode)
+	}
+	var errBody map[string]string
+	json.NewDecoder(resp.Body).Decode(&errBody)
+	if errBody["error"] == "" {
+		t.Error("expected non-empty error message")
 	}
 }

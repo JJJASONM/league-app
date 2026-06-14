@@ -42,8 +42,37 @@ specific league week. They apply only to seasons with an **odd number of teams**
 ### Schedule application
 
 `logic.ScheduleOptions.ByeByWeek` (map[week→teamID]) carries approved byes
-into `assignDates`. `applyByeRequests` builds a week-swap table and remaps
-`WeekNumber` on each `ScheduleEntry` before dates are assigned.
+into `assignDates`. `applyByeRequests` builds a full week permutation so that
+every approved request is honored simultaneously, not sequentially. Requests are
+sorted by week before processing to produce deterministic output regardless of
+Go map iteration order. The algorithm:
+
+1. Builds `naturalByeWeek` (teamID → week) from the generated schedule.
+2. Sorts all approved requests by week number.
+3. For each request, maps the team's natural bye week (`srcToNew[naturalWeek] = requestedWeek`),
+   marking the target week as used.
+4. Pairs remaining unclaimed source weeks with remaining unclaimed target weeks
+   (both sorted) to form a complete bijection.
+5. Applies the permutation to every `ScheduleEntry.WeekNumber`.
+
+Requests that cannot be satisfied (team has no natural bye, or the target week
+is already claimed by an earlier request) are silently skipped.
+
+## Schedule Visibility
+
+The user-facing **Schedule** page shows only the active season's schedule. No
+season selector is shown; when no season is active a clear empty-state message
+is displayed instead.
+
+Draft-season schedules remain accessible through **Seasons → Manage**. Admins
+can generate, preview, and adjust a draft schedule from there before activating
+the season. When navigating from Seasons → Manage to the Schedule view (e.g.,
+via "Go to Schedule"), `populateScheduleSeasonSelect(previewSeasonId)` is called
+with the target season ID so the admin sees that specific season — even if it is
+not yet active.
+
+This separation keeps the public-facing schedule clean while allowing full
+pre-activation workflow on draft seasons.
 
 ## No Play Weeks
 
@@ -106,6 +135,23 @@ be recorded but approval is rejected until the existing one is withdrawn.
 Week 0 (TBD) requests cannot be approved — a specific week is required before
 schedule generation can honor the request. Scope (season_id) is enforced on
 both update and delete to prevent cross-season mutations.
+
+### 2026-06-10 - Schedule page shows active season only
+
+**Status:** `accepted`
+
+The user-facing Schedule page is filtered to the active season. Draft seasons
+are managed through Seasons → Manage. Admin preview of a draft schedule is
+available via the Seasons → Manage detail panel.
+
+### 2026-06-10 - Full permutation for bye requests
+
+**Status:** `accepted`
+
+`applyByeRequests` uses a bijective week permutation instead of pairwise swaps.
+This ensures all compatible approved bye requests are honored when multiple
+requests affect different weeks in the same season. Requests are sorted before
+processing to guarantee deterministic output.
 
 ### 2026-06-08 - Shift entire league weeks
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy Staging"
+  short_description: "Deploy and seed League App staging safely"
+  default_prompt: "Use $deploy-staging to deploy League App to the IIS staging environment."
