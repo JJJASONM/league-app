@@ -1,5 +1,7 @@
 # Pool League Manager
 
+Pool league management app for seasons, teams, rosters, schedules, and scoring.
+
 A self-contained Go application for managing a pool league. It runs a local web
 server, opens the browser automatically, stores league data in SQLite, and
 serves an embedded Bootstrap web UI.
