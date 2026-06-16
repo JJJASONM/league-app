@@ -2267,7 +2267,116 @@ func TestSeasonRosters_DbLevelEnforcementAllowsValid(t *testing.T) {
 	}
 }
 
-// ─── Regression tests: corrections 1–4 ───────────────────────────────────────
+// TestSeasonRoster_IncludesPlayerNumber verifies that GET /api/seasons/{id}/teams/{tid}/roster
+// returns player_number for players that have one set.
+func TestSeasonRoster_IncludesPlayerNumber(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	ensureSeasonTeams(t, seasonID, teamIDs[:1])
+	teamID := teamIDs[0]
+
+	// Create player with player_number via API.
+	body := `{"first_name":"Jane","last_name":"Doe","player_number":"99","handicap":2.5}`
+	resp, err := http.Post(srv.URL+"/api/players", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST player: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("POST player: want 201, got %d: %s", resp.StatusCode, b)
+	}
+	var p map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		resp.Body.Close()
+		t.Fatalf("POST player decode: %v", err)
+	}
+	resp.Body.Close()
+	rawID, ok := p["id"]
+	if !ok {
+		t.Fatal("POST player response missing id field")
+	}
+	playerID := int64(rawID.(float64))
+
+	postRosterPlayer(t, srv, seasonID, teamID, playerID).Body.Close()
+
+	r, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/teams/%d/roster", srv.URL, seasonID, teamID))
+	if err != nil {
+		t.Fatalf("GET roster: %v", err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", r.StatusCode)
+	}
+	var roster []map[string]any
+	json.NewDecoder(r.Body).Decode(&roster)
+	if len(roster) == 0 {
+		t.Fatal("expected at least one roster entry")
+	}
+	got, ok := roster[0]["player_number"]
+	if !ok {
+		t.Fatal("player_number field missing from roster response")
+	}
+	if got != "99" {
+		t.Errorf("player_number: want %q, got %v", "99", got)
+	}
+}
+
+// TestSeasonRoster_ZeroHandicapIncluded verifies that a player with handicap=0
+// appears in the roster response with "handicap":0, not omitted.
+func TestSeasonRoster_ZeroHandicapIncluded(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	ensureSeasonTeams(t, seasonID, teamIDs[:1])
+	teamID := teamIDs[0]
+
+	body := `{"first_name":"Zero","last_name":"Handi","handicap":0}`
+	resp, err := http.Post(srv.URL+"/api/players", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST player: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("POST player: want 201, got %d: %s", resp.StatusCode, b)
+	}
+	var p map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		resp.Body.Close()
+		t.Fatalf("POST player decode: %v", err)
+	}
+	resp.Body.Close()
+	rawID, ok := p["id"]
+	if !ok {
+		t.Fatal("POST player response missing id field")
+	}
+	playerID := int64(rawID.(float64))
+
+	postRosterPlayer(t, srv, seasonID, teamID, playerID).Body.Close()
+
+	r, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/teams/%d/roster", srv.URL, seasonID, teamID))
+	if err != nil {
+		t.Fatalf("GET roster: %v", err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", r.StatusCode)
+	}
+	var roster []map[string]any
+	json.NewDecoder(r.Body).Decode(&roster)
+	if len(roster) == 0 {
+		t.Fatal("expected at least one roster entry")
+	}
+	hc, ok := roster[0]["handicap"]
+	if !ok {
+		t.Fatal("handicap field missing for zero-handicap player")
+	}
+	if hc != float64(0) {
+		t.Errorf("handicap: want 0, got %v", hc)
+	}
+}
+
+// ─── Regression tests: corrections 1-4 ───────────────────────────────────────
 
 // TestCreateSeason_ResponseHasTeamsManagedTrue verifies that createSeason returns
 // teams_managed=true immediately, matching the persisted value (correction 4).
@@ -2407,6 +2516,44 @@ func TestScheduleGenerate_ManagedRejectsFromSeasonId(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&errBody)
 	if errBody["error"] == "" {
 		t.Error("expected non-empty error message")
+	}
+}
+
+// TestSeasonTeams_ListReturnsTeamNumber verifies that GET /api/seasons/{id}/teams
+// includes the team_number field for teams that have one set.
+// team_number is stored on the teams table and projected through seasonTeamSelect;
+// it is display-only in Phase 1 and not writable via the teams API.
+func TestSeasonTeams_ListReturnsTeamNumber(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	// Set team_number directly; updateTeam does not expose this field.
+	if _, err := db.DB.Exec(`UPDATE teams SET team_number='07' WHERE id=?`, teamIDs[0]); err != nil {
+		t.Fatalf("set team_number: %v", err)
+	}
+	ensureSeasonTeams(t, seasonID, teamIDs[:1])
+
+	r, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, seasonID))
+	if err != nil {
+		t.Fatalf("GET season teams: %v", err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", r.StatusCode)
+	}
+	var teams []map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&teams); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(teams) == 0 {
+		t.Fatal("expected at least one team in response")
+	}
+	got, ok := teams[0]["team_number"]
+	if !ok {
+		t.Fatal("team_number field missing from season-teams response")
+	}
+	if got != "07" {
+		t.Errorf("team_number: want %q, got %v", "07", got)
 	}
 }
 

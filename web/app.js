@@ -807,72 +807,9 @@ async function confirmAssignMatchTeams() {
 }
 
 // ── Teams ─────────────────────────────────────────────────────────────────────
-async function loadTeams() {
-  if (!activeLeague) return;
-  allTeams   = await api('GET', `/teams?league_id=${activeLeague.id}`);
-  allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
-
-  const container = document.getElementById('teams-cards');
-  if (!allTeams.length) {
-    container.innerHTML = '<div class="col"><div class="text-muted py-3">No teams yet. Click "New Team" to add one.</div></div>';
-    return;
-  }
-
-  // Group players by team
-  const byTeam = {};
-  allTeams.forEach(t => byTeam[t.id] = []);
-  allPlayers.forEach(p => { if (p.team_id && byTeam[p.team_id]) byTeam[p.team_id].push(p); });
-
-  // Players with no team in this league (for the assign dropdown)
-  // We fetch all league players; those with team_id null won't appear due to JOIN,
-  // so unassigned shows as empty — covered by "New Player" path below.
-
-  container.innerHTML = allTeams.map(t => {
-    const players = byTeam[t.id] || [];
-    const rows = players.map(p => `
-      <tr class="roster-row">
-        <td class="text-muted">${p.player_number||'—'}</td>
-        <td>${p.name}${p.admin_hold ? ' <span class="badge bg-warning text-dark" style="font-size:.65rem">Hold</span>' : ''}</td>
-        <td><span class="badge bg-secondary" style="font-size:.72rem">${p.handicap}</span></td>
-        <td class="text-end">
-          <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editPlayer(${p.id})" title="Edit"><i class="bi bi-pencil"></i></button>
-          <button class="btn btn-outline-danger btn-sm py-0" onclick="removeFromTeam(${p.id})" title="Remove from team"><i class="bi bi-person-dash"></i></button>
-        </td>
-      </tr>`).join('') ||
-      '<tr><td colspan="4" class="text-muted text-center py-2" style="font-size:.85rem">No players on roster</td></tr>';
-
-    return `
-      <div class="col-md-6 col-xl-4">
-        <div class="card h-100">
-          <div class="team-card-header">
-            <span class="fw-semibold">${t.name}</span>
-            <span>
-              <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editTeam(${t.id})"><i class="bi bi-pencil"></i></button>
-              <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteTeam(${t.id})"><i class="bi bi-trash"></i></button>
-            </span>
-          </div>
-          <div class="card-body p-0">
-            <table class="table table-hover mb-0">
-              <thead><tr>
-                <th style="font-size:.75rem;padding:.4rem .75rem">#</th>
-                <th style="font-size:.75rem;padding:.4rem .75rem">Name</th>
-                <th style="font-size:.75rem;padding:.4rem .75rem">HC</th>
-                <th></th>
-              </tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </div>
-          <div class="add-to-roster d-flex gap-2 align-items-center">
-            <button class="btn btn-sm btn-outline-primary" onclick="openNewPlayerOnTeam(${t.id})">
-              <i class="bi bi-person-plus"></i> New Player
-            </button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="openAssignPlayer(${t.id})">
-              <i class="bi bi-arrow-left-right"></i> Assign Existing
-            </button>
-          </div>
-        </div>
-      </div>`;
-  }).join('');
+function loadTeams() {
+  const page = document.querySelector('teams-page');
+  if (page) page.refresh(activeLeague?.id ?? null, activeSeason?.id ?? null);
 }
 
 // Remove a player from their team (unassign, don't delete)

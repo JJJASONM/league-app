@@ -106,6 +106,11 @@
     .roster-row td { font-size: .88rem; padding: .3rem .75rem; }
     .team-card-header { background: #fff; border-bottom: 1px solid #e8eaf0; border-radius: 12px 12px 0 0; padding: .65rem 1rem; display: flex; align-items: center; justify-content: space-between; }
     .add-to-roster { background: #f8f9fa; border-top: 1px solid #e8eaf0; padding: .5rem .75rem; border-radius: 0 0 12px 12px; }
+    .team-card { cursor: pointer; transition: box-shadow .15s; }
+    .team-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.13); }
+    .team-card:focus { outline: 2px solid #0d6efd; outline-offset: 2px; }
+    .team-card--selected { box-shadow: 0 0 0 2px #0d6efd !important; }
+    .team-card--selected .team-card-header { background: #e8f0fe; }
 
     /* ── Scoresheet table ─────────────────────────────────────────── */
     /* ── Scoresheet layout ──────────────────────────────── */

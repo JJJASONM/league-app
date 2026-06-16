@@ -70,6 +70,7 @@ type SeasonTeam struct {
 	SeasonID    int64   `json:"season_id"`
 	TeamID      int64   `json:"team_id"`
 	TeamName    string  `json:"team_name"`              // from teams table (permanent)
+	TeamNumber  string  `json:"team_number,omitempty"`  // from teams table
 	SeasonName  string  `json:"season_name"`            // season-specific snapshot
 	CaptainID   *int64  `json:"captain_id"`
 	CaptainName string  `json:"captain_name,omitempty"`
@@ -78,13 +79,14 @@ type SeasonTeam struct {
 
 // SeasonRosterEntry is one player on a team's season roster.
 type SeasonRosterEntry struct {
-	ID         int64   `json:"id"`
-	SeasonID   int64   `json:"season_id"`
-	TeamID     int64   `json:"team_id"`
-	TeamName   string  `json:"team_name,omitempty"`
-	PlayerID   int64   `json:"player_id"`
-	PlayerName string  `json:"player_name,omitempty"`
-	Handicap   float64 `json:"handicap,omitempty"`
+	ID           int64   `json:"id"`
+	SeasonID     int64   `json:"season_id"`
+	TeamID       int64   `json:"team_id"`
+	TeamName     string  `json:"team_name,omitempty"`
+	PlayerID     int64   `json:"player_id"`
+	PlayerName   string  `json:"player_name,omitempty"`
+	PlayerNumber string  `json:"player_number,omitempty"`
+	Handicap     float64 `json:"handicap"`
 }
 
 // ChecklistItem is one structured issue in a season setup checklist.

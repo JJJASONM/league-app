@@ -1931,6 +1931,7 @@ func deleteLineupPlan(w http.ResponseWriter, r *http.Request) {
 // seasonTeamRow scans one row from season_teams into a SeasonTeam.
 const seasonTeamSelect = `
 	SELECT st.id, st.season_id, st.team_id, t.name,
+	       COALESCE(t.team_number,''),
 	       CASE WHEN st.season_name != '' THEN st.season_name ELSE t.name END,
 	       st.captain_id,
 	       COALESCE(cp.first_name||' '||cp.last_name, ''),
@@ -1942,7 +1943,7 @@ const seasonTeamSelect = `
 
 func scanSeasonTeam(row interface{ Scan(...any) error }) (models.SeasonTeam, error) {
 	var st models.SeasonTeam
-	err := row.Scan(&st.ID, &st.SeasonID, &st.TeamID, &st.TeamName,
+	err := row.Scan(&st.ID, &st.SeasonID, &st.TeamID, &st.TeamName, &st.TeamNumber,
 		&st.SeasonName, &st.CaptainID, &st.CaptainName, &st.RosterCount)
 	return st, err
 }
@@ -2292,7 +2293,8 @@ func listSeasonRoster(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := db.DB.Query(`
 		SELECT sr.id, sr.season_id, sr.team_id, t.name,
-		       sr.player_id, p.first_name||' '||p.last_name, p.handicap
+		       sr.player_id, p.first_name||' '||p.last_name,
+		       COALESCE(p.player_number,''), p.handicap
 		FROM season_rosters sr
 		JOIN teams t ON t.id = sr.team_id
 		JOIN players p ON p.id = sr.player_id
@@ -2306,7 +2308,7 @@ func listSeasonRoster(w http.ResponseWriter, r *http.Request) {
 	var out []models.SeasonRosterEntry
 	for rows.Next() {
 		var e models.SeasonRosterEntry
-		rows.Scan(&e.ID, &e.SeasonID, &e.TeamID, &e.TeamName, &e.PlayerID, &e.PlayerName, &e.Handicap)
+		rows.Scan(&e.ID, &e.SeasonID, &e.TeamID, &e.TeamName, &e.PlayerID, &e.PlayerName, &e.PlayerNumber, &e.Handicap)
 		out = append(out, e)
 	}
 	if out == nil {
@@ -2376,13 +2378,14 @@ func addRosterPlayer(w http.ResponseWriter, r *http.Request) {
 	var entry models.SeasonRosterEntry
 	db.DB.QueryRow(`
 		SELECT sr.id, sr.season_id, sr.team_id, t.name,
-		       sr.player_id, p.first_name||' '||p.last_name, p.handicap
+		       sr.player_id, p.first_name||' '||p.last_name,
+		       COALESCE(p.player_number,''), p.handicap
 		FROM season_rosters sr
 		JOIN teams t ON t.id = sr.team_id
 		JOIN players p ON p.id = sr.player_id
 		WHERE sr.id=?`, rID,
 	).Scan(&entry.ID, &entry.SeasonID, &entry.TeamID, &entry.TeamName,
-		&entry.PlayerID, &entry.PlayerName, &entry.Handicap)
+		&entry.PlayerID, &entry.PlayerName, &entry.PlayerNumber, &entry.Handicap)
 
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, entry)
