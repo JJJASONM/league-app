@@ -1,12 +1,24 @@
+# Compiled outputs
 *.exe
 *.dll
 *.so
 *.dylib
 
+# Build artifacts and runtime data
 dist/
 data/
 
+# Logs
 *.log
 ~$*.docx
+
+# OS files
 .DS_Store
 Thumbs.db
+
+# Assistant / AI tool directories (not part of the application)
+.claude/
+.codex/
+
+# Project-internal transcripts and working documents
+doc/project-manager-developer-transcript.md

@@ -1281,7 +1281,7 @@ async function openSchedulePoster() {
 
   // ── Title ──
   const leagueName = activeLeague?.name || 'League';
-  const shortName  = leagueName.replace(/^Brass Ring\s*/i, '').replace(/\bLeague\b/i, '').trim();
+  const shortName  = leagueName.replace(/\bLeague\b/i, '').trim();
   const title      = shortName ? shortName + ' Schedule' : 'Schedule';
   const subtitle   = season?.name || '';
 
