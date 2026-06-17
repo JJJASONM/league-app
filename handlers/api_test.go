@@ -1703,6 +1703,96 @@ func TestSeasonTeams_UpdateCaptainNotOnRosterRejected(t *testing.T) {
 	}
 }
 
+// TestSeasonRoster_RemoveNonCaptain_CaptainUnchanged verifies that removing a
+// non-captain player from a draft season roster leaves the team's captain_id intact.
+func TestSeasonRoster_RemoveNonCaptain_CaptainUnchanged(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+
+	captainID := createTestPlayer(t, srv, "Cap", "Tain")
+	otherID := createTestPlayer(t, srv, "Other", "Player")
+
+	// Add both players to the roster.
+	postRosterPlayer(t, srv, seasonID, teamIDs[0], captainID).Body.Close()
+	postRosterPlayer(t, srv, seasonID, teamIDs[0], otherID).Body.Close()
+
+	// Assign captainID as captain.
+	body := fmt.Sprintf(`{"season_name":"Alpha","captain_id":%d}`, captainID)
+	httpDo(t, srv, http.MethodPut,
+		fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, teamIDs[0]), body).Body.Close()
+
+	// Remove the NON-captain player.
+	del := httpDo(t, srv, http.MethodDelete,
+		fmt.Sprintf("/api/seasons/%d/teams/%d/roster/%d", seasonID, teamIDs[0], otherID), "")
+	defer del.Body.Close()
+	if del.StatusCode != http.StatusOK {
+		t.Fatalf("remove non-captain: want 200, got %d", del.StatusCode)
+	}
+
+	// Captain must still be set.
+	var captainNow *int64
+	if err := db.DB.QueryRow(
+		`SELECT captain_id FROM season_teams WHERE season_id=? AND team_id=?`,
+		seasonID, teamIDs[0]).Scan(&captainNow); err != nil {
+		t.Fatalf("query captain: %v", err)
+	}
+	if captainNow == nil || *captainNow != captainID {
+		t.Errorf("captain_id: want %d, got %v", captainID, captainNow)
+	}
+}
+
+// TestSeasonRoster_RemoveCaptain_ClearsCaptain verifies that removing the current
+// captain from a draft season roster atomically sets captain_id to NULL in season_teams.
+func TestSeasonRoster_RemoveCaptain_ClearsCaptain(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	ensureSeasonTeams(t, seasonID, []int64{teamIDs[0]})
+
+	captainID := createTestPlayer(t, srv, "Cap", "Tain")
+
+	// Add player and assign as captain.
+	postRosterPlayer(t, srv, seasonID, teamIDs[0], captainID).Body.Close()
+	body := fmt.Sprintf(`{"season_name":"Alpha","captain_id":%d}`, captainID)
+	httpDo(t, srv, http.MethodPut,
+		fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, teamIDs[0]), body).Body.Close()
+
+	// Confirm captain is set before the DELETE.
+	var before *int64
+	db.DB.QueryRow(`SELECT captain_id FROM season_teams WHERE season_id=? AND team_id=?`,
+		seasonID, teamIDs[0]).Scan(&before)
+	if before == nil || *before != captainID {
+		t.Fatalf("precondition: captain_id should be %d, got %v", captainID, before)
+	}
+
+	// Remove the captain from the roster.
+	del := httpDo(t, srv, http.MethodDelete,
+		fmt.Sprintf("/api/seasons/%d/teams/%d/roster/%d", seasonID, teamIDs[0], captainID), "")
+	defer del.Body.Close()
+	if del.StatusCode != http.StatusOK {
+		t.Fatalf("remove captain: want 200, got %d", del.StatusCode)
+	}
+
+	// captain_id must now be NULL in season_teams.
+	var after *int64
+	if err := db.DB.QueryRow(
+		`SELECT captain_id FROM season_teams WHERE season_id=? AND team_id=?`,
+		seasonID, teamIDs[0]).Scan(&after); err != nil {
+		t.Fatalf("query captain after removal: %v", err)
+	}
+	if after != nil {
+		t.Errorf("captain_id: want NULL after captain removed from roster, got %d", *after)
+	}
+
+	// Verify the roster row is also gone.
+	var count int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM season_rosters WHERE season_id=? AND player_id=?`,
+		seasonID, captainID).Scan(&count)
+	if count != 0 {
+		t.Errorf("season_rosters: player row should be deleted, count=%d", count)
+	}
+}
+
 func TestSeasonTeams_CopyFromPriorWithRoster(t *testing.T) {
 	srv := testServer(t)
 	leagueID, prevSeasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")

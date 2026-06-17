@@ -2411,7 +2411,14 @@ func removeRosterPlayer(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "cannot modify rosters in an active season", 422)
 		return
 	}
-	res, err := db.DB.Exec(
+	tx, err := db.DB.Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
 		`DELETE FROM season_rosters WHERE season_id=? AND team_id=? AND player_id=?`, sid, tid, pid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -2419,6 +2426,18 @@ func removeRosterPlayer(w http.ResponseWriter, r *http.Request) {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		jsonError(w, "roster entry not found", 404)
+		return
+	}
+	// Clear captain_id when the removed player is the team's current captain.
+	// The UPDATE is a no-op when the removed player is not the captain.
+	if _, err = tx.Exec(
+		`UPDATE season_teams SET captain_id=NULL
+		 WHERE season_id=? AND team_id=? AND captain_id=?`, sid, tid, pid); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "removed"})
