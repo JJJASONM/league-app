@@ -55,9 +55,10 @@ class SeasonTeamList extends HTMLElement {
   refreshCounts(seasonId, seasonName, preserveTeamId) {
     this.#seasonId   = seasonId   ?? null;
     this.#seasonName = seasonName ?? '';
-    // Do not reset #selectedTeamId -- #load(preserveTeamId) will restore it
-    // if the team is still present, or clear it if not.
-    this.#teams      = [];
+    // Do not reset #selectedTeamId or #teams.  #load(preserveTeamId) restores
+    // the visual selection when the fresh response arrives.  Keeping #teams
+    // populated during the in-flight fetch prevents #select() from dispatching
+    // team: null if the user clicks a card before the response arrives.
     this.#load(preserveTeamId ?? null);
   }
 
@@ -126,8 +127,7 @@ class SeasonTeamList extends HTMLElement {
       <div class="text-center py-5 text-muted">
         <i class="bi bi-calendar-x" style="font-size:2rem;display:block;margin-bottom:.5rem" aria-hidden="true"></i>
         <div class="fw-semibold mb-1">No active season</div>
-        <div class="small">Teams are shown for the active season.
-          Activate a season in the Seasons tab to see participating teams.</div>
+        <div class="small">Select a season above to view its teams.</div>
       </div>`;
   }
 
