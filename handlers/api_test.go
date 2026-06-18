@@ -2668,3 +2668,56 @@ func TestByeRequest_ManagedTeamNotInSeasonTeams_Rejected(t *testing.T) {
 		t.Error("expected non-empty error message")
 	}
 }
+
+func TestUpdateSeasonTeam_BlankNameRejected(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha")
+	ensureSeasonTeams(t, seasonID, teamIDs)
+	teamID := teamIDs[0]
+
+	putTeam := func(body string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPut,
+			fmt.Sprintf("%s/api/seasons/%d/teams/%d", srv.URL, seasonID, teamID),
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT season team: %v", err)
+		}
+		return resp
+	}
+
+	cases := []struct{ label, body string }{
+		{"empty string", `{"season_name":"","captain_id":null}`},
+		{"whitespace only", `{"season_name":"   ","captain_id":null}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			resp := putTeam(tc.body)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", resp.StatusCode)
+			}
+			var errBody map[string]string
+			json.NewDecoder(resp.Body).Decode(&errBody)
+			if errBody["error"] == "" {
+				t.Error("expected non-empty error message")
+			}
+		})
+	}
+
+	// Verify stored season_name was not blanked by the rejected requests.
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/teams", srv.URL, seasonID))
+	if err != nil {
+		t.Fatalf("GET teams: %v", err)
+	}
+	defer resp.Body.Close()
+	var teams []map[string]any
+	json.NewDecoder(resp.Body).Decode(&teams)
+	if len(teams) == 0 {
+		t.Fatal("expected at least one registered team")
+	}
+	if name, _ := teams[0]["season_name"].(string); name == "" {
+		t.Errorf("season_name was blanked after rejected PUT; got %q", name)
+	}
+}

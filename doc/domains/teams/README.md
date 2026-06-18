@@ -92,7 +92,7 @@ design decision (see `CODES-Q001` in `doc/architecture-decisions.md`).
 
 ## Frontend Components
 
-The Teams screen lives under `web/domains/teams/`. All seven files are imported
+The Teams screen lives under `web/domains/teams/`. All eight files are imported
 by `web/domains/teams/index.js`, which is loaded as a single `<script type="module">`.
 
 ### `<teams-page>`
@@ -128,12 +128,13 @@ The banner is hidden when the active season is selected or when `season` is null
 seasons both are hidden/disabled. `#updateDraftMode(null)` is called in `refresh()` to
 ensure controls are hidden immediately on league change.
 
-When a team is selected in a draft season, `<teams-page>` shows both
-`<draft-captain-editor>` and `<draft-roster-editor>`. It calls
-`captainEl.load(seasonId, teamId, team)` (passing the full SeasonTeam object so the
-component knows the current captain) and `rosterEl.load(seasonId, teamId)`. Both
-editors are cleared whenever the season changes, the league changes, or a team-level
-mutation fires (since team-level mutations deselect the current team).
+When a team is selected in a draft season, `<teams-page>` shows
+`<draft-team-name-editor>`, `<draft-captain-editor>`, and `<draft-roster-editor>`. It
+calls `nameEl.load(seasonId, teamId, team)`, `captainEl.load(seasonId, teamId, team)`
+(passing the full SeasonTeam object so each component knows the current values), and
+`rosterEl.load(seasonId, teamId)`. All three editors are cleared whenever the season
+changes, the league changes, or a team-level mutation fires (since team-level mutations
+deselect the current team).
 
 **Mutation handling:**
 - `team-remove-requested` event -- `<teams-page>` shows a `confirm()` dialog explaining
@@ -283,6 +284,76 @@ only. All eligibility rules are enforced by the backend.
 **Data sources:**
 - `GET /api/seasons/{id}/players/available` -- unrostered active players for this season
 - `POST /api/seasons/{id}/teams/{tid}/roster` -- add player to season roster
+
+### `<draft-team-name-editor>`
+
+**File:** `web/domains/teams/draft-team-name-editor.js`
+**Status:** `draft`
+
+Rendered below `<season-team-detail>` and above `<draft-captain-editor>` in the right
+column when a team is selected in a draft season. Hidden for active and historical
+seasons and when no team is selected. Provides a Season Team Name editor.
+
+**Public API:**
+- `load(seasonId, teamId, team)` - render the name input pre-filled with `team.season_name`.
+  `team` is the full SeasonTeam object; its `captain_id` is forwarded unchanged in the PUT
+  body so the endpoint never inadvertently clears the captain assignment.
+- `clear()` - increment `#ctx` and wipe rendered content.
+
+**Emits (bubbling):**
+- `draft-name-mutated` - `detail { seasonId, teamId, updatedTeam, message }`.
+  Fired on successful PUT. `updatedTeam` is the full SeasonTeam returned by the API so the
+  coordinator can update `#selectedTeam` and re-render dependents without an extra GET.
+
+**Edit Season Name**
+- Input is pre-filled with the current `team.season_name`.
+- When `team_name` (permanent name) differs from `season_name`, shows a read-only
+  "Permanent name: …" hint below the input so admins know what the team is called in the
+  league record.
+- Save Name button starts disabled; enables only when the trimmed input value is non-empty
+  and differs from the current `season_name` (unchanged guard).
+- Pressing Enter in the name input also triggers save.
+- Client-side validation: empty name is blocked before the request is sent.
+- Backend validation: the handler trims `season_name` and rejects blank/whitespace-only
+  values with HTTP 400 `"season_name is required"`. This is the authoritative guard;
+  the client-side check is a UX convenience only.
+- On Save: `PUT /api/seasons/{id}/teams/{tid}` with `{ season_name, captain_id }` where
+  `captain_id` is taken from the current team object so captain assignment is preserved.
+- On success: emits `draft-name-mutated` with the server response and the message
+  `"Team name updated to \"<name>\""`.
+- The coordinator re-calls `load(seasonId, teamId, updatedTeam)` after success, resetting
+  the input to the saved value and disabling Save.
+
+**No fetch on load:** Unlike `<draft-captain-editor>`, this component renders synchronously
+from the `team` object already held by the coordinator — no extra API call is required.
+
+**Stale mutation-error suppression:** `#ctx` is incremented by every `load()` and `clear()`
+call. The catch block re-enables the Save button and shows an inline error only when
+`this.#ctx === ctx` (same pattern as other draft editors).
+
+**Duplicate submission prevention:** `#submitting` flag prevents a second PUT while one is
+in-flight. Save button is disabled for the duration and re-enabled on failure
+(same-context only).
+
+**Navigation-safe mutation origin:** `seasonId`, `teamId`, `captainId`, and `ctx` are
+captured as local constants before the mutation's first `await`. The PUT URL and event
+detail never read `this.#seasonId` or `this.#teamId` after an await.
+
+**Coordinator wiring:**
+- `draft-name-mutated` event -- fired by `<draft-team-name-editor>` after a successful PUT.
+  `<teams-page>` calls `toast(message)` unconditionally, then runs
+  `#afterNameMutation(seasonId, teamId, updatedTeam)` only if the selected season and team
+  still match.
+- `#afterNameMutation(seasonId, teamId, updatedTeam)` -- sets `#selectedTeam = updatedTeam`,
+  calls `detail.showTeam(...)` to update the heading, calls `draftNameEditor.load(...)` to
+  reset the input with the saved value, calls `draftCaptainEditor.load(...)` (forwards the
+  updated team so its PUT body stays consistent), and calls `list.refreshCounts(...)` to
+  update the team card which displays `season_name`.
+- `#afterCaptainMutation` also calls `draftNameEditor.load(...)` to keep the forwarded
+  `captain_id` in the name editor synchronized with the just-saved captain assignment.
+
+**Data sources:**
+- `PUT /api/seasons/{id}/teams/{tid}` -- update season name and captain; returns updated SeasonTeam
 
 ### `<draft-captain-editor>`
 

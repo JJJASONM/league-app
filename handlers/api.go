@@ -2192,6 +2192,11 @@ func updateSeasonTeam(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
+	req.SeasonName = strings.TrimSpace(req.SeasonName)
+	if req.SeasonName == "" {
+		jsonError(w, "season_name is required", 400)
+		return
+	}
 	// If captain is being set, verify they are on the season roster.
 	if req.CaptainID != nil {
 		var onRoster int

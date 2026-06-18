@@ -15,6 +15,8 @@
 //                              the same draft team on completion
 //   draft-captain-mutated   -> toast always; refreshes UI only when still on
 //                              the same draft team on completion
+//   draft-name-mutated      -> toast always; refreshes UI only when still on
+//                              the same draft team on completion
 //
 // Public API:
 //   refresh(leagueId, activeSeasonId) - immediately clear list, detail, banner,
@@ -41,6 +43,7 @@ class TeamsPage extends HTMLElement {
         </div>
         <div class="col-lg-7 col-xl-8">
           <season-team-detail></season-team-detail>
+          <draft-team-name-editor class="d-none mt-3"></draft-team-name-editor>
           <draft-captain-editor class="d-none mt-3"></draft-captain-editor>
           <draft-roster-editor class="d-none mt-3"></draft-roster-editor>
         </div>
@@ -53,6 +56,7 @@ class TeamsPage extends HTMLElement {
     this.addEventListener('roster-remove-requested', e => this.#onRosterRemoveRequested(e));
     this.addEventListener('draft-roster-mutated',    e => this.#onDraftRosterMutated(e));
     this.addEventListener('draft-captain-mutated',   e => this.#onDraftCaptainMutated(e));
+    this.addEventListener('draft-name-mutated',      e => this.#onDraftNameMutated(e));
   }
 
   refresh(leagueId, activeSeasonId) {
@@ -62,6 +66,7 @@ class TeamsPage extends HTMLElement {
     this.#detail().clear();
     this.#updateBanner(null);
     this.#updateDraftMode(null);
+    this.#clearNameEditor();
     this.#clearCaptainEditor();
     this.#clearRosterEditor();
     this.#selector().load(leagueId ?? null, activeSeasonId ?? null);
@@ -73,6 +78,7 @@ class TeamsPage extends HTMLElement {
   #list()               { return this.querySelector('season-team-list'); }
   #detail()             { return this.querySelector('season-team-detail'); }
   #draftActions()       { return this.querySelector('draft-team-actions'); }
+  #draftNameEditor()    { return this.querySelector('draft-team-name-editor'); }
   #draftCaptainEditor() { return this.querySelector('draft-captain-editor'); }
   #draftRosterEditor()  { return this.querySelector('draft-roster-editor'); }
 
@@ -84,6 +90,7 @@ class TeamsPage extends HTMLElement {
     this.#detail().clear();
     this.#updateBanner(season);
     this.#updateDraftMode(season);
+    this.#clearNameEditor();
     this.#clearCaptainEditor();
     this.#clearRosterEditor();
   }
@@ -93,6 +100,10 @@ class TeamsPage extends HTMLElement {
     this.#selectedTeam = team;
     this.#detail().showTeam(seasonId, teamId, team, this.#isDraft);
     if (this.#isDraft) {
+      const nameEl = this.#draftNameEditor();
+      nameEl.classList.remove('d-none');
+      nameEl.load(seasonId, teamId, team);
+
       const captainEl = this.#draftCaptainEditor();
       captainEl.classList.remove('d-none');
       captainEl.load(seasonId, teamId, team);
@@ -187,6 +198,17 @@ class TeamsPage extends HTMLElement {
     }
   }
 
+  #onDraftNameMutated(e) {
+    const { seasonId, teamId, updatedTeam, message } = e.detail;
+    // Always show the toast -- the backend mutation succeeded.
+    toast(message);
+    // Guard: only refresh UI if still viewing the same draft team.
+    const sel = this.#selector().selectedSeason;
+    if (sel?.id === seasonId && !sel.activated_at && this.#selectedTeam?.team_id === teamId) {
+      this.#afterNameMutation(seasonId, teamId, updatedTeam);
+    }
+  }
+
   // Refresh list, clear detail, and reload copy choices after a team add/remove.
   #afterMutation(seasonId) {
     this.#selectedTeam = null;
@@ -194,6 +216,7 @@ class TeamsPage extends HTMLElement {
     this.#list().refresh(seasonId, name);
     this.#detail().clear();
     this.#draftActions().load(seasonId);
+    this.#clearNameEditor();
     this.#clearCaptainEditor();
     this.#clearRosterEditor();
   }
@@ -215,8 +238,27 @@ class TeamsPage extends HTMLElement {
     this.#selectedTeam = updatedTeam;
     const name = this.#selector().selectedSeason?.name ?? '';
     this.#detail().showTeam(seasonId, teamId, updatedTeam, true);
+    this.#draftNameEditor().load(seasonId, teamId, updatedTeam);
     this.#draftCaptainEditor().load(seasonId, teamId, updatedTeam);
     this.#list().refreshCounts(seasonId, name, teamId);
+  }
+
+  // Update #selectedTeam, re-render detail heading with new season_name, reload
+  // name editor (resets input to saved value), reload captain editor (forwarded
+  // team has fresh captain_id), refresh team list card (card shows season_name).
+  #afterNameMutation(seasonId, teamId, updatedTeam) {
+    this.#selectedTeam = updatedTeam;
+    const name = this.#selector().selectedSeason?.name ?? '';
+    this.#detail().showTeam(seasonId, teamId, updatedTeam, true);
+    this.#draftNameEditor().load(seasonId, teamId, updatedTeam);
+    this.#draftCaptainEditor().load(seasonId, teamId, updatedTeam);
+    this.#list().refreshCounts(seasonId, name, teamId);
+  }
+
+  #clearNameEditor() {
+    const el = this.#draftNameEditor();
+    el.classList.add('d-none');
+    el.clear();
   }
 
   #clearCaptainEditor() {
