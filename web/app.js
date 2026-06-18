@@ -45,6 +45,12 @@ async function api(method, path, body) {
   return data;
 }
 
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+
 // Returns "?league_id=X" or "" if no active league
 function lid() {
   return activeLeague ? `?league_id=${activeLeague.id}` : '';
@@ -304,6 +310,8 @@ function navTo(sec) {
 
 // ── Seasons ───────────────────────────────────────────────────────────────────
 let currentMgmtSeasonId = null;
+let currentMgmtSeasonTeamCount = 0;
+let currentMgmtSeasonManaged = false;
 
 const scheduleTypeLabel = {
   single_rr: 'Single RR', double_rr: 'Double RR',
@@ -383,7 +391,7 @@ async function loadSeasons() {
           title="Manage: schedule, skip weeks, bye requests, activation">
           <i class="bi bi-sliders"></i> Manage
         </button>
-        ${!s.active ? `<button class="btn btn-outline-success btn-sm py-0 me-1" onclick="activateSeason(${s.id})">Activate</button>` : ''}
+        ${(!s.active && !s.activated_at) ? `<button class="btn btn-outline-success btn-sm py-0 me-1" onclick="activateSeason(${s.id})">Activate</button>` : ''}
         <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editSeason(${s.id})"
           title="Edit Details: name, start date, schedule type, rules">
           <i class="bi bi-pencil"></i> Edit Details
@@ -405,26 +413,12 @@ function openNewSeason() {
   sel.innerHTML = '<option value="">— All teams in league —</option>' +
     allSeasons.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
-  // Show team confirmation list (read-only; all league teams are used).
-  const teamsSection = document.getElementById('season-new-teams');
-  const teamsList    = document.getElementById('season-new-teams-list');
-  if (allTeams.length === 0) {
-    teamsList.innerHTML =
-      '<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>' +
-      'No teams in this league yet. Add teams before generating a schedule.</span>';
-  } else {
-    teamsList.innerHTML =
-      `<div class="mb-1 text-muted">All ${allTeams.length} team${allTeams.length !== 1 ? 's' : ''} will be included:</div>` +
-      `<div class="d-flex flex-wrap gap-2">` +
-      allTeams.map(t =>
-        `<span class="badge bg-light text-dark border"><i class="bi bi-people-fill me-1 text-secondary"></i>${t.name}</span>`
-      ).join('') +
-      `</div>`;
-  }
-  teamsSection.classList.remove('d-none');
-
   // Show rules in "pending" mode — changes are buffered until the season is saved.
   document.getElementById('season-rules-section').classList.remove('d-none');
+  document.getElementById('season-rules-collapse').classList.remove('show');
+  const rulesToggle = document.querySelector('[data-bs-target="#season-rules-collapse"]');
+  rulesToggle?.classList.add('collapsed');
+  rulesToggle?.setAttribute('aria-expanded', 'false');
   document.getElementById('rules-editor').initNew();
 
   openModal('season-modal');
@@ -441,10 +435,12 @@ function editSeason(id) {
   const sel = document.getElementById('season-copy-from');
   sel.innerHTML = '<option value="">— All teams in league —</option>' +
     allSeasons.filter(x => x.id !== id).map(x => `<option value="${x.id}">${x.name}</option>`).join('');
-  // Team confirmation is only shown when creating a new season.
-  document.getElementById('season-new-teams').classList.add('d-none');
   // Show rules for existing seasons.
   document.getElementById('season-rules-section').classList.remove('d-none');
+  document.getElementById('season-rules-collapse').classList.add('show');
+  const rulesToggle = document.querySelector('[data-bs-target="#season-rules-collapse"]');
+  rulesToggle?.classList.remove('collapsed');
+  rulesToggle?.setAttribute('aria-expanded', 'true');
   document.getElementById('rules-editor').loadSeason(id);
   openModal('season-modal');
 }
@@ -490,12 +486,8 @@ async function activateSeason(id) {
     activeSeason = allSeasons.find(s => s.active) || null;
     document.getElementById('active-season-label').textContent =
       activeSeason ? '📅 ' + activeSeason.name : 'No active season';
-    // Update the manage panel immediately if it is showing this season.
-    if (currentMgmtSeasonId === id) {
-      document.getElementById('season-mgmt-set-active-btn').style.display = 'none';
-      document.getElementById('season-mgmt-active').classList.remove('d-none');
-    }
     await loadSeasons();
+    if (currentMgmtSeasonId === id) await manageSeason(id);
   } catch(e) { toast(e.message,'danger'); }
 }
 
@@ -536,43 +528,156 @@ async function manageSeason(id, preselectedFromSeasonId) {
   document.getElementById('season-mgmt-meta').textContent = meta;
 
   // "Set Active" button — show only when not active
+  const isManaged = s.teams_managed === true || s.teams_managed === 1;
+  const isDraft = !s.active && !s.activated_at;
+  currentMgmtSeasonManaged = isManaged;
+
   const setActiveBtn = document.getElementById('season-mgmt-set-active-btn');
-  setActiveBtn.style.display = s.active ? 'none' : '';
+  setActiveBtn.style.display = isDraft ? '' : 'none';
+  setActiveBtn.disabled = true;
 
   // ── Schedule setup ──
   const fromSel = document.getElementById('gen-from-season');
-  fromSel.innerHTML = '<option value="">All teams in league</option>' +
-    allSeasons.filter(x => x.id !== id).map(x =>
-      `<option value="${x.id}" ${x.id === preselectedFromSeasonId ? 'selected' : ''}>${x.name}</option>`
-    ).join('');
+  document.getElementById('gen-from-season-col').classList.toggle('d-none', isManaged);
+  document.getElementById('gen-managed-teams-note').classList.toggle('d-none', !isManaged);
+  if (isManaged) {
+    fromSel.innerHTML = '<option value="">Registered teams in this season</option>';
+  } else {
+    fromSel.innerHTML = '<option value="">All teams in league</option>' +
+      allSeasons.filter(x => x.id !== id).map(x =>
+        `<option value="${x.id}" ${x.id === preselectedFromSeasonId ? 'selected' : ''}>${x.name}</option>`
+      ).join('');
+  }
 
   document.getElementById('gen-start-date').value = s.start_date ? s.start_date.slice(0, 10) : '';
   if (s.schedule_type) document.getElementById('gen-type').value = s.schedule_type;
   if (s.num_weeks)     document.getElementById('gen-numweeks').value = s.num_weeks;
   onGenTypeChange();
+  document.getElementById('season-schedule-preview-note').classList.toggle('d-none', s.active);
 
-  // Populate bye-team dropdown
+  let seasonTeams = [];
+  let checklist = null;
+  try { seasonTeams = await api('GET', `/seasons/${id}/teams`); }
+  catch(e) { toast(`Could not load registered teams: ${e.message}`, 'danger'); }
+  if (isDraft) {
+    try { checklist = await api('GET', `/seasons/${id}/checklist`); }
+    catch(e) { toast(`Could not load setup checklist: ${e.message}`, 'danger'); }
+  }
+
+  const byeTeams = isManaged ? seasonTeams : allTeams.map(t => ({
+    team_id: t.id,
+    season_name: t.name,
+    team_name: t.name,
+    roster_count: 0
+  }));
+  currentMgmtSeasonTeamCount = byeTeams.length;
+
+  renderSeasonChecklist(checklist, isDraft);
+  renderSeasonRegisteredTeams(seasonTeams, isDraft ? checklist : null, isManaged);
+
+  if (isDraft && checklist) {
+    setActiveBtn.disabled = !checklist.can_activate;
+    setActiveBtn.classList.toggle('disabled', !checklist.can_activate);
+    setActiveBtn.title = checklist.can_activate ? '' : 'Resolve setup blockers before activating this season.';
+  }
+
+  // Populate bye-team dropdown from the season roster for managed seasons.
   const teamSel = document.getElementById('bye-team-select');
-  teamSel.innerHTML = allTeams.map(t =>
-    `<option value="${t.id}">${t.name}</option>`).join('') ||
-    '<option value="">No teams in league</option>';
+  teamSel.innerHTML = byeTeams.map(t =>
+    `<option value="${t.team_id}">${escapeHTML(t.season_name || t.team_name)}</option>`).join('') ||
+    '<option value="">No teams registered</option>';
 
   showSeasonTab('schedule');
   document.getElementById('season-mgmt').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   await Promise.all([
     loadSkippedWeeks(id),
-    loadByeRequests(id),
+    loadByeRequests(id, currentMgmtSeasonTeamCount),
   ]);
 }
 
 function closeMgmt() {
   document.getElementById('season-mgmt').classList.add('d-none');
   currentMgmtSeasonId = null;
+  currentMgmtSeasonTeamCount = 0;
+  currentMgmtSeasonManaged = false;
 }
 
 function activateMgmtSeason() {
   if (currentMgmtSeasonId) activateSeason(currentMgmtSeasonId);
+}
+
+function renderSeasonChecklist(checklist, isDraft) {
+  const section = document.getElementById('season-checklist-section');
+  const body = section.querySelector('.card-body');
+  if (!checklist) {
+    section.classList.add('d-none');
+    body.innerHTML = '';
+    return;
+  }
+
+  const blockers = checklist.blockers || [];
+  const warnings = checklist.warnings || [];
+  const rows = [];
+  blockers.forEach(item => rows.push(`
+    <div class="text-danger d-flex gap-2 align-items-start mb-1">
+      <i class="bi bi-x-circle-fill"></i>
+      <span><strong>${escapeHTML(item.code)}</strong>: ${escapeHTML(item.message)}</span>
+    </div>`));
+  warnings.forEach(item => rows.push(`
+    <div class="text-warning d-flex gap-2 align-items-start mb-1">
+      <i class="bi bi-exclamation-triangle-fill"></i>
+      <span><strong>${escapeHTML(item.code)}</strong>: ${escapeHTML(item.message)}</span>
+    </div>`));
+
+  const status = checklist.can_activate
+    ? '<div class="text-success"><i class="bi bi-check-circle-fill"></i> Setup checklist is clear.</div>'
+    : '<div class="fw-semibold text-danger mb-1"><i class="bi bi-clipboard-x"></i> Resolve setup blockers before activation.</div>';
+  const activeNote = isDraft ? '' : '<div class="text-muted">Activation controls are hidden for active and historical seasons.</div>';
+  body.innerHTML = `
+    <div class="fw-semibold mb-1"><i class="bi bi-clipboard-check"></i> Setup Checklist</div>
+    ${status}
+    ${rows.join('') || ''}
+    ${activeNote}`;
+  section.classList.remove('d-none');
+}
+
+function renderSeasonRegisteredTeams(teams, checklist, isManaged) {
+  const section = document.getElementById('season-registered-teams-section');
+  const body = section.querySelector('.card-body');
+  if (!isManaged) {
+    section.classList.add('d-none');
+    body.innerHTML = '';
+    return;
+  }
+
+  const blockers = checklist?.blockers || [];
+  const warnings = checklist?.warnings || [];
+  const items = [...blockers, ...warnings];
+  const rows = teams.map(t => {
+    const name = t.season_name || t.team_name;
+    const teamIssues = items.filter(item => item.message && item.message.indexOf(`team "${name}"`) >= 0);
+    const issueHtml = teamIssues.map(item => `
+      <div class="${(checklist?.blockers || []).includes(item) ? 'text-danger' : 'text-warning'} small">
+        <i class="bi bi-exclamation-triangle"></i> ${escapeHTML(item.message)}
+      </div>`).join('');
+    return `
+      <div class="border rounded px-2 py-1 mb-1">
+        <div class="d-flex justify-content-between gap-2">
+          <span class="fw-semibold">${escapeHTML(name)}</span>
+          <span class="badge bg-secondary">${t.roster_count} player${t.roster_count === 1 ? '' : 's'}</span>
+        </div>
+        <div class="text-muted">
+          Captain: ${t.captain_name ? escapeHTML(t.captain_name) : '<span class="fst-italic">No captain</span>'}
+        </div>
+        ${issueHtml}
+      </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="fw-semibold mb-1"><i class="bi bi-people"></i> Registered Teams (${teams.length})</div>
+    ${rows || '<div class="text-muted fst-italic">No teams registered for this season yet.</div>'}`;
+  section.classList.remove('d-none');
 }
 
 // Quick-nav from manage panel → Schedule tab (admin preview; bypasses active-only filter).
@@ -624,7 +729,9 @@ async function generateSchedule() {
   const startDate = document.getElementById('gen-start-date').value;
   const numWeeks  = parseInt(document.getElementById('gen-numweeks').value) || 0;
   const mpw       = parseInt(document.getElementById('gen-mpw').value) || 1;
-  const fromSeason = parseInt(document.getElementById('gen-from-season').value) || 0;
+  const fromSeason = currentMgmtSeasonManaged
+    ? 0
+    : (parseInt(document.getElementById('gen-from-season').value) || 0);
 
   // Fetch skip dates for this season
   let skipDates = [];
@@ -653,7 +760,8 @@ async function generateSchedule() {
     activeSeason = allSeasons.find(s => s.active) || null;
     document.getElementById('active-season-label').textContent =
       activeSeason ? '📅 ' + activeSeason.name : 'No active season';
-    loadSeasons();
+    await loadSeasons();
+    if (currentMgmtSeasonId) await manageSeason(currentMgmtSeasonId);
   } catch(e) { toast(e.message, 'danger'); }
 }
 
@@ -697,17 +805,17 @@ async function deleteSkippedWeek(id) {
 }
 
 // ── Bye Requests ──────────────────────────────────────────────────────────────
-async function loadByeRequests(seasonId) {
+async function loadByeRequests(seasonId, seasonTeamCount = currentMgmtSeasonTeamCount) {
   let byes = [];
   try { byes = await api('GET', `/seasons/${seasonId}/bye-requests`); } catch(_) {}
 
   // Show a banner when the team count is even (bye requests cannot be applied).
-  const teamCount = allTeams.length;
+  const teamCount = seasonTeamCount;
   const isEven = teamCount > 0 && teamCount % 2 === 0;
   const banner = isEven
     ? `<div class="alert alert-warning py-2 mb-2 small">
         <i class="bi bi-exclamation-triangle-fill"></i>
-        <strong>${teamCount} teams in this league (even).</strong>
+        <strong>${teamCount} teams in this season (even).</strong>
         Bye requests require an odd number of teams — every team plays each week.
       </div>`
     : teamCount % 2 === 1
@@ -759,7 +867,7 @@ async function addByeRequest() {
     document.getElementById('bye-reason-input').value = '';
     document.getElementById('bye-week-input').value = '0';
     toast('Bye request added');
-    await loadByeRequests(currentMgmtSeasonId);
+    await loadByeRequests(currentMgmtSeasonId, currentMgmtSeasonTeamCount);
   } catch(e) { toast(e.message, 'danger'); }
 }
 
@@ -767,7 +875,7 @@ async function toggleByeApproval(id, approved) {
   try {
     await api('PUT', `/seasons/${currentMgmtSeasonId}/bye-requests/${id}`, { approved });
     toast(approved ? 'Bye approved' : 'Bye unapproved');
-    await loadByeRequests(currentMgmtSeasonId);
+    await loadByeRequests(currentMgmtSeasonId, currentMgmtSeasonTeamCount);
   } catch(e) { toast(e.message, 'danger'); }
 }
 
@@ -776,7 +884,7 @@ async function deleteByeRequest(id) {
   try {
     await api('DELETE', `/seasons/${currentMgmtSeasonId}/bye-requests/${id}`);
     toast('Removed');
-    await loadByeRequests(currentMgmtSeasonId);
+    await loadByeRequests(currentMgmtSeasonId, currentMgmtSeasonTeamCount);
   } catch(e) { toast(e.message, 'danger'); }
 }
 

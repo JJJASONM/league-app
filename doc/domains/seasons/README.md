@@ -5,7 +5,7 @@
 **Owner:** `seasons`
 **Status:** `draft`
 **Current version:** `0.1`
-**Last reviewed:** `2026-06-08`
+**Last reviewed:** `2026-06-17`
 
 The Seasons domain owns setup, activation, league-week workflow, closing,
 reopening, and final standings snapshots.
@@ -30,11 +30,30 @@ from a prior season (copies roster) or created new.
 
 ### New Season Rules
 
-The New Season form shows the same rule controls as Edit Season Details.
-Rule changes made before clicking "Save & Continue" are buffered in the
-`<rules-editor>` web component's `#pendingRules` map. `flushPending(seasonId)`
-is called immediately after the season record is created and saves all buffered
-rules via `POST /seasons/{id}/rules`.
+The New Season form shows the same rule controls as Edit Season Details inside
+a collapsed "Season Rules (optional)" accordion. Rule changes made before
+clicking "Save & Continue" are buffered in the `<rules-editor>` web component's
+`#pendingRules` map. `flushPending(seasonId)` is called immediately after the
+season record is created and saves all buffered rules via
+`POST /seasons/{id}/rules`.
+
+### Management Panel
+
+The season management panel is the setup dashboard for managed seasons. It
+shows the setup checklist, registered team count, roster counts, captain status,
+and any checklist items that map directly to a team. Activation controls are
+shown only for draft seasons (`active=false` and `activated_at IS NULL`) and are
+disabled until the checklist returns `can_activate=true`.
+
+For managed seasons, schedule generation uses the current season's registered
+teams only. The legacy "Use Teams From" selector is hidden in the management
+panel for managed seasons because the backend rejects `from_season_id` on that
+path. Bye request team choices and odd/even messaging also use registered
+season teams rather than all permanent league teams.
+
+Schedules for inactive seasons are admin previews. User-facing schedule views
+remain active-season focused; the management panel displays a preview note until
+the season is activated.
 
 ## Active Season
 

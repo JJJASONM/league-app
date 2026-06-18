@@ -131,6 +131,14 @@
           </div>
         </div>
 
+        <div id="season-checklist-section" class="card border-top-0 border-bottom-0 d-none">
+          <div class="card-body py-2 px-3 small"></div>
+        </div>
+
+        <div id="season-registered-teams-section" class="card border-top-0 border-bottom-0 d-none">
+          <div class="card-body py-2 px-3 small"></div>
+        </div>
+
         <!-- Tab bar -->
         <ul class="nav nav-tabs mb-0" id="season-mgmt-tabs">
           <li class="nav-item"><a class="nav-link active" href="#" data-stab="schedule">Schedule Setup</a></li>
@@ -165,11 +173,16 @@
                 <label class="form-label small mb-1 fw-semibold">First Match Date</label>
                 <input type="date" class="form-control form-control-sm" id="gen-start-date">
               </div>
-              <div class="col-auto">
+              <div class="col-auto" id="gen-from-season-col">
                 <label class="form-label small mb-1 fw-semibold">Use Teams From</label>
                 <select class="form-select form-select-sm" id="gen-from-season" style="min-width:180px">
                   <option value="">All teams in league</option>
                 </select>
+              </div>
+              <div class="col-auto d-none" id="gen-managed-teams-note">
+                <div class="alert alert-info py-2 px-3 mb-0 small">
+                  <i class="bi bi-people"></i> Teams from this season's registered roster.
+                </div>
               </div>
               <div class="col-auto">
                 <button class="btn btn-success btn-sm" onclick="generateSchedule()">
@@ -179,6 +192,10 @@
             </div>
 
             <div class="alert alert-light border py-2 px-3 mb-0" id="gen-type-desc" style="font-size:.82rem"></div>
+            <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small d-none" id="season-schedule-preview-note">
+              <i class="bi bi-eye"></i>
+              Schedule is a preview - visible to admins only until this season is activated.
+            </div>
             <div class="text-muted small mt-2">
               <i class="bi bi-info-circle"></i>
               Generating replaces only <strong>unplayed</strong> matches. Completed matches are preserved.
@@ -472,17 +489,24 @@
         </div>
         <div class="text-muted small mb-3"><i class="bi bi-info-circle"></i> End date is calculated automatically from the last scheduled match after you generate a schedule.</div>
 
-        <!-- Team confirmation list — visible only when creating a new season -->
-        <div id="season-new-teams" class="d-none">
-          <hr class="my-2">
-          <h6 class="fw-semibold mb-1"><i class="bi bi-people"></i> Teams in this season</h6>
-          <div id="season-new-teams-list" class="small"></div>
-        </div>
-
         <div id="season-rules-section" class="d-none">
           <hr class="my-2">
-          <h6 class="fw-semibold mb-2"><i class="bi bi-sliders"></i> Season Rules</h6>
-          <rules-editor id="rules-editor"></rules-editor>
+          <div class="accordion" id="season-rules-accordion">
+            <div class="accordion-item">
+              <h6 class="accordion-header" id="season-rules-heading">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#season-rules-collapse" aria-expanded="false" aria-controls="season-rules-collapse">
+                  <i class="bi bi-sliders me-2"></i> Season Rules (optional)
+                </button>
+              </h6>
+              <div id="season-rules-collapse" class="accordion-collapse collapse"
+                aria-labelledby="season-rules-heading" data-bs-parent="#season-rules-accordion">
+                <div class="accordion-body">
+                  <rules-editor id="rules-editor"></rules-editor>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="modal-footer">
