@@ -110,7 +110,7 @@ class DraftTeamNameEditor extends HTMLElement {
         season_name: newName,
         captain_id:  captainId,
       });
-      this.#emit(seasonId, teamId, updated, `Team name updated to “${updated.season_name}”`);
+      this.#emit(seasonId, teamId, updated, `Team name updated to "${updated.season_name}"`);
     } catch (e) {
       if (this.#ctx === ctx) {
         this.#showError(e.message);
