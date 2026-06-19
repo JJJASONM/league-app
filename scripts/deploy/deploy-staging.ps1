@@ -2,7 +2,7 @@ param(
     [string]$RepoRoot = 'C:\Users\admin\source\league_app',
     [string]$StagingRoot = 'C:\inetpub\league-staging',
     [int]$Port = 9000,
-    [string]$PublicUrl = 'https://league-staging.local',
+    [string]$PublicUrl = 'http://league-staging.local',
     [string]$ConfirmDeploy
 )
 

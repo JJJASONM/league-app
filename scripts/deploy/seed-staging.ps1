@@ -1,7 +1,7 @@
 param(
     [string]$StagingRoot = 'C:\inetpub\league-staging',
     [int]$Port = 9000,
-    [string]$PublicUrl = 'https://league-staging.local',
+    [string]$PublicUrl = 'http://league-staging.local',
     [string]$ConfirmSeed
 )
 
