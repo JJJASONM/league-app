@@ -1807,7 +1807,7 @@ function renderScoresheet(existingRounds) {
     <div class="d-flex gap-2">
       <button class="btn btn-sm btn-outline-secondary" onclick="loadMatchEntry()">
         <i class="bi bi-arrow-left"></i> Change Lineup</button>
-      <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">
+      <button class="btn btn-sm btn-outline-secondary" onclick="printScoresheet()">
         <i class="bi bi-printer"></i> Print</button>
       <button class="btn btn-sm btn-success" onclick="saveScoresheet()">
         <i class="bi bi-check-lg"></i> Save</button>
@@ -1936,7 +1936,9 @@ function renderScoresheet(existingRounds) {
     <div class="ss-sig-line">Visiting Team Captain Signature: <span class="ss-sig-blank"></span></div>
   </div>`;
 
-  html += `</div></div>`; // .ss-sheet  #ss-print-area
+  html += `</div>`; // close .ss-sheet
+  html += buildScorekeeperPage();
+  html += `</div>`; // close #ss-print-area
 
   const sd = document.getElementById('entry-scoresheet');
   sd.innerHTML = html;
@@ -1944,6 +1946,129 @@ function renderScoresheet(existingRounds) {
 
   for (let i = 0; i < 9; i++) updateSSPairing(i);
   updateSSFinal();
+}
+
+// -- Scoresheet print: injects portrait @page override so poster landscape rule is bypassed --
+function printScoresheet() {
+  // Regenerate Page 2 from current scoresheetGames so any scores entered after
+  // the initial render are included before printing.
+  const area = document.getElementById('ss-print-area');
+  if (area) {
+    const oldP2 = area.querySelector('.ss-p2-sheet');
+    if (oldP2) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = buildScorekeeperPage();
+      oldP2.replaceWith(tmp.firstElementChild);
+    }
+  }
+  const s = document.createElement('style');
+  s.id = 'ss-page-override';
+  s.textContent = '@page { size: letter portrait; margin: 0.45in; }';
+  document.head.appendChild(s);
+  window.addEventListener('afterprint', () => { document.getElementById('ss-page-override')?.remove(); }, { once: true });
+  window.print();
+}
+
+// -- Scoresheet Page 2: Match Scorekeeping summary --
+function buildScorekeeperPage() {
+  const m    = currentMatch;
+  const home = scoresheetHomeTeam;
+  const away = scoresheetAwayTeam;
+
+  // Per-player stat accumulators indexed by home[0..2] / away[0..2]
+  const hStats = Array.from({length: 3}, () => ({gW: 0, gL: 0, sW: 0, sL: 0, diff: 0}));
+  const aStats = Array.from({length: 3}, () => ({gW: 0, gL: 0, sW: 0, sL: 0, diff: 0}));
+
+  for (let r = 0; r < 3; r++) {
+    for (let p = 0; p < 3; p++) {
+      const idx   = r * 3 + p;
+      const g     = scoresheetGames[idx];
+      const {rawH, rawA, winner} = pairingTotals(idx);
+      const apPos = (p + r) % 3;
+      const hs    = hStats[p];
+      const as_   = aStats[apPos];
+
+      for (let gn = 1; gn <= 3; gn++) {
+        const w = g[`g${gn}w`];
+        if (w === 'home') { hs.gW++; as_.gL++; }
+        else if (w === 'away') { hs.gL++; as_.gW++; }
+      }
+      if (winner === 'home')      { hs.sW++; as_.sL++; }
+      else if (winner === 'away') { hs.sL++; as_.sW++; }
+
+      hs.diff  += rawH - rawA;
+      as_.diff += rawA - rawH;
+    }
+  }
+
+  const fmtD = n => n > 0 ? `+${n}` : `${n}`;
+  const pRow = (label, player, st) => `
+    <tr>
+      <td class="ss-p2-pos">${label}</td>
+      <td class="ss-p2-pnum">${escapeHTML(player.player_number || '')}</td>
+      <td>${escapeHTML(player.name || '')}</td>
+      <td class="ss-p2-num">${st.gW}</td>
+      <td class="ss-p2-num">${st.gL}</td>
+      <td class="ss-p2-num">${st.sW}</td>
+      <td class="ss-p2-num">${st.sL}</td>
+      <td class="ss-p2-diff-col">${fmtD(st.diff)}</td>
+    </tr>`;
+
+  const dateStr   = displayDate(m.match_date, 'Date TBD');
+  const matchMeta = [
+    m.match_number != null ? 'Match ' + escapeHTML(String(m.match_number)) : null,
+    m.table_numbers        ? 'Table ' + escapeHTML(String(m.table_numbers)) : null,
+    'Week ' + escapeHTML(String(m.week_number)),
+  ].filter(Boolean).join(' &middot; ');
+
+  return `<div class="ss-p2-sheet">
+    <div class="no-print ss-p2-screen-label">
+      <i class="bi bi-printer me-1" aria-hidden="true"></i>Printable scorekeeping summary &mdash; page&nbsp;2 of&nbsp;2
+    </div>
+    <div class="ss-p2-header">
+      <span class="ss-p2-title">Match Scorekeeping</span>
+      <div class="ss-p2-meta">
+        <span>${escapeHTML(dateStr)}</span>
+        <span>${matchMeta}</span>
+      </div>
+    </div>
+    <div class="ss-p2-instructions">
+      <strong>Rounds Won:</strong> Count the rounds (sets) won by each team &mdash; 3 rounds per match.
+      The team with more rounds wins the match.&ensp;
+      <strong>Diff:</strong> Each player&rsquo;s raw ball-score total minus their opponent&rsquo;s
+      across all their sets, before handicap is applied. Positive means they outscored their opponent on raw balls.&ensp;
+      <strong>Handicap:</strong> Spot added to the lower-rated player&rsquo;s raw total.
+      Formula: <em>((x&minus;y)&times;3)&times;.85</em> &nbsp;or&nbsp; <em>(x&minus;y)&times;2.55</em>,
+      where x and y are the players&rsquo; handicap ratings.
+    </div>
+    <div class="ss-p2-rounds">
+      <div class="ss-p2-round-line">Rounds Won &nbsp;<strong>${escapeHTML(m.home_team_name || '')}</strong>: ______</div>
+      <div class="ss-p2-round-line">Rounds Won &nbsp;<strong>${escapeHTML(m.away_team_name || '')}</strong>: ______</div>
+    </div>
+    <table class="ss-p2-table">
+      <thead><tr>
+        <th class="ss-p2-pos">Pos</th>
+        <th class="ss-p2-pnum">No.</th>
+        <th style="text-align:left">Player</th>
+        <th class="ss-p2-num">Games<br>Won</th>
+        <th class="ss-p2-num">Games<br>Lost</th>
+        <th class="ss-p2-num">Sets<br>Won</th>
+        <th class="ss-p2-num">Sets<br>Lost</th>
+        <th class="ss-p2-diff-col">Diff</th>
+      </tr></thead>
+      <tbody>
+        <tr class="ss-p2-team-row"><td colspan="8">Home &mdash; ${escapeHTML(m.home_team_name || '')}</td></tr>
+        ${home.map((p, i) => pRow(`${i + 1}H`, p, hStats[i])).join('')}
+        <tr class="ss-p2-team-row ss-p2-away-row"><td colspan="8">Visiting &mdash; ${escapeHTML(m.away_team_name || '')}</td></tr>
+        ${away.map((p, i) => pRow(`${i + 1}V`, p, aStats[i])).join('')}
+      </tbody>
+    </table>
+    <div class="ss-sigs">
+      <div class="ss-sig-line">Home Team Capt. Signature: <span class="ss-sig-blank"></span></div>
+      <div class="ss-sig-line">Visiting Team Capt. Signature: <span class="ss-sig-blank"></span></div>
+    </div>
+    <div class="ss-p2-hc-note">Handicap formula: ((x&minus;y)&times;3)&times;.85 &nbsp;&nbsp;or&nbsp;&nbsp; (x&minus;y)&times;2.55</div>
+  </div>`;
 }
 
 // ── Scoresheet cell + interaction helpers ─────────────────────────────────────
