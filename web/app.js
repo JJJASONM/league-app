@@ -1891,6 +1891,8 @@ function renderScoresheet(existingRounds) {
   }
   html += `</tbody></table>`;
 
+  html += `<p class="ss-entry-hint no-print">Enter <strong>10</strong> for the game winner. Loser score is balls made (0&ndash;7).</p>`;
+
   // Main scoring table
   html += `<table class="ss-score-tbl">
     <thead><tr>
@@ -2130,14 +2132,14 @@ function ssInpChange(idx, gn, side) {
   const lk  = 'g' + gn + 'lb';
   if (hv === 10 && av !== 10) {
     g[wk] = 'home'; g[lk] = isNaN(av) ? 0 : Math.min(7, Math.max(0, av));
-    if (aEl) aEl.value = String(g[lk]);
+    if (aEl) { aEl.value = String(g[lk]); if (side === 'home') { aEl.focus(); aEl.select(); } }
   } else if (av === 10 && hv !== 10) {
     g[wk] = 'away'; g[lk] = isNaN(hv) ? 0 : Math.min(7, Math.max(0, hv));
-    if (hEl) hEl.value = String(g[lk]);
+    if (hEl) { hEl.value = String(g[lk]); if (side === 'away') { hEl.focus(); hEl.select(); } }
   } else if (hv === 10 && av === 10) {
     g[wk] = side; g[lk] = 0;
-    if (side === 'home' && aEl) aEl.value = '0';
-    if (side === 'away' && hEl) hEl.value = '0';
+    if (side === 'home' && aEl) { aEl.value = '0'; aEl.focus(); aEl.select(); }
+    if (side === 'away' && hEl) { hEl.value = '0'; hEl.focus(); hEl.select(); }
   } else {
     g[wk] = ''; g[lk] = 0;
   }
@@ -2170,6 +2172,23 @@ function ssInpKey(e, idx, gn, side) {
     if (prevEl) prevEl.focus();
   }
 }
+// Update CSS classes on score inputs to reflect winner/loser/empty state.
+function updateSSInputClasses(idx) {
+  const g = scoresheetGames[idx];
+  for (let gn = 1; gn <= 3; gn++) {
+    const w = g['g' + gn + 'w'];
+    for (const side of ['home', 'away']) {
+      const el = document.getElementById('ss-inp-' + idx + '-' + gn + '-' + side);
+      if (!el) continue;
+      let cls = 'ss-score-inp';
+      if (w === side)           cls += ' ss-inp-winner';
+      else if (w && w !== side) cls += ' ss-inp-loser';
+      else if (el.value === '') cls += ' ss-inp-empty';
+      el.className = cls;
+    }
+  }
+}
+
 // Rebuild all cells for one pairing (both rows)
 function updateSSPairing(idx) {
   const { rawH, rawA, adjH, adjA, hc, winner, hasScore } = pairingTotals(idx);
@@ -2192,6 +2211,7 @@ function updateSSPairing(idx) {
   const cwA = document.getElementById('ss-cw-a-' + idx);
   if (cwH) cwH.className = 'cw-opt' + (winner === 'home' ? ' cw-sel-h' : '');
   if (cwA) cwA.className = 'cw-opt' + (winner === 'away' ? ' cw-sel-a' : '');
+  updateSSInputClasses(idx);
 }
 
 function updateSSFinal() {

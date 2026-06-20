@@ -184,6 +184,10 @@
     .ss-score-inp::-webkit-outer-spin-button,
     .ss-score-inp::-webkit-inner-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
     .ss-score-inp { -moz-appearance: textfield; appearance: textfield; }
+    .ss-score-inp.ss-inp-winner { background: #dbeafe; color: #1e40af; border-color: #93c5fd; font-weight: 700; }
+    .ss-score-inp.ss-inp-loser  { background: #fef9ef; color: #555; border-color: #d1d5db; }
+    .ss-score-inp.ss-inp-empty  { background: #f9fafb; border-style: dashed; color: #bbb; }
+    .ss-entry-hint { font-size: 10px; color: #555; margin: 0 0 4px; }
     .ss-hc-cell { width: 40px; text-align: center; font-size: 9px; color: #555;
       white-space: nowrap; font-style: italic; }
     .ss-tn-sep { width: 14px; background: #fff !important; border: none !important; }
