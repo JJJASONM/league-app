@@ -153,7 +153,7 @@
     .ss-rnd-badge-h { background: #1e3a8a; color: #fff; }
     .ss-rnd-badge-v { background: #7f1d1d; color: #fff; }
     .ss-home-row { background: rgba(219,234,254,.18); }
-    .ss-away-row { background: rgba(254,226,226,.18); border-bottom: 2px solid #ddd; }
+    .ss-away-row { background: rgba(254,226,226,.18); border-bottom: 3px solid #888; }
     .ss-slot { width: 24px; font-weight: 700; font-size: 10px; text-align: center; white-space: nowrap; }
     .ss-pname-cell { min-width: 110px; font-size: 10.5px; }
     .ss-game-cell { width: 48px; text-align: center; padding: 2px !important; cursor: pointer; }
