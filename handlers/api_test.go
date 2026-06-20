@@ -86,7 +86,7 @@ func TestListRuleDefinitions_ReturnsOK(t *testing.T) {
 func TestListRuleDefinitions_ExactCount(t *testing.T) {
 	srv := testServer(t)
 	defs := fetchDefs(t, srv)
-	const want = 11
+	const want = 12
 	if len(defs) != want {
 		t.Fatalf("want %d definitions, got %d", want, len(defs))
 	}

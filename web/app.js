@@ -1589,6 +1589,7 @@ let scoresheetAwayTeam = [];  // 3 Player objects
 let scoresheetGames = Array.from({length:9}, () => ({
   g1w:'', g1lb:0, g2w:'', g2lb:0, g3w:'', g3lb:0
 }));
+let scoresheetSeasonRules = {};
 
 async function loadEntryMatches() {
   const seasonId = document.getElementById('entry-season-select').value;
@@ -1617,6 +1618,12 @@ async function loadMatchEntry() {
 
   currentMatch = detail.match;
   const m = currentMatch;
+
+  scoresheetSeasonRules = {};
+  try {
+    const rulesList = await api('GET', `/seasons/${m.season_id}/rules`);
+    for (const r of rulesList) { scoresheetSeasonRules[r.rule_key] = r.rule_value; }
+  } catch(_) {}
 
   if (!activeLeague || activeLeague.game_format !== '8ball') {
     scoresheetDiv.classList.remove('d-none');
@@ -1749,9 +1756,12 @@ function gameScores(winner, lb) {
 }
 
 function calcHandicap(hHC, aHC) {
-  const diff = Math.abs(hHC - aHC);
-  const pts  = Math.round(diff * 2.55);
-  const to   = hHC < aHC ? 'home' : aHC < hHC ? 'away' : '';
+  const multiplier = parseFloat(scoresheetSeasonRules['handicap_multiplier']) || 2.55;
+  const minBall    = parseInt(scoresheetSeasonRules['min_ball_handicap'])     || 0;
+  const to         = hHC < aHC ? 'home' : aHC < hHC ? 'away' : '';
+  const diff       = Math.abs(hHC - aHC);
+  const rawPts     = Math.round(diff * multiplier);
+  const pts        = !to ? 0 : (minBall > 0 && rawPts < minBall) ? 0 : rawPts;
   return { pts, to };
 }
 
@@ -1769,8 +1779,23 @@ function pairingTotals(idx) {
   const hc   = calcHandicap(hp.handicap, ap.handicap);
   const adjH = rawH + (hc.to === 'home' ? hc.pts : 0);
   const adjA = rawA + (hc.to === 'away' ? hc.pts : 0);
-  const winner = adjH > adjA ? 'home' : adjA > adjH ? 'away' : '';
-  return { rawH, rawA, adjH, adjA, hc, winner, hp, ap };
+  const hGames   = [g.g1w, g.g2w, g.g3w].filter(w => w === 'home').length;
+  const aGames   = [g.g1w, g.g2w, g.g3w].filter(w => w === 'away').length;
+  const played   = hGames + aGames;
+  const hasScore = played > 0;
+  const remaining = 3 - played;
+  // A player wins once the opponent cannot catch them even with max points (10/game) in all remaining games.
+  // Handicap alone (no games entered) never produces a winner.
+  let winner = '';
+  if (hasScore) {
+    if (adjH > adjA + remaining * 10)      winner = 'home';
+    else if (adjA > adjH + remaining * 10) winner = 'away';
+    else if (remaining === 0) {
+      if (hGames > aGames) winner = 'home';
+      else if (aGames > hGames) winner = 'away';
+    }
+  }
+  return { rawH, rawA, adjH, adjA, hc, winner, hp, ap, hasScore };
 }
 
 // ── Scoresheet — portrait letter layout matching physical Page 1 ─────────────
@@ -1831,12 +1856,14 @@ function renderScoresheet(existingRounds) {
   // Team header row
   html += `<table class="ss-teams-tbl">
     <tr>
-      <td class="ss-tn-num">1</td>
-      <td class="ss-tn-name" style="color:#1e3a8a">${m.home_team_name}</td>
+      <td class="ss-tn-name" style="color:#1e3a8a">${escapeHTML(m.home_team_name || '')}</td>
       <td class="ss-tn-label">Home Team</td>
-      <td class="ss-tn-num">2</td>
-      <td class="ss-tn-name" style="color:#7f1d1d">${m.away_team_name}</td>
+      <td class="ss-tn-sep"></td>
+      <td class="ss-tn-name" style="color:#7f1d1d">${escapeHTML(m.away_team_name || '')}</td>
       <td class="ss-tn-label">Visiting Team</td>
+    </tr>
+    <tr>
+      <td colspan="5" class="ss-tn-table">Table: ${escapeHTML(m.table_numbers || '')}</td>
     </tr>
   </table>`;
 
@@ -1874,55 +1901,46 @@ function renderScoresheet(existingRounds) {
       <th style="width:46px">Game 3</th>
       <th style="width:38px">Score</th>
       <th style="width:42px">Rating</th>
+      <th style="width:40px">Ball HC</th>
       <th style="width:48px">Adj&nbsp;Score</th>
       <th style="width:102px">Circle Winner</th>
     </tr></thead>
     <tbody>`;
 
   for (let r = 0; r < 3; r++) {
-    html += `<tr class="ss-rnd-row"><td colspan="9">Round ${r+1}</td></tr>`;
+    html += `<tr class="ss-rnd-row"><td colspan="10" id="ss-rnd-${r}">Round ${r+1}</td></tr>`;
 
     for (let p = 0; p < 3; p++) {
       const hp  = home[p];
       const ap  = away[(p + r) % 3];
       const idx = r * 3 + p;
-      const hc  = calcHandicap(hp.handicap, ap.handicap);
-      const hcNote = hc.pts > 0
-        ? `+${hc.pts} pts → ${hc.to==='home'?'H':'V'}`
-        : 'even';
 
       html += `<tr class="ss-home-row" id="ss-hrow-${idx}">
         <td class="ss-slot" style="color:#1e3a8a">H${p+1}</td>
-        <td class="ss-pname-cell">${hp.name}</td>
-        <td class="ss-game-cell" id="ss-gcell-${idx}-1-h"></td>
-        <td class="ss-game-cell" id="ss-gcell-${idx}-2-h"></td>
-        <td class="ss-game-cell" id="ss-gcell-${idx}-3-h"></td>
-        <td class="ss-score-cell" id="ss-score-h-${idx}">—</td>
+        <td class="ss-pname-cell">${escapeHTML(hp.name)}</td>
+        <td class="ss-game-cell">${ssGameInput(idx,1,'home')}</td>
+        <td class="ss-game-cell">${ssGameInput(idx,2,'home')}</td>
+        <td class="ss-game-cell">${ssGameInput(idx,3,'home')}</td>
+        <td class="ss-score-cell" id="ss-score-h-${idx}">--</td>
         <td class="ss-rating-cell">${fmtHC(hp.handicap)}</td>
-        <td class="ss-adj-cell" id="ss-adj-h-${idx}">—</td>
+        <td class="ss-hc-cell" id="ss-hc-${idx}" rowspan="2">--</td>
+        <td class="ss-adj-cell" id="ss-adj-h-${idx}">--</td>
         <td class="ss-winner-cell" id="ss-winner-${idx}" rowspan="2">
-          <div class="cw-opt" id="ss-cw-h-${idx}">◯ ${m.home_team_name}</div>
-          <div class="cw-opt" id="ss-cw-a-${idx}">◯ ${m.away_team_name}</div>
-          <div class="cw-hc">${hcNote}</div>
+          <div class="cw-opt" id="ss-cw-h-${idx}">&#9675; H</div>
+          <div class="cw-opt" id="ss-cw-a-${idx}">&#9675; V</div>
         </td>
       </tr>
       <tr class="ss-away-row" id="ss-arow-${idx}">
         <td class="ss-slot" style="color:#7f1d1d">V${(p+r)%3+1}</td>
-        <td class="ss-pname-cell">${ap.name}</td>
-        <td class="ss-game-cell" id="ss-gcell-${idx}-1-a"></td>
-        <td class="ss-game-cell" id="ss-gcell-${idx}-2-a"></td>
-        <td class="ss-game-cell" id="ss-gcell-${idx}-3-a"></td>
-        <td class="ss-score-cell" id="ss-score-a-${idx}">—</td>
+        <td class="ss-pname-cell">${escapeHTML(ap.name)}</td>
+        <td class="ss-game-cell">${ssGameInput(idx,1,'away')}</td>
+        <td class="ss-game-cell">${ssGameInput(idx,2,'away')}</td>
+        <td class="ss-game-cell">${ssGameInput(idx,3,'away')}</td>
+        <td class="ss-score-cell" id="ss-score-a-${idx}">--</td>
         <td class="ss-rating-cell">${fmtHC(ap.handicap)}</td>
-        <td class="ss-adj-cell" id="ss-adj-a-${idx}">—</td>
+        <td class="ss-adj-cell" id="ss-adj-a-${idx}">--</td>
       </tr>`;
     }
-
-    // Round game tally row
-    html += `<tr class="ss-tally-row">
-      <td colspan="3" style="text-align:right">Game Tally — Round ${r+1}:</td>
-      <td colspan="6" class="fw-bold" id="ss-rnd-${r}">Home: 0 &nbsp;·&nbsp; Visitor: 0</td>
-    </tr>`;
   }
 
   html += `</tbody></table>`;
@@ -1978,8 +1996,11 @@ function buildScorekeeperPage() {
   // Per-player stat accumulators indexed by home[0..2] / away[0..2]
   const hStats = Array.from({length: 3}, () => ({gW: 0, gL: 0, sW: 0, sL: 0, diff: 0}));
   const aStats = Array.from({length: 3}, () => ({gW: 0, gL: 0, sW: 0, sL: 0, diff: 0}));
+  let homeRoundsWon = 0, awayRoundsWon = 0;
+  const hasAnyScore = scoresheetGames.some(g => g.g1w || g.g2w || g.g3w);
 
   for (let r = 0; r < 3; r++) {
+    let rh = 0, ra = 0;
     for (let p = 0; p < 3; p++) {
       const idx   = r * 3 + p;
       const g     = scoresheetGames[idx];
@@ -1993,12 +2014,14 @@ function buildScorekeeperPage() {
         if (w === 'home') { hs.gW++; as_.gL++; }
         else if (w === 'away') { hs.gL++; as_.gW++; }
       }
-      if (winner === 'home')      { hs.sW++; as_.sL++; }
-      else if (winner === 'away') { hs.sL++; as_.sW++; }
+      if (winner === 'home')      { hs.sW++; as_.sL++; rh++; }
+      else if (winner === 'away') { hs.sL++; as_.sW++; ra++; }
 
       hs.diff  += rawH - rawA;
       as_.diff += rawA - rawH;
     }
+    if (rh > ra) homeRoundsWon++;
+    else if (ra > rh) awayRoundsWon++;
   }
 
   const fmtD = n => n > 0 ? `+${n}` : `${n}`;
@@ -2042,8 +2065,8 @@ function buildScorekeeperPage() {
       where x and y are the players&rsquo; handicap ratings.
     </div>
     <div class="ss-p2-rounds">
-      <div class="ss-p2-round-line">Rounds Won &nbsp;<strong>${escapeHTML(m.home_team_name || '')}</strong>: ______</div>
-      <div class="ss-p2-round-line">Rounds Won &nbsp;<strong>${escapeHTML(m.away_team_name || '')}</strong>: ______</div>
+      <div class="ss-p2-round-line">Rounds Won &nbsp;<strong>${escapeHTML(m.home_team_name || '')}</strong>: ${hasAnyScore ? homeRoundsWon : '______'}</div>
+      <div class="ss-p2-round-line">Rounds Won &nbsp;<strong>${escapeHTML(m.away_team_name || '')}</strong>: ${hasAnyScore ? awayRoundsWon : '______'}</div>
     </div>
     <table class="ss-p2-table">
       <thead><tr>
@@ -2071,103 +2094,129 @@ function buildScorekeeperPage() {
   </div>`;
 }
 
-// ── Scoresheet cell + interaction helpers ─────────────────────────────────────
+// -- Scoresheet cell + interaction helpers --
 
-// Returns innerHTML for one player's game cell.
-// side='home'|'away', winner=current winner for this game, lb=loser balls
-function ssGameCellContent(idx, gn, side, winner, lb) {
-  const oc = `ssClickCell(${idx},${gn},'${side}')`;
-  const kd = `if(event.key==='Enter'){${oc}}`;
-  if (!winner) {
-    return `<span class="ss-pick" tabindex="0" onclick="${oc}" onkeydown="${kd}">—</span>`;
-  }
-  if (winner === side) {
-    return `<span class="ss-win-pts" tabindex="0" onclick="${oc}" onkeydown="${kd}" title="Click to deselect">10</span>`;
-  }
-  // Loser — editable ball count
-  return `<input type="number" class="ss-lb" id="slb_${idx}_${gn}" min="0" max="7" value="${lb||0}"
-    oninput="ssSetLB(${idx},${gn},this.value)"
-    onkeydown="ssLBKey(event,${idx},${gn})"
-    onclick="event.stopPropagation()">`;
-}
-
-// Click a player's game cell to designate them as winner (click again to deselect)
-function ssClickCell(idx, gn, side) {
+// Builds a numeric score input for one player/game slot.
+// Reads current scoresheetGames so the initial render is pre-populated.
+function ssGameInput(idx, gn, side) {
   const g  = scoresheetGames[idx];
-  const wk = `g${gn}w`, lk = `g${gn}lb`;
-  g[wk] = (g[wk] === side) ? '' : side;
-  if (!g[wk]) g[lk] = 0;
+  const w  = g['g' + gn + 'w'];
+  const lb = g['g' + gn + 'lb'];
+  const val = w === side ? '10' : (w && w !== side) ? String(lb) : '';
+  return '<input type="number" class="ss-score-inp" id="ss-inp-' + idx + '-' + gn + '-' + side + '"' +
+    ' min="0" max="10"' + (val !== '' ? ' value="' + val + '"' : '') +
+    ' oninput="ssInpChange(' + idx + ',' + gn + ',\'' + side + '\')"' +
+    ' onkeydown="ssInpKey(event,' + idx + ',' + gn + ',\'' + side + '\')'+'">';
+}
+
+// Clamps a score input to 0-10 in place; returns NaN for blank.
+function normalizeScoreInput(el) {
+  if (!el || el.value === '') return NaN;
+  const raw = parseInt(el.value, 10);
+  if (isNaN(raw)) { el.value = ''; return NaN; }
+  const v = Math.min(10, Math.max(0, raw));
+  el.value = String(v);
+  return v;
+}
+
+// Handle score input change: infer winner from the pair of values for this game
+function ssInpChange(idx, gn, side) {
+  const hEl = document.getElementById('ss-inp-' + idx + '-' + gn + '-home');
+  const aEl = document.getElementById('ss-inp-' + idx + '-' + gn + '-away');
+  const hv  = normalizeScoreInput(hEl);
+  const av  = normalizeScoreInput(aEl);
+  const g   = scoresheetGames[idx];
+  const wk  = 'g' + gn + 'w';
+  const lk  = 'g' + gn + 'lb';
+  if (hv === 10 && av !== 10) {
+    g[wk] = 'home'; g[lk] = isNaN(av) ? 0 : Math.min(7, Math.max(0, av));
+    if (aEl) aEl.value = String(g[lk]);
+  } else if (av === 10 && hv !== 10) {
+    g[wk] = 'away'; g[lk] = isNaN(hv) ? 0 : Math.min(7, Math.max(0, hv));
+    if (hEl) hEl.value = String(g[lk]);
+  } else if (hv === 10 && av === 10) {
+    g[wk] = side; g[lk] = 0;
+    if (side === 'home' && aEl) aEl.value = '0';
+    if (side === 'away' && hEl) hEl.value = '0';
+  } else {
+    g[wk] = ''; g[lk] = 0;
+  }
   updateSSPairing(idx);
   updateSSFinal();
-  if (g[wk]) {
-    // Auto-focus loser's input
-    const lb = document.getElementById(`slb_${idx}_${gn}`);
-    if (lb) { lb.focus(); lb.select(); }
+}
+
+// Tab/Shift-Tab within score inputs: interleaved H->V per game
+// Tab order: H1G1->V1G1->H1G2->V1G2->H1G3->V1G3->H2G1->...
+function ssInpKey(e, idx, gn, side) {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+  if (!e.shiftKey) {
+    const nextEl = side === 'home'
+      ? document.getElementById('ss-inp-' + idx + '-' + gn + '-away')
+      : gn < 3
+        ? document.getElementById('ss-inp-' + idx + '-' + (gn + 1) + '-home')
+        : idx < 8
+          ? document.getElementById('ss-inp-' + (idx + 1) + '-1-home')
+          : null;
+    if (nextEl) nextEl.focus();
+  } else {
+    const prevEl = side === 'away'
+      ? document.getElementById('ss-inp-' + idx + '-' + gn + '-home')
+      : gn > 1
+        ? document.getElementById('ss-inp-' + idx + '-' + (gn - 1) + '-away')
+        : idx > 0
+          ? document.getElementById('ss-inp-' + (idx - 1) + '-3-away')
+          : null;
+    if (prevEl) prevEl.focus();
   }
 }
-
-function ssSetLB(idx, gn, val) {
-  scoresheetGames[idx][`g${gn}lb`] = Math.min(7, Math.max(0, parseInt(val) || 0));
-  updateSSPairing(idx);
-  updateSSFinal();
-}
-
-// Enter/Tab from loser balls → next game's home cell
-function ssLBKey(e, idx, gn) {
-  if (e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) {
-    e.preventDefault();
-    const nextIdx = gn === 3 ? idx + 1 : idx;
-    const nextGn  = gn === 3 ? 1 : gn + 1;
-    const nextCell = document.getElementById(`ss-gcell-${nextIdx}-${nextGn}-h`);
-    nextCell?.querySelector('.ss-pick,.ss-win-pts,input')?.focus();
-  }
-}
-
 // Rebuild all cells for one pairing (both rows)
 function updateSSPairing(idx) {
-  const g = scoresheetGames[idx];
-  const { rawH, rawA, adjH, adjA, winner } = pairingTotals(idx);
+  const { rawH, rawA, adjH, adjA, hc, winner, hasScore } = pairingTotals(idx);
 
-  for (const gn of [1,2,3]) {
-    const w  = g[`g${gn}w`], lb = g[`g${gn}lb`];
-    const hC = document.getElementById(`ss-gcell-${idx}-${gn}-h`);
-    const aC = document.getElementById(`ss-gcell-${idx}-${gn}-a`);
-    if (hC) hC.innerHTML = ssGameCellContent(idx, gn, 'home', w, lb);
-    if (aC) aC.innerHTML = ssGameCellContent(idx, gn, 'away', w, lb);
-  }
+  const hcEl = document.getElementById('ss-hc-' + idx);
+  if (hcEl) hcEl.textContent = String(hc.pts);
 
-  const hasData = g.g1w || g.g2w || g.g3w;
-  const sh = document.getElementById(`ss-score-h-${idx}`);
-  const sa = document.getElementById(`ss-score-a-${idx}`);
-  const ah = document.getElementById(`ss-adj-h-${idx}`);
-  const aa = document.getElementById(`ss-adj-a-${idx}`);
-  if (sh) sh.textContent = hasData ? rawH : '—';
-  if (sa) sa.textContent = hasData ? rawA : '—';
-  if (ah) { ah.textContent = hasData ? adjH : '—';
-    ah.className = 'ss-adj-cell' + (hasData && winner==='home' ? ' ss-adj-win' : ''); }
-  if (aa) { aa.textContent = hasData ? adjA : '—';
-    aa.className = 'ss-adj-cell' + (hasData && winner==='away' ? ' ss-adj-win' : ''); }
+  const sh = document.getElementById('ss-score-h-' + idx);
+  const sa = document.getElementById('ss-score-a-' + idx);
+  const ah = document.getElementById('ss-adj-h-' + idx);
+  const aa = document.getElementById('ss-adj-a-' + idx);
+  if (sh) sh.textContent = hasScore ? rawH : '--';
+  if (sa) sa.textContent = hasScore ? rawA : '--';
+  if (ah) { ah.textContent = hasScore ? adjH : '--';
+    ah.className = 'ss-adj-cell' + (winner === 'home' ? ' ss-adj-win' : ''); }
+  if (aa) { aa.textContent = hasScore ? adjA : '--';
+    aa.className = 'ss-adj-cell' + (winner === 'away' ? ' ss-adj-win' : ''); }
 
-  const cwH = document.getElementById(`ss-cw-h-${idx}`);
-  const cwA = document.getElementById(`ss-cw-a-${idx}`);
-  if (cwH) cwH.className = 'cw-opt' + (winner==='home' ? ' cw-sel-h' : '');
-  if (cwA) cwA.className = 'cw-opt' + (winner==='away' ? ' cw-sel-a' : '');
+  const cwH = document.getElementById('ss-cw-h-' + idx);
+  const cwA = document.getElementById('ss-cw-a-' + idx);
+  if (cwH) cwH.className = 'cw-opt' + (winner === 'home' ? ' cw-sel-h' : '');
+  if (cwA) cwA.className = 'cw-opt' + (winner === 'away' ? ' cw-sel-a' : '');
 }
 
 function updateSSFinal() {
-  // Round subtotals
+  const wrap = document.getElementById('ss-summary');
+  if (wrap) wrap.innerHTML = buildScoreSummary();
   for (let r = 0; r < 3; r++) {
     let rh = 0, ra = 0;
     for (let p = 0; p < 3; p++) {
-      const {winner} = pairingTotals(r*3+p);
-      if (winner==='home') rh++; else if (winner==='away') ra++;
+      const { winner } = pairingTotals(r * 3 + p);
+      if (winner === 'home') rh++;
+      else if (winner === 'away') ra++;
     }
-    const el = document.getElementById(`ss-rnd-${r}`);
-    if (el) el.textContent = `Home: ${rh}  ·  Visitor: ${ra}`;
+    const el = document.getElementById('ss-rnd-' + r);
+    if (!el) continue;
+    if (rh >= 2) {
+      el.innerHTML = 'Round ' + (r + 1) + ' <span class="ss-rnd-badge ss-rnd-badge-h">H wins</span>';
+      el.parentElement.className = 'ss-rnd-row ss-rnd-win-h';
+    } else if (ra >= 2) {
+      el.innerHTML = 'Round ' + (r + 1) + ' <span class="ss-rnd-badge ss-rnd-badge-v">V wins</span>';
+      el.parentElement.className = 'ss-rnd-row ss-rnd-win-v';
+    } else {
+      el.textContent = 'Round ' + (r + 1);
+      el.parentElement.className = 'ss-rnd-row';
+    }
   }
-  // Overall summary
-  const wrap = document.getElementById('ss-summary');
-  if (wrap) wrap.innerHTML = buildScoreSummary();
 }
 
 function buildScoreSummary() {

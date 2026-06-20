@@ -146,6 +146,12 @@
     .ss-score-tbl td { padding: 2px 3px; border: 1px solid #bbb; vertical-align: middle; }
     .ss-rnd-row td { background: #e8f0fe; font-weight: 700; font-size: 11px; color: #1e3a8a;
       padding: 3px 6px; border-bottom: 2px solid #6b91d4; border-top: 2px solid #6b91d4; }
+    .ss-rnd-win-h td { background: #bfdbfe !important; }
+    .ss-rnd-win-v td { background: #fecaca !important; }
+    .ss-rnd-badge { font-size: 8px; font-weight: 700; padding: 1px 5px; border-radius: 10px;
+      vertical-align: middle; margin-left: 6px; }
+    .ss-rnd-badge-h { background: #1e3a8a; color: #fff; }
+    .ss-rnd-badge-v { background: #7f1d1d; color: #fff; }
     .ss-home-row { background: rgba(219,234,254,.18); }
     .ss-away-row { background: rgba(254,226,226,.18); border-bottom: 2px solid #ddd; }
     .ss-slot { width: 24px; font-weight: 700; font-size: 10px; text-align: center; white-space: nowrap; }
@@ -172,6 +178,16 @@
     .cw-sel-h { color: #1e40af; background: #dbeafe; font-weight: 700; }
     .cw-sel-a { color: #991b1b; background: #fee2e2; font-weight: 700; }
     .cw-hc  { font-size: 9px; color: #aaa; margin-top: 2px; font-style: italic; }
+    .ss-score-inp { width: 36px; text-align: center; font-size: 10.5px; font-weight: 600;
+      padding: 1px 2px; border: 1px solid #aaa; border-radius: 2px; display: block; margin: 0 auto; }
+    .ss-score-inp:focus { outline: 2px solid #4e9af1; border-color: #4e9af1; }
+    .ss-score-inp::-webkit-outer-spin-button,
+    .ss-score-inp::-webkit-inner-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+    .ss-score-inp { -moz-appearance: textfield; appearance: textfield; }
+    .ss-hc-cell { width: 40px; text-align: center; font-size: 9px; color: #555;
+      white-space: nowrap; font-style: italic; }
+    .ss-tn-sep { width: 14px; background: #fff !important; border: none !important; }
+    .ss-tn-table { font-size: 10.5px; color: #333; padding: 2px 6px !important; }
     .ss-tally-row td { background: #f3f4f6; font-size: 10px; color: #555;
       border-top: 1.5px solid #ccc; padding: 2px 6px; }
     /* Signatures */

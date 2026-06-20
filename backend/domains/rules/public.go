@@ -54,6 +54,14 @@ var definitions = []Definition{
 	},
 	{
 		Domain: "handicaps", Group: "handicap", GroupLabel: "Handicap Settings",
+		GroupOrder: 10, Order: 15, Key: "min_ball_handicap",
+		Label: "Minimum ball handicap", Type: TypeInteger,
+		DefaultValue: "0", Minimum: number(0), Step: number(1),
+		Help:   "Threshold: a computed spot below this value is treated as no spot (0). Zero disables the threshold. Example: min=2, computed=1 -> no spot; min=2, computed=2 -> spot applies; equal-rated players always 0.",
+		Status: "draft", Version: "0.1",
+	},
+	{
+		Domain: "handicaps", Group: "handicap", GroupLabel: "Handicap Settings",
 		GroupOrder: 10, Order: 20, Key: "handicap_multiplier",
 		Label: "Handicap multiplier", Type: TypeNumber,
 		DefaultValue: "2.55", Minimum: number(0.01), Step: number(0.01),

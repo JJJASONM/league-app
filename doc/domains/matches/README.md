@@ -10,6 +10,71 @@
 The Matches domain owns match participation, result entry, finalization,
 reopening, corrections, and match-level workflow status.
 
+## Scoresheet Entry UI (Current State)
+
+The current scoresheet is a **frontend-calculated** entry screen. Handicap application and pairing outcomes are computed in the browser using `web/app.js`. Backend stores raw round data only. All calculations described below are draft/frontend-only until a backend Close Week validation pass is implemented.
+
+### Numeric score inputs
+
+Each game slot has two numeric inputs: one for the home player and one for the visiting player. Inputs accept values 0–10.
+
+- All inputs are **normalized to 0–10 immediately** on change (`normalizeScoreInput`): values above 10 are clamped to 10, negative values to 0, non-numeric entries to blank. The input element is updated in place so the visible value always matches what will be saved.
+- Enter **10** in a player's cell to mark that player as the game winner (10 points = 7 object balls + 8-ball).
+- Once a winner is known, the loser's stored value is further **clamped to 0–7** and written back to the input.
+- If both cells show 10, the **last-edited side** wins; the other input is immediately set to 0.
+- Tab order within a round: H G1 → V G1 → H G2 → V G2 → H G3 → V G3, then next round.
+
+### Pairing winner determination
+
+A pairing winner is declared once the opponent **cannot catch up** even if they win every remaining game for maximum points (10 per game). The leader does not win early just by being ahead; the math must confirm the opponent's maximum possible final adjusted score is still lower.
+
+**Early-stop rule (fewer than 3 games entered):**
+
+```
+home wins early  if  adjH > adjA + (remaining × 10)
+away wins early  if  adjA > adjH + (remaining × 10)
+```
+
+where `remaining = 3 − games_played`, and `adjusted = raw score + ball HC spot` (if applicable).
+
+**Full-completion rule (all 3 games entered, remaining = 0):**
+
+1. Higher adjusted score wins.
+2. If adjusted scores are tied, more games won in the pairing wins.
+3. If both are tied, no winner (true mathematical tie).
+
+**Examples:**
+
+| Situation | adjH | adjA | remaining | Result |
+|-----------|------|------|-----------|--------|
+| H wins G1 10-0, no HC | 10 | 0 | 2 | No winner (V can still score 20) |
+| H wins G1+G2 10-0, 10-0, no HC | 20 | 0 | 1 | H wins (V can score only 10) |
+| H leads adjusted 21-5 after 2 games | 21 | 5 | 1 | H wins (V max = 15 < 21) |
+| H leads adjusted 18-10 after 2 games | 18 | 10 | 1 | No winner (V max = 20 > 18) |
+
+**Handicap alone never determines a winner.** If no games have been entered for a pairing, the winner is `''` regardless of handicap difference. The `hasScore` guard (`g1w`, `g2w`, or `g3w` non-empty) is required before any winner logic runs.
+
+### Ball HC column
+
+The Ball HC column appears on the scoring table between Rating and Adj Score. It spans both rows (home and visiting) for a pairing and displays the computed spot as a plain integer:
+
+- `0` — no spot (equal ratings, or computed spot suppressed by `min_ball_handicap` threshold)
+- `N` (e.g. `2`, `5`) — N balls spotted to the lower-rated player; the direction (home vs. visitor) is shown in the Adj Score column via the `ss-adj-win` highlight, not in this column
+
+The column is populated immediately on render from player ratings, before any game scores are entered.
+
+**Handicap calculation is frontend-only (draft debt).** The formula reads `handicap_multiplier` and `min_ball_handicap` from `scoresheetSeasonRules` (fetched at match-entry load time from `/api/seasons/{id}/rules`). The `min_ball_handicap` rule is a cutoff: a computed spot below the threshold is treated as 0, not raised to the threshold value. See `doc/domains/rules/README.md` for examples.
+
+### Winner highlight in adjusted score
+
+The adjusted score cell for the pairing winner receives the `ss-adj-win` CSS class, rendering it with a distinct background. The Ball HC column makes the applied spot visible, so no separate annotation appears in the winner cell.
+
+### Page 2 — Rounds Won
+
+The scorekeeper summary page (page 2) shows Rounds Won for each team. A round is won by the team that first reaches 2 mathematically-determined pairing wins in that round. A pairing contributes once its winner is locked by the early-stop rule above; all 3 games in the pairing do not need to be finished, and all 3 pairings in the round do not need to be played.
+
+If no scores have been entered anywhere on the sheet, the field shows a blank line. Once any score is entered, the live count is shown.
+
 ## Score Entry And Workflow
 
 Scores may be entered and saved before the league week closes. Entering scores
