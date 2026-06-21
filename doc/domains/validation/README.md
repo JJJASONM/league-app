@@ -34,24 +34,26 @@ result.Warnings()    // []Message filtered to warnings
 | `Message` | `string` | Human-readable display text. May be updated. |
 | `Level` | `Level` | `"error"` or `"warning"` |
 
-`Result` is JSON-serialisable (`{"messages": [...]}`). Handlers may encode it
-directly or use a future shared helper. No handler helper exists in this phase.
+`Result` is JSON-serialisable (`{"messages": [...]}`). The `jsonValidation` helper
+in `handlers/api.go` encodes a `Result` as an HTTP 422 response body.
 
-### HTTP response convention (planned)
+### HTTP response convention
 
-- **Errors present:** HTTP 422 with `Result` JSON body
-- **Warnings only:** operation proceeds; warning behavior is modeled in the shared
-  package and will be enforced by future domain validators and Close Week finalization
+- **Errors present:** HTTP 422 with `Result` JSON body (implemented -- see `saveRounds`)
+- **Warnings only:** operation proceeds; warnings are computed but not currently
+  returned to callers; available for future Close Week finalization
 - **No messages:** operation proceeds normally
 
-No domain validators compute warnings yet. The warning infrastructure is in place
-for future use.
+The matches scoresheet validator (`ValidateRounds`) computes both errors and warnings.
+Warning acknowledgment (audited admin override) is future work scoped to Close Week.
 
 ## Domain validators
 
-No domain validators have been implemented yet. The shared package is in place;
-domain validators will be added one at a time, beginning with the scoresheet
-validator in the matches domain.
+**Matches -- scoresheet validator** (`backend/domains/matches.ValidateRounds`) is the first
+domain validator. It validates 8-ball round submissions before any DB write. See
+`doc/domains/matches/README.md` -- Backend Scoresheet Validation.
+
+Additional domain validators will be added one at a time as needed.
 
 ## Design notes
 

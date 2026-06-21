@@ -2721,3 +2721,102 @@ func TestUpdateSeasonTeam_BlankNameRejected(t *testing.T) {
 		t.Errorf("season_name was blanked after rejected PUT; got %q", name)
 	}
 }
+
+// ─── Scoresheet round validation (HTTP level) ─────────────────────────────────
+
+// seedRoundFixture creates a legacy (teams_managed=0) league/season/teams/players
+// and inserts one match. The legacy season bypasses the RosterEligible roster check
+// so the test can reach round validation directly.
+// Returns (matchID, homePlayerID, awayPlayerID).
+func seedRoundFixture(t *testing.T, srv *httptest.Server) (matchID, homePlayerID, awayPlayerID int64) {
+	t.Helper()
+	pd := func(path, body string) map[string]any {
+		resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		var m map[string]any
+		json.NewDecoder(resp.Body).Decode(&m)
+		return m
+	}
+
+	lg := pd("/api/leagues", `{"name":"Round Test League","game_format":"8ball"}`)
+	lgID := int64(lg["id"].(float64))
+
+	tm1 := pd("/api/teams", fmt.Sprintf(`{"league_id":%d,"name":"Home Team"}`, lgID))
+	tm2 := pd("/api/teams", fmt.Sprintf(`{"league_id":%d,"name":"Away Team"}`, lgID))
+	homeTeamID := int64(tm1["id"].(float64))
+	awayTeamID := int64(tm2["id"].(float64))
+
+	p1 := pd("/api/players", `{"first_name":"Home","last_name":"Player","handicap":0}`)
+	p2 := pd("/api/players", `{"first_name":"Away","last_name":"Player","handicap":0}`)
+	homePlayerID = int64(p1["id"].(float64))
+	awayPlayerID = int64(p2["id"].(float64))
+
+	// Create a season and immediately downgrade to legacy (teams_managed=0).
+	// POST /api/seasons always sets teams_managed=1; legacy mode bypasses RosterEligible.
+	s := pd("/api/seasons", fmt.Sprintf(`{"league_id":%d,"name":"Test Season"}`, lgID))
+	seasonID := int64(s["id"].(float64))
+	if _, err := db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, seasonID); err != nil {
+		t.Fatalf("downgrade season to legacy: %v", err)
+	}
+
+	res, err := db.DB.Exec(
+		`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number) VALUES (?,?,?,1)`,
+		seasonID, homeTeamID, awayTeamID)
+	if err != nil {
+		t.Fatalf("insert match: %v", err)
+	}
+	matchID, _ = res.LastInsertId()
+	return
+}
+
+// TestSaveRounds_ValidationError_Returns422 confirms that submitting an impossible
+// game score (both sides = 10) returns HTTP 422 with a structured validation.Result body.
+func TestSaveRounds_ValidationError_Returns422(t *testing.T) {
+	srv := testServer(t)
+	matchID, homeP, awayP := seedRoundFixture(t, srv)
+
+	body := fmt.Sprintf(`{"rounds":[{
+		"round_number":1,
+		"home_player_id":%d,"away_player_id":%d,
+		"game1_home":10,"game1_away":10,
+		"game2_home":0,"game2_away":0,
+		"game3_home":0,"game3_away":0
+	}]}`, homeP, awayP)
+
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api/matches/%d/rounds", srv.URL, matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Messages []struct {
+			Code  string `json:"code"`
+			Level string `json:"level"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode validation result: %v", err)
+	}
+	if len(result.Messages) == 0 {
+		t.Fatal("expected validation messages in 422 response body")
+	}
+	found := false
+	for _, m := range result.Messages {
+		if m.Code == "SCORESHEET_GAME_BOTH_WINNERS" && m.Level == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected SCORESHEET_GAME_BOTH_WINNERS error in response, got: %+v", result.Messages)
+	}
+}

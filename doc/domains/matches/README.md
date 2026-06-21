@@ -16,13 +16,13 @@ The current scoresheet is a **frontend-calculated** entry screen. Handicap appli
 
 ### Numeric score inputs
 
-Each game slot has two numeric inputs: one for the home player and one for the visiting player. Inputs accept values 0–10.
+Each game slot has two numeric inputs: one for the home player and one for the visiting player. Inputs accept values 0-10.
 
-- All inputs are **normalized to 0–10 immediately** on change (`normalizeScoreInput`): values above 10 are clamped to 10, negative values to 0, non-numeric entries to blank. The input element is updated in place so the visible value always matches what will be saved.
+- All inputs are **normalized to 0-10 immediately** on change (`normalizeScoreInput`): values above 10 are clamped to 10, negative values to 0, non-numeric entries to blank. The input element is updated in place so the visible value always matches what will be saved.
 - Enter **10** in a player's cell to mark that player as the game winner (10 points = 7 object balls + 8-ball).
-- Once a winner is known, the loser's stored value is further **clamped to 0–7** and written back to the input.
+- Once a winner is known, the loser's stored value is further **clamped to 0-7** and written back to the input.
 - If both cells show 10, the **last-edited side** wins; the other input is immediately set to 0.
-- Tab order within a round: H G1 → V G1 → H G2 → V G2 → H G3 → V G3, then next round.
+- Tab order within a round: H G1 -> V G1 -> H G2 -> V G2 -> H G3 -> V G3, then next round.
 
 ### Pairing winner determination
 
@@ -31,11 +31,11 @@ A pairing winner is declared once the opponent **cannot catch up** even if they 
 **Early-stop rule (fewer than 3 games entered):**
 
 ```
-home wins early  if  adjH > adjA + (remaining × 10)
-away wins early  if  adjA > adjH + (remaining × 10)
+home wins early  if  adjH > adjA + (remaining * 10)
+away wins early  if  adjA > adjH + (remaining * 10)
 ```
 
-where `remaining = 3 − games_played`, and `adjusted = raw score + ball HC spot` (if applicable).
+where `remaining = 3 - games_played`, and `adjusted = raw score + ball HC spot` (if applicable).
 
 **Full-completion rule (all 3 games entered, remaining = 0):**
 
@@ -58,8 +58,8 @@ where `remaining = 3 − games_played`, and `adjusted = raw score + ball HC spot
 
 The Ball HC column appears on the scoring table between Rating and Adj Score. It spans both rows (home and visiting) for a pairing and displays the computed spot as a plain integer:
 
-- `0` — no spot (equal ratings, or computed spot suppressed by `min_ball_handicap` threshold)
-- `N` (e.g. `2`, `5`) — N balls spotted to the lower-rated player; the direction (home vs. visitor) is shown in the Adj Score column via the `ss-adj-win` highlight, not in this column
+- `0` -- no spot (equal ratings, or computed spot suppressed by `min_ball_handicap` threshold)
+- `N` (e.g. `2`, `5`) -- N balls spotted to the lower-rated player; the direction (home vs. visitor) is shown in the Adj Score column via the `ss-adj-win` highlight, not in this column
 
 The column is populated immediately on render from player ratings, before any game scores are entered.
 
@@ -69,11 +69,52 @@ The column is populated immediately on render from player ratings, before any ga
 
 The adjusted score cell for the pairing winner receives the `ss-adj-win` CSS class, rendering it with a distinct background. The Ball HC column makes the applied spot visible, so no separate annotation appears in the winner cell.
 
-### Page 2 — Rounds Won
+### Page 2 -- Rounds Won
 
 The scorekeeper summary page (page 2) shows Rounds Won for each team. A round is won by the team that first reaches 2 mathematically-determined pairing wins in that round. A pairing contributes once its winner is locked by the early-stop rule above; all 3 games in the pairing do not need to be finished, and all 3 pairings in the round do not need to be played.
 
 If no scores have been entered anywhere on the sheet, the field shows a blank line. Once any score is entered, the live count is shown.
+
+## Backend Scoresheet Validation
+
+**Package:** `backend/domains/matches` -- `ValidateRounds`
+
+Backend validation is now authoritative for 8-ball scoresheet round submissions. The
+validator runs inside `saveRounds` before any DB write. It uses `backend/validation`
+for structured result types.
+
+**Frontend validation** (`web/app.js`) remains helper UX only -- it normalises inputs
+and shows live pairing outcomes, but does not duplicate the backend validator.
+
+### Behavior
+
+- **Errors -> HTTP 422** with `{"messages": [...]}` body (see `validation.Result`). No rows are written.
+- **Warnings -> save proceeds.** Warnings are computed and available for future Close Week
+  use but are not currently returned to the frontend.
+- Warning acknowledgment and Close Week finalization remain future work.
+
+### Validation codes
+
+| Code | Level | Condition |
+|------|-------|-----------|
+| `SCORESHEET_NO_SCORES` | warning | No game on the sheet has a winner |
+| `SCORESHEET_GAME_BOTH_WINNERS` | error | Both home and away score 10 in one game |
+| `SCORESHEET_GAME_SCORE_RANGE` | error | A score falls outside 0-10 |
+| `SCORESHEET_LOSER_SCORE_RANGE` | error | Loser's score exceeds 7 when a winner exists |
+| `SCORESHEET_GAME_INCOMPLETE` | warning | Non-zero scores but no declared winner |
+| `SCORESHEET_PAIRING_UNDETERMINED` | -- | Reserved -- Close Week finalization |
+| `SCORESHEET_ROUND_INCOMPLETE` | -- | Reserved -- Close Week finalization |
+
+### Pairing winner determination (mirrors frontend early-stop)
+
+- `hasScore` guard: handicap alone never determines a winner
+- Early stop: `adjLead > adjTrail + remaining * 10`
+- Full completion: higher adjusted score wins; games-won tiebreak if tied; no winner on true tie
+
+### Round winner tracking
+
+`ScoresheetResult.RoundWinners` maps round numbers to the winning side once a team
+has 2 determined pairing wins in that round. Currently informational only.
 
 ## Score Entry And Workflow
 

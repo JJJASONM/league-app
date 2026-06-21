@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
+	"league_app/backend/validation"
 	"league_app/db"
 	"league_app/logic"
 	"league_app/models"
@@ -121,6 +123,14 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// jsonValidation returns HTTP 422 with a validation.Result body.
+// Callers should return immediately after calling this.
+func jsonValidation(w http.ResponseWriter, result validation.Result) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnprocessableEntity)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func pathID(r *http.Request, key string) (int64, error) {
@@ -1657,6 +1667,26 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 		playerIDs[pid] = hc
 	}
 
+	// Look up season rules before validation and save.
+	var saveSeasonID int64
+	db.DB.QueryRow(`SELECT season_id FROM matches WHERE id=?`, matchID).Scan(&saveSeasonID)
+	saveMult := seasonMultiplier(saveSeasonID)
+	var minBallStr string
+	db.DB.QueryRow(`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
+		saveSeasonID).Scan(&minBallStr)
+	minBallHC, _ := strconv.Atoi(minBallStr)
+
+	// Backend validation — errors block save; warnings are noted but do not block.
+	// Warnings are not currently returned to the frontend; they are available for future Close Week use.
+	vResult := matches.ValidateRounds(req.Rounds, playerIDs, matches.RoundConfig{
+		Multiplier: saveMult,
+		MinBallHC:  minBallHC,
+	})
+	if vResult.HasErrors() {
+		jsonValidation(w, vResult.Result)
+		return
+	}
+
 	tx, err := db.DB.Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -1666,10 +1696,6 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 
 	// Replace all round results for this match
 	tx.Exec(`DELETE FROM round_results WHERE match_id=?`, matchID)
-	// Look up this season's handicap multiplier once before iterating rounds
-	var saveSeasonID int64
-	db.DB.QueryRow(`SELECT season_id FROM matches WHERE id=?`, matchID).Scan(&saveSeasonID)
-	saveMult := seasonMultiplier(saveSeasonID)
 
 	for _, rr := range req.Rounds {
 		spot := logic.CalcSpotM(playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID], saveMult)
