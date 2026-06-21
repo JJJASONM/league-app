@@ -24,10 +24,13 @@ var webFiles embed.FS
 var seedSQL string
 
 func main() {
-	port    := flag.Int("port", 8080, "HTTP port to listen on")
+	port := flag.Int("port", 8080, "HTTP port to listen on")
 	dataDir := flag.String("data", defaultDataDir(), "Directory for the SQLite database and backups")
-	seed    := flag.Bool("seed", false, "Load starter data (leagues, teams, players) then exit")
+	seed := flag.Bool("seed", false, "Load starter data (leagues, teams, players) then exit")
 	resetDB := flag.Bool("reset-db", false, "Delete and recreate the database (WARNING: erases all data)")
+	seedScoresheetFixtures := flag.Bool("seed-scoresheet-fixtures", false, "Load opt-in fictional scoresheet fixture data then exit")
+	fixtureWeeks := flag.String("fixture-weeks", "", "Scoresheet fixture weeks to create: N for weeks 1..N, or all")
+	fixtureWeek := flag.String("fixture-week", "", "Single scoresheet fixture week to create")
 	flag.Parse()
 
 	// --reset-db: wipe and recreate
@@ -51,6 +54,25 @@ func main() {
 			log.Fatalf("seed failed: %v", err)
 		}
 		log.Println("seed complete — leagues, teams, and players loaded.")
+		if !*seedScoresheetFixtures {
+			return
+		}
+	}
+
+	if (*fixtureWeeks != "" || *fixtureWeek != "") && !*seedScoresheetFixtures {
+		log.Fatalf("fixture week flags require -seed-scoresheet-fixtures")
+	}
+
+	if *seedScoresheetFixtures {
+		weeks, err := parseScoresheetFixtureWeeks(*fixtureWeeks, *fixtureWeek)
+		if err != nil {
+			log.Fatalf("scoresheet fixture options: %v", err)
+		}
+		summary, err := db.SeedScoresheetFixtures(weeks)
+		if err != nil {
+			log.Fatalf("scoresheet fixture seed failed: %v", err)
+		}
+		log.Printf("scoresheet fixtures loaded: league=%q season=%q weeks=%v matches=%d", summary.LeagueName, summary.SeasonName, summary.Weeks, summary.MatchCount)
 		return
 	}
 
@@ -69,7 +91,7 @@ func main() {
 	mux.Handle("/", http.FileServer(http.FS(webRoot)))
 
 	addr := fmt.Sprintf(":%d", *port)
-	url  := fmt.Sprintf("http://localhost:%d", *port)
+	url := fmt.Sprintf("http://localhost:%d", *port)
 	log.Printf("pool league manager running at %s", url)
 
 	// Open browser after a short delay so the server is up
@@ -90,6 +112,55 @@ func defaultDataDir() string {
 		return "data"
 	}
 	return filepath.Join(filepath.Dir(exe), "data")
+}
+
+func parseScoresheetFixtureWeeks(weeksArg, weekArg string) ([]int, error) {
+	const maxFixtureWeek = 5
+	if weeksArg != "" && weekArg != "" {
+		return nil, fmt.Errorf("use either -fixture-weeks or -fixture-week, not both")
+	}
+	if weekArg != "" {
+		n, err := parsePositiveIntFlag("-fixture-week", weekArg)
+		if err != nil {
+			return nil, err
+		}
+		if n > maxFixtureWeek {
+			return nil, fmt.Errorf("-fixture-week must be between 1 and %d", maxFixtureWeek)
+		}
+		return []int{n}, nil
+	}
+	if weeksArg == "" {
+		return []int{1}, nil
+	}
+	if weeksArg == "all" {
+		return []int{1, 2, 3, 4, 5}, nil
+	}
+	n, err := parsePositiveIntFlag("-fixture-weeks", weeksArg)
+	if err != nil {
+		return nil, err
+	}
+	if n > maxFixtureWeek {
+		return nil, fmt.Errorf("-fixture-weeks must be between 1 and %d or all", maxFixtureWeek)
+	}
+	weeks := make([]int, 0, n)
+	for i := 1; i <= n; i++ {
+		weeks = append(weeks, i)
+	}
+	return weeks, nil
+}
+
+func parsePositiveIntFlag(name, value string) (int, error) {
+	var n int
+	if _, err := fmt.Sscanf(value, "%d", &n); err != nil {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	if fmt.Sprintf("%d", n) != value {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("%s must be greater than zero", name)
+	}
+	return n, nil
 }
 
 // openBrowser launches the system default browser.
