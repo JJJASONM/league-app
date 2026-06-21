@@ -1201,7 +1201,12 @@ function populateScheduleSeasonSelect(previewSeasonId = null) {
 async function loadSchedule() {
   const seasonId = document.getElementById('schedule-season-select').value;
   if (!seasonId) { document.getElementById('schedule-content').innerHTML = '<div class="text-muted">No season selected.</div>'; return; }
-  const matches = await api('GET', `/matches?season_id=${seasonId}`);
+  const [matches, weekList] = await Promise.all([
+    api('GET', `/matches?season_id=${seasonId}`),
+    api('GET', `/seasons/${seasonId}/weeks`).catch(() => []),
+  ]);
+  const weekStatusMap = {};
+  (weekList || []).forEach(ws => { weekStatusMap[ws.week_number] = ws; });
   const byWeek = {};
   matches.forEach(m => { (byWeek[m.week_number] = byWeek[m.week_number]||[]).push(m); });
   const weeks = Object.keys(byWeek).sort((a,b)=>a-b);
@@ -1234,9 +1239,21 @@ async function loadSchedule() {
         </tr>`
       : '';
 
+    const ws = weekStatusMap[w];
+    const isClosed = ws && ws.status === 'closed';
+    const statusChip = isClosed
+      ? '<span class="badge bg-success ms-2">Closed</span>'
+      : '<span class="badge bg-secondary ms-2">Open</span>';
+    const closeBtn = isClosed
+      ? ''
+      : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" onclick="reviewCloseWeek(${seasonId},${w})">Review &amp; Close</button>`;
+
     return `
     <div class="card mb-2">
-      <div class="card-header week-header py-1">Week ${w} — ${displayDate(byWeek[w][0].match_date)}</div>
+      <div class="card-header week-header py-1 d-flex align-items-center justify-content-between">
+        <span>Week ${w} - ${displayDate(byWeek[w][0].match_date)}</span>
+        <span class="d-flex align-items-center">${statusChip}${closeBtn}</span>
+      </div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0" style="table-layout:fixed">
           <colgroup>
@@ -1272,6 +1289,47 @@ async function loadSchedule() {
     </div>`;
   }).join('')
   : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons → Manage → Schedule.</div>';
+}
+
+async function reviewCloseWeek(seasonId, weekNum) {
+  const result = await api('GET', `/seasons/${seasonId}/weeks/${weekNum}/validate`);
+  const msgs = result.messages || [];
+  const errors = msgs.filter(m => m.level === 'error');
+  const warnings = msgs.filter(m => m.level === 'warning');
+
+  const msgList = items => items.map(m =>
+    `<li>${escapeHTML(m.message)}</li>`).join('');
+
+  let body = '';
+  if (errors.length) {
+    body += `<div class="mb-3"><strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Errors - must fix before close</strong><ul class="mt-1 mb-0">${msgList(errors)}</ul></div>`;
+  }
+  if (warnings.length) {
+    body += `<div class="mb-3"><strong class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Warnings</strong><ul class="mt-1 mb-0">${msgList(warnings)}</ul></div>`;
+  }
+  if (!errors.length && !warnings.length) {
+    body = '<p class="text-success mb-2"><i class="bi bi-check-circle me-1"></i>All checks passed. Ready to close.</p>';
+  }
+  if (!errors.length) {
+    body += '<p class="text-muted small mb-0">Closing marks this week official. Standings will update immediately.</p>';
+  }
+
+  const modal = new bootstrap.Modal(document.getElementById('close-week-modal'));
+  document.getElementById('close-week-modal-body').innerHTML = body;
+  const confirmBtn = document.getElementById('close-week-confirm-btn');
+  confirmBtn.disabled = errors.length > 0;
+  confirmBtn.onclick = async () => {
+    try {
+      await api('POST', `/seasons/${seasonId}/weeks/${weekNum}/close`);
+      modal.hide();
+      toast('Week ' + weekNum + ' closed.', 'success');
+      loadSchedule();
+      if (currentSeasonId) loadStandings();
+    } catch (e) {
+      toast('Close failed: ' + (e.message || e), 'danger');
+    }
+  };
+  modal.show();
 }
 
 // ── Schedule Poster ───────────────────────────────────────────────────────────

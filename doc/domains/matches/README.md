@@ -120,21 +120,82 @@ has 2 determined pairing wins in that round. Currently informational only.
 
 Scores may be entered and saved before the league week closes. Entering scores
 does not make their calculations official. The exact match status transition
-after score entry remains open.
+after score entry remains open (see MATCHES-Q001).
 
 Official handicap adjustments, match outcomes, standings, and player
 statistics are applied when the admin successfully closes the week. Results
 that have not passed week close do not contribute to official totals.
 
-The UI identifies affected matches directly:
+## Close Week -- Phase 1 (implemented 2026-06-21)
 
-```text
-Team 1 vs Team 2 - Incomplete
-Team 3 vs Team 4 - Missing player review
-Team 5 vs Team 6 - Reopened
-```
+**Package:** `backend/domains/matches` -- `ValidateWeek`
 
-## Close Week Validation
+The Close Week workflow is implemented in Phase 1 with the following scope.
+
+### Schema
+
+- `league_weeks` table: tracks per-week status (`open` | `closed`) per season.
+  A row is created on first close; absence implies `open`.
+- `matches.week_closed INTEGER NOT NULL DEFAULT 0`: set to 1 on all matches in a
+  week when the week is officially closed. Standings filter on this column.
+
+### API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/seasons/{id}/weeks` | List all weeks with status, match counts |
+| `GET` | `/api/seasons/{id}/weeks/{week}/validate` | Dry-run validation (no write) |
+| `POST` | `/api/seasons/{id}/weeks/{week}/close` | Validate + commit close |
+
+`validate` and `close` return the same `validation.Result` JSON body on errors.
+`close` returns HTTP 422 when errors exist; 200 `{"closed":true}` on success.
+
+### Standings Gate
+
+`getStandings` filters on `completed=1 AND week_closed=1`. Matches with saved
+scores that have not been through week close are excluded from official totals.
+
+**Deploy note:** Existing seasons with saved scores will show empty standings
+until their weeks are explicitly closed via the new API.
+
+**Player stats gate:** `getPlayerStats` (season scope) applies the same filter --
+only `match_results` from `completed=1 AND week_closed=1` matches count. The
+league-scope stats path has no season concept and is unchanged.
+
+### Phase 1 Validation Codes
+
+| Code | Level | Condition |
+|------|-------|-----------|
+| `WEEK_MATCH_NO_SCORES` | error | No `round_results` row with a game winner (score of 10) |
+| `WEEK_MATCH_UNASSIGNED` | error | `home_team_id` or `away_team_id` is NULL |
+| `SCORESHEET_GAME_BOTH_WINNERS` | error | Re-run from `ValidateRounds` on saved data |
+| `SCORESHEET_GAME_SCORE_RANGE` | error | Re-run from `ValidateRounds` on saved data |
+| `SCORESHEET_LOSER_SCORE_RANGE` | error | Re-run from `ValidateRounds` on saved data |
+| `SCORESHEET_NO_SCORES` | warning | Re-run from `ValidateRounds` on saved data |
+| `SCORESHEET_GAME_INCOMPLETE` | warning | Re-run from `ValidateRounds` on saved data |
+
+In Phase 1, warnings are surfaced in the UI but do not block close.
+
+### Deferred (not in Phase 1)
+
+- Warning acknowledgment storage and audited admin override
+- Reopen workflow (`POST /api/seasons/{id}/weeks/{week}/reopen`)
+- Handicap update suggestions at close time
+- Duplicate player participation check (`WEEK_PLAYER_DUPLICATE`)
+- `SCORESHEET_PAIRING_UNDETERMINED` and `SCORESHEET_ROUND_INCOMPLETE` codes
+- `sets_won` / `sets_lost` population
+- Match-level status codes (MATCHES-Q001)
+- Audit log table
+
+### UI Placement
+
+Close Week controls appear in the Schedule tab, in each week's card header:
+- **Closed** badge (green) for closed weeks
+- **Open** badge (grey) + "Review & Close" button for open weeks
+- The button opens a validation summary modal; confirm button is disabled
+  when errors are present; warnings are shown but do not block confirm
+
+## Close Week Validation (full target -- future phases)
 
 The backend validates the week's score data before official calculations are
 committed. Validation includes:

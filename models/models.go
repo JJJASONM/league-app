@@ -235,6 +235,18 @@ type RoundResult struct {
 	PairingWinner string `json:"pairing_winner,omitempty"` // "home"|"away"|""
 }
 
+// WeekSummary is one entry in the GET /api/seasons/{id}/weeks response.
+// Status is "open" when no league_weeks row exists (inferred) or the row has status "open".
+// Status is "closed" after a successful POST /api/seasons/{id}/weeks/{week}/close.
+type WeekSummary struct {
+	WeekNumber     int     `json:"week_number"`
+	Status         string  `json:"status"`          // "open" | "closed"
+	ClosedAt       *string `json:"closed_at,omitempty"`
+	MatchCount     int     `json:"match_count"`
+	CompletedCount int     `json:"completed_count"` // matches with completed=1 (scores entered)
+	ClosedCount    int     `json:"closed_count"`    // matches with week_closed=1 (officially closed)
+}
+
 // SaveRoundsRequest is the body for POST /api/matches/{id}/rounds.
 type SaveRoundsRequest struct {
 	Rounds []RoundResult `json:"rounds"`

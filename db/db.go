@@ -206,6 +206,19 @@ CREATE TABLE IF NOT EXISTS round_results (
 );
 CREATE INDEX IF NOT EXISTS idx_round_results_match ON round_results(match_id);
 
+-- League weeks: tracks official Close Week status for each week of a season.
+-- A row is created the first time a week is closed. Absence implies 'open' status.
+CREATE TABLE IF NOT EXISTS league_weeks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id   INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    week_number INTEGER NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'open', -- 'open' | 'closed'
+    closed_at   DATETIME,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(season_id, week_number)
+);
+CREATE INDEX IF NOT EXISTS idx_league_weeks_season ON league_weeks(season_id);
+
 -- Lineup planning: pre-scheduled who plays each week per team
 CREATE TABLE IF NOT EXISTS lineup_plans (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -292,6 +305,9 @@ CREATE INDEX IF NOT EXISTS idx_season_rosters_pid ON season_rosters(player_id);
 		`ALTER TABLE seasons ADD COLUMN teams_managed INTEGER NOT NULL DEFAULT 0`,
 		// activated_at is the persistent setup lock — set once on first activation.
 		`ALTER TABLE seasons ADD COLUMN activated_at DATETIME`,
+		// Close Week gate: set to 1 when the match's week has been officially closed.
+		// Standings filter on week_closed=1 so only official results count.
+		`ALTER TABLE matches ADD COLUMN week_closed INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs

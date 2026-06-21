@@ -95,6 +95,11 @@ func Register(mux *http.ServeMux, dataDir string) {
 	// Rule definitions — developer-owned, served by the backend
 	mux.HandleFunc("GET /api/rules/definitions", listRuleDefinitions)
 
+	// Week workflow -- Close Week gate
+	mux.HandleFunc("GET /api/seasons/{id}/weeks", listWeeks)
+	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/validate", validateWeekHandler)
+	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close", closeWeekHandler)
+
 	// Standings & stats
 	mux.HandleFunc("GET /api/standings", getStandings)
 	mux.HandleFunc("GET /api/player-stats", getPlayerStats)
@@ -1392,6 +1397,10 @@ func submitResults(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid id", 400)
 		return
 	}
+	if matchWeekClosed(id) {
+		jsonError(w, "week is closed; reopen before editing scores", http.StatusConflict)
+		return
+	}
 	var req models.SubmitResultsRequest
 	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
@@ -1430,9 +1439,169 @@ func clearResults(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid id", 400)
 		return
 	}
+	if matchWeekClosed(id) {
+		jsonError(w, "week is closed; reopen before editing scores", http.StatusConflict)
+		return
+	}
 	db.DB.Exec(`DELETE FROM match_results WHERE match_id=?`, id)
 	db.DB.Exec(`UPDATE matches SET completed=0 WHERE id=?`, id)
 	jsonOK(w, map[string]string{"status": "cleared"})
+}
+
+// Week Workflow ---------------------------------------------------------------
+
+func listWeeks(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+
+	// Aggregate per-week match counts directly from matches table.
+	type weekCount struct{ total, completed, closed int }
+	counts := map[int]weekCount{}
+	var weekOrder []int
+	seen := map[int]bool{}
+
+	matchRows, err := db.DB.Query(`
+		SELECT week_number, completed, week_closed
+		FROM matches WHERE season_id=?
+		ORDER BY week_number`, seasonID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer matchRows.Close()
+	for matchRows.Next() {
+		var wn, comp, wc int
+		matchRows.Scan(&wn, &comp, &wc)
+		c := counts[wn]
+		c.total++
+		c.completed += comp
+		c.closed += wc
+		counts[wn] = c
+		if !seen[wn] {
+			weekOrder = append(weekOrder, wn)
+			seen[wn] = true
+		}
+	}
+
+	// Look up any existing league_weeks status rows for this season.
+	type weekStatusRow struct {
+		status   string
+		closedAt *string
+	}
+	statusMap := map[int]weekStatusRow{}
+	statusRows, err := db.DB.Query(`
+		SELECT week_number, status, closed_at
+		FROM league_weeks WHERE season_id=?`, seasonID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer statusRows.Close()
+	for statusRows.Next() {
+		var wn int
+		var st string
+		var ca *string
+		statusRows.Scan(&wn, &st, &ca)
+		statusMap[wn] = weekStatusRow{st, ca}
+	}
+
+	var summaries []models.WeekSummary
+	for _, wn := range weekOrder {
+		c := counts[wn]
+		st := statusMap[wn]
+		status := "open"
+		var closedAt *string
+		if st.status != "" {
+			status = st.status
+			closedAt = st.closedAt
+		}
+		summaries = append(summaries, models.WeekSummary{
+			WeekNumber:     wn,
+			Status:         status,
+			ClosedAt:       closedAt,
+			MatchCount:     c.total,
+			CompletedCount: c.completed,
+			ClosedCount:    c.closed,
+		})
+	}
+	if summaries == nil {
+		summaries = []models.WeekSummary{}
+	}
+	jsonOK(w, summaries)
+}
+
+func validateWeekHandler(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	weekNum, err := pathID(r, "week")
+	if err != nil {
+		jsonError(w, "invalid week", 400)
+		return
+	}
+	cfg := seasonRoundConfig(seasonID)
+	result := matches.ValidateWeek(db.DB, seasonID, int(weekNum), cfg)
+	jsonOK(w, result)
+}
+
+func closeWeekHandler(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	weekNum, err := pathID(r, "week")
+	if err != nil {
+		jsonError(w, "invalid week", 400)
+		return
+	}
+
+	cfg := seasonRoundConfig(seasonID)
+	result := matches.ValidateWeek(db.DB, seasonID, int(weekNum), cfg)
+	if result.HasErrors() {
+		jsonValidation(w, result)
+		return
+	}
+
+	tx, err := db.DB.Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer tx.Rollback()
+
+	// Upsert the league_weeks row -- idempotent re-close updates closed_at.
+	_, err = tx.Exec(`
+		INSERT INTO league_weeks (season_id, week_number, status, closed_at)
+		VALUES (?, ?, 'closed', CURRENT_TIMESTAMP)
+		ON CONFLICT(season_id, week_number) DO UPDATE
+		SET status='closed', closed_at=CURRENT_TIMESTAMP`,
+		seasonID, weekNum)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	// Mark every match in the week as officially closed.
+	_, err = tx.Exec(`
+		UPDATE matches SET week_closed=1
+		WHERE season_id=? AND week_number=?`,
+		seasonID, weekNum)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	jsonOK(w, map[string]any{"closed": true, "week_number": int(weekNum)})
 }
 
 // ─── Standings ────────────────────────────────────────────────────────────────
@@ -1472,7 +1641,7 @@ func getStandings(w http.ResponseWriter, r *http.Request) {
 
 	matchRows, err := db.DB.Query(`
 		SELECT id, season_id, home_team_id, away_team_id, match_date, week_number, completed, created_at
-		FROM matches WHERE season_id=? AND completed=1`, seasonID)
+		FROM matches WHERE season_id=? AND completed=1 AND week_closed=1`, seasonID)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -1527,6 +1696,26 @@ func seasonMultiplier(seasonID int64) float64 {
 		return logic.Multiplier
 	}
 	return f
+}
+
+// seasonRoundConfig builds a RoundConfig from the season's handicap_multiplier and
+// min_ball_handicap rules. Used by saveRounds, validateWeekHandler, and closeWeekHandler
+// so they all apply identical rule resolution.
+func seasonRoundConfig(seasonID int64) matches.RoundConfig {
+	mult := seasonMultiplier(seasonID)
+	var minBallStr string
+	db.DB.QueryRow(
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
+		seasonID).Scan(&minBallStr)
+	minBallHC, _ := strconv.Atoi(minBallStr)
+	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}
+}
+
+// matchWeekClosed returns true when the match's week has been officially closed.
+func matchWeekClosed(matchID int64) bool {
+	var wc int
+	db.DB.QueryRow(`SELECT week_closed FROM matches WHERE id=?`, matchID).Scan(&wc)
+	return wc == 1
 }
 
 // ─── 8-Ball Round Results ─────────────────────────────────────────────────────
@@ -1642,6 +1831,10 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid id", 400)
 		return
 	}
+	if matchWeekClosed(matchID) {
+		jsonError(w, "week is closed; reopen before editing scores", http.StatusConflict)
+		return
+	}
 	var req models.SaveRoundsRequest
 	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
@@ -1670,18 +1863,11 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 	// Look up season rules before validation and save.
 	var saveSeasonID int64
 	db.DB.QueryRow(`SELECT season_id FROM matches WHERE id=?`, matchID).Scan(&saveSeasonID)
-	saveMult := seasonMultiplier(saveSeasonID)
-	var minBallStr string
-	db.DB.QueryRow(`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
-		saveSeasonID).Scan(&minBallStr)
-	minBallHC, _ := strconv.Atoi(minBallStr)
+	saveCfg := seasonRoundConfig(saveSeasonID)
 
-	// Backend validation — errors block save; warnings are noted but do not block.
-	// Warnings are not currently returned to the frontend; they are available for future Close Week use.
-	vResult := matches.ValidateRounds(req.Rounds, playerIDs, matches.RoundConfig{
-		Multiplier: saveMult,
-		MinBallHC:  minBallHC,
-	})
+	// Backend validation -- errors block save; warnings are noted but do not block.
+	// Warnings are not currently returned to the frontend; they are available for Close Week use.
+	vResult := matches.ValidateRounds(req.Rounds, playerIDs, saveCfg)
 	if vResult.HasErrors() {
 		jsonValidation(w, vResult.Result)
 		return
@@ -1698,7 +1884,7 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 	tx.Exec(`DELETE FROM round_results WHERE match_id=?`, matchID)
 
 	for _, rr := range req.Rounds {
-		spot := logic.CalcSpotM(playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID], saveMult)
+		spot := logic.CalcSpotM(playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID], saveCfg.Multiplier)
 		_, err := tx.Exec(`
 			INSERT INTO round_results
 			  (match_id, round_number, home_player_id, away_player_id,
@@ -1806,7 +1992,7 @@ func getPlayerStats(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case seasonID != "":
 		query = `
-			SELECT p.id, p.player_number, p.first_name || ' ' || p.last_name,
+			SELECT p.id, COALESCE(p.player_number,''), p.first_name || ' ' || p.last_name,
 			       COALESCE(t.name,''), p.handicap,
 			       COALESCE(SUM(mr.sets_won),0), COALESCE(SUM(mr.sets_lost),0),
 			       COALESCE(SUM(mr.games_won),0), COALESCE(SUM(mr.games_lost),0)
@@ -1814,12 +2000,15 @@ func getPlayerStats(w http.ResponseWriter, r *http.Request) {
 			JOIN teams t ON t.id = p.team_id
 			JOIN seasons s ON s.league_id = t.league_id AND s.id = ?
 			LEFT JOIN match_results mr ON mr.player_id = p.id
-			LEFT JOIN matches m ON m.id = mr.match_id AND m.season_id = ?
+			    AND mr.match_id IN (
+			        SELECT id FROM matches
+			        WHERE season_id=? AND completed=1 AND week_closed=1
+			    )
 			GROUP BY p.id ORDER BY SUM(mr.sets_won) DESC, SUM(mr.games_won) DESC`
 		args = []any{seasonID, seasonID}
 	case leagueID != "":
 		query = `
-			SELECT p.id, p.player_number, p.first_name || ' ' || p.last_name,
+			SELECT p.id, COALESCE(p.player_number,''), p.first_name || ' ' || p.last_name,
 			       COALESCE(t.name,''), p.handicap,
 			       COALESCE(SUM(mr.sets_won),0), COALESCE(SUM(mr.sets_lost),0),
 			       COALESCE(SUM(mr.games_won),0), COALESCE(SUM(mr.games_lost),0)

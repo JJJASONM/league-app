@@ -503,6 +503,426 @@ func TestGetSeason_StartDateIsYYYYMMDD(t *testing.T) {
 	}
 }
 
+// Week Workflow (Close Week) --------------------------------------------------
+
+// weekFixture is the result of weekTestSeed: a running server plus pre-seeded IDs.
+type weekFixture struct {
+	srv     *httptest.Server
+	sid     int64 // season ID
+	matchID int64
+	teamA   int64
+	teamB   int64
+	playerA int64 // one player on team A
+	playerB int64 // one player on team B
+}
+
+// weekTestSeed spins up a fresh test server, creates one league, one season, two teams
+// with one player each, and one unscored match in week 1. Cleanup is registered on t.
+func weekTestSeed(t *testing.T) weekFixture {
+	t.Helper()
+	srv := testServer(t)
+	sid := seedSeason(t, srv.URL)
+
+	var leagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM seasons WHERE id=?`, sid).Scan(&leagueID); err != nil {
+		t.Fatalf("weekTestSeed: season league: %v", err)
+	}
+	rA, _ := db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,'Team A')`, leagueID)
+	rB, _ := db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,'Team B')`, leagueID)
+	teamA, _ := rA.LastInsertId()
+	teamB, _ := rB.LastInsertId()
+
+	rPA, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Home','Player',?,3.0)`, teamA)
+	rPB, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Away','Player',?,3.0)`, teamB)
+	playerA, _ := rPA.LastInsertId()
+	playerB, _ := rPB.LastInsertId()
+
+	rm, err := db.DB.Exec(`
+		INSERT INTO matches (season_id, home_team_id, away_team_id, week_number)
+		VALUES (?,?,?,1)`, sid, teamA, teamB)
+	if err != nil {
+		t.Fatalf("weekTestSeed: insert match: %v", err)
+	}
+	matchID, _ := rm.LastInsertId()
+	return weekFixture{srv, sid, matchID, teamA, teamB, playerA, playerB}
+}
+
+// seedRoundResult inserts one round_results row with a game winner (home wins all 3)
+// and sets matches.completed=1. Used to satisfy Close Week's game-winner requirement.
+func seedRoundResult(t *testing.T, matchID, homePlayerID, awayPlayerID int64) {
+	t.Helper()
+	_, err := db.DB.Exec(`
+		INSERT INTO round_results
+		    (match_id, round_number, home_player_id, away_player_id,
+		     game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		     home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
+		VALUES (?,1,?,?,10,5,10,3,10,2,3.0,3.0,0,'')`,
+		matchID, homePlayerID, awayPlayerID)
+	if err != nil {
+		t.Fatalf("seedRoundResult: %v", err)
+	}
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID)
+}
+
+func TestListWeeks_ReturnsOpenWhenNoRows(t *testing.T) {
+	f := weekTestSeed(t)
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var weeks []map[string]any
+	json.NewDecoder(resp.Body).Decode(&weeks)
+	if len(weeks) == 0 {
+		t.Fatal("expected at least one week entry")
+	}
+	got, _ := weeks[0]["status"].(string)
+	if got != "open" {
+		t.Errorf("want status 'open' (inferred when no league_weeks row exists), got %q", got)
+	}
+}
+
+func TestValidateWeek_ReportsErrorForUnscored(t *testing.T) {
+	f := weekTestSeed(t)
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks/1/validate", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("validate should return 200 with the result body, got %d", resp.StatusCode)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	msgs, _ := result["messages"].([]any)
+	found := false
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		if msg["code"] == "WEEK_MATCH_NO_SCORES" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected WEEK_MATCH_NO_SCORES error in validation result, got: %v", result)
+	}
+}
+
+func TestCloseWeek_Returns422WhenErrors(t *testing.T) {
+	f := weekTestSeed(t)
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("unscored match must block close: want 422, got %d", resp.StatusCode)
+	}
+}
+
+// TestCloseWeek_Returns422WhenCompletedButNoRoundResults proves that completed=1 alone
+// is not sufficient to close a week -- round_results with a game winner are required.
+func TestCloseWeek_Returns422WhenCompletedButNoRoundResults(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, f.matchID)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("completed=1 with no round_results must block close: want 422, got %d: %s", resp.StatusCode, body)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	msgs, _ := result["messages"].([]any)
+	found := false
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		if msg["code"] == "WEEK_MATCH_NO_SCORES" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected WEEK_MATCH_NO_SCORES error, got: %v", result)
+	}
+}
+
+func TestCloseWeek_SucceedsWithSavedScores(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["closed"] != true {
+		t.Errorf("want closed=true in response body, got %v", result)
+	}
+}
+
+func TestCloseWeek_SetsLeagueWeeksStatus(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	var status string
+	db.DB.QueryRow(`SELECT status FROM league_weeks WHERE season_id=? AND week_number=1`, f.sid).Scan(&status)
+	if status != "closed" {
+		t.Errorf("want league_weeks.status='closed', got %q", status)
+	}
+}
+
+func TestCloseWeek_SetsMatchWeekClosed(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	var wc int
+	db.DB.QueryRow(`SELECT week_closed FROM matches WHERE id=?`, f.matchID).Scan(&wc)
+	if wc != 1 {
+		t.Errorf("want matches.week_closed=1 after close, got %d", wc)
+	}
+}
+
+func TestSaveRounds_BlockedWhenWeekClosed(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, _ := http.DefaultClient.Do(closeReq)
+	closeResp.Body.Close()
+
+	body := fmt.Sprintf(`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`,
+		f.playerA, f.playerB)
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("saveRounds on closed week must return 409, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestSubmitResults_BlockedWhenWeekClosed(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, _ := http.DefaultClient.Do(closeReq)
+	closeResp.Body.Close()
+
+	body := fmt.Sprintf(`{"results":[{"player_id":%d,"team_id":%d,"games_won":3,"games_lost":0,"diff":3}]}`,
+		f.playerA, f.teamA)
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/matches/%d/results", f.srv.URL, f.matchID),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("submitResults on closed week must return 409, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestClearResults_BlockedWhenWeekClosed(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, _ := http.DefaultClient.Do(closeReq)
+	closeResp.Body.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete,
+		fmt.Sprintf("%s/api/matches/%d/results", f.srv.URL, f.matchID),
+		nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("clearResults on closed week must return 409, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestStandings_ExcludeSavedButOpenMatch(t *testing.T) {
+	f := weekTestSeed(t)
+	// Insert round results and match results but do NOT close the week.
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`
+		INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,3)`, f.matchID, f.playerA, f.teamA)
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/standings?season_id=%d", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var standings []map[string]any
+	json.NewDecoder(resp.Body).Decode(&standings)
+	for _, s := range standings {
+		if played, _ := s["played"].(float64); played > 0 {
+			t.Errorf("standings must not count open (unclosed) week: team %v shows %v played", s["team_name"], played)
+		}
+	}
+}
+
+func TestStandings_IncludeClosedMatch(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`
+		INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,3)`, f.matchID, f.playerA, f.teamA)
+	db.DB.Exec(`
+		INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,0,3,-3)`, f.matchID, f.playerB, f.teamB)
+
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, _ := http.DefaultClient.Do(closeReq)
+	closeResp.Body.Close()
+
+	standResp, err := http.Get(fmt.Sprintf("%s/api/standings?season_id=%d", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standResp.Body.Close()
+	var standings []map[string]any
+	json.NewDecoder(standResp.Body).Decode(&standings)
+	totalPlayed := 0
+	for _, s := range standings {
+		if p, _ := s["played"].(float64); p > 0 {
+			totalPlayed++
+		}
+	}
+	if totalPlayed == 0 {
+		t.Error("standings must include match after week is closed")
+	}
+}
+
+func TestPlayerStats_ExcludeOpenMatch(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`
+		INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,3)`, f.matchID, f.playerA, f.teamA)
+
+	// Do NOT close the week.
+	resp, err := http.Get(fmt.Sprintf("%s/api/player-stats?season_id=%d", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var stats []map[string]any
+	json.NewDecoder(resp.Body).Decode(&stats)
+	for _, s := range stats {
+		if gw, _ := s["games_won"].(float64); gw > 0 {
+			t.Errorf("player stats must not count open (unclosed) week: %v shows %.0f games_won", s["player_name"], gw)
+		}
+	}
+}
+
+func TestPlayerStats_IncludeClosedMatch(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	if _, err := db.DB.Exec(`
+		INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,3)`, f.matchID, f.playerA, f.teamA); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, err := http.DefaultClient.Do(closeReq)
+	if err != nil {
+		t.Fatalf("close request: %v", err)
+	}
+	if closeResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(closeResp.Body)
+		t.Fatalf("close week failed: %d: %s", closeResp.StatusCode, body)
+	}
+	closeResp.Body.Close()
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/player-stats?season_id=%d", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var stats []map[string]any
+	json.NewDecoder(resp.Body).Decode(&stats)
+	totalGamesWon := 0
+	for _, s := range stats {
+		if gw, _ := s["games_won"].(float64); gw > 0 {
+			totalGamesWon += int(gw)
+		}
+	}
+	if totalGamesWon == 0 {
+		t.Error("player stats must include match after week is closed")
+	}
+}
+
 // ─── Skip date and match date normalization ───────────────────────────────────
 
 // seedScheduleFixture creates a league, 3 teams (odd), and one season.
@@ -2564,7 +2984,6 @@ func TestSeasonTeams_ManagedRequiresFromSeasonIdAlways(t *testing.T) {
 		t.Fatalf("managed+prior season+no from_season_id: want 400, got %d", resp.StatusCode)
 	}
 }
-
 
 // TestSeasonTeams_ManagedFirstSeason_FromTeamIdRejected verifies that from_team_id
 // is rejected for a managed season even when no prior season exists; the only
