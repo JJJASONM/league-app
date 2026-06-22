@@ -100,6 +100,7 @@ func Register(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("GET /api/seasons/{id}/weeks", listWeeks)
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/validate", validateWeekHandler)
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close", closeWeekHandler)
+	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen", reopenWeekHandler)
 
 	// Standings & stats
 	mux.HandleFunc("GET /api/standings", getStandings)
@@ -1678,6 +1679,63 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]any{"closed": true, "week_number": int(weekNum)})
+}
+
+func reopenWeekHandler(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	weekNum, err := pathID(r, "week")
+	if err != nil {
+		jsonError(w, "invalid week", 400)
+		return
+	}
+
+	// Require at least one match to exist for this season/week.
+	var matchCount int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
+		seasonID, weekNum).Scan(&matchCount)
+	if matchCount == 0 {
+		jsonError(w, "week not found: no matches for this season and week", http.StatusNotFound)
+		return
+	}
+
+	// Require the week to be currently closed.
+	var status string
+	db.DB.QueryRow(`SELECT status FROM league_weeks WHERE season_id=? AND week_number=?`,
+		seasonID, weekNum).Scan(&status)
+	if status != "closed" {
+		jsonError(w, "week is not closed", http.StatusConflict)
+		return
+	}
+
+	tx, err := db.DB.Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err = tx.Exec(`
+		UPDATE league_weeks SET status='open', closed_at=NULL
+		WHERE season_id=? AND week_number=?`, seasonID, weekNum); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if _, err = tx.Exec(`
+		UPDATE matches SET week_closed=0
+		WHERE season_id=? AND week_number=?`, seasonID, weekNum); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	jsonOK(w, map[string]any{"reopened": true, "week_number": int(weekNum)})
 }
 
 // ─── Standings ────────────────────────────────────────────────────────────────

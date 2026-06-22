@@ -6,6 +6,7 @@ let allTeams    = [];
 let allPlayers  = [];
 let allSeasons  = [];
 let activeSeason = null;
+let reopenWeekContext = null;
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 document.querySelectorAll('[data-section]').forEach(link => {
@@ -1198,6 +1199,33 @@ function populateScheduleSeasonSelect(previewSeasonId = null) {
 }
 
 // ── Schedule ──────────────────────────────────────────────────────────────────
+document.getElementById('schedule-content').addEventListener('click', e => {
+  const btn = e.target.closest('[data-action="reopen-week"]');
+  if (!btn) return;
+  confirmReopenWeek(parseInt(btn.dataset.seasonId, 10), parseInt(btn.dataset.weekNum, 10));
+});
+
+document.getElementById('reopen-week-modal').addEventListener('hidden.bs.modal', () => {
+  reopenWeekContext = null;
+});
+
+document.getElementById('reopen-week-confirm-btn').addEventListener('click', async () => {
+  if (!reopenWeekContext) return;
+  const { seasonId, weekNum, modal } = reopenWeekContext;
+  reopenWeekContext = null;
+  try {
+    await api('POST', `/seasons/${seasonId}/weeks/${weekNum}/reopen`);
+    modal.hide();
+    toast('Week ' + weekNum + ' reopened.', 'success');
+    loadSchedule();
+    if (currentSeasonId) loadStandings();
+    const statsSeasonId = document.getElementById('stats-season-select').value;
+    if (statsSeasonId) loadPlayerStats();
+  } catch (e) {
+    toast('Reopen failed: ' + (e.message || e), 'danger');
+  }
+});
+
 async function loadSchedule() {
   const seasonId = document.getElementById('schedule-season-select').value;
   if (!seasonId) { document.getElementById('schedule-content').innerHTML = '<div class="text-muted">No season selected.</div>'; return; }
@@ -1245,7 +1273,7 @@ async function loadSchedule() {
       ? '<span class="badge bg-success ms-2">Closed</span>'
       : '<span class="badge bg-secondary ms-2">Open</span>';
     const closeBtn = isClosed
-      ? ''
+      ? `<button class="btn btn-sm btn-outline-warning py-0 ms-2" data-action="reopen-week" data-season-id="${seasonId}" data-week-num="${w}">Reopen</button>`
       : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" onclick="reviewCloseWeek(${seasonId},${w})">Review &amp; Close</button>`;
 
     return `
@@ -1384,6 +1412,19 @@ async function reviewCloseWeek(seasonId, weekNum) {
       toast('Close failed: ' + (e.message || e), 'danger');
     }
   };
+  modal.show();
+}
+
+function confirmReopenWeek(seasonId, weekNum) {
+  const modalBody = document.getElementById('reopen-week-modal-body');
+  modalBody.innerHTML = `
+    <p class="mb-2">Are you sure you want to reopen Week ${weekNum}?</p>
+    <div class="alert alert-warning mb-0">
+      <i class="bi bi-exclamation-triangle me-1"></i>
+      This week will be removed from standings until it is closed again. Saved scores will remain.
+    </div>`;
+  const modal = new bootstrap.Modal(document.getElementById('reopen-week-modal'));
+  reopenWeekContext = { seasonId, weekNum, modal };
   modal.show();
 }
 

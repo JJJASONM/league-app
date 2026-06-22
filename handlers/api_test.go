@@ -1264,6 +1264,246 @@ func TestSaveRounds_ValidationMatchIDNil(t *testing.T) {
 	}
 }
 
+// Phase 2B: Reopen workflow ------------------------------------------------
+
+// weekReopen POSTs to reopen a week. Returns the raw *http.Response (caller must close body).
+func weekReopen(t *testing.T, srvURL string, sid int64, weekNum int) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/%d/reopen", srvURL, sid, weekNum), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("weekReopen: %v", err)
+	}
+	return resp
+}
+
+// seedMatchResult inserts one match_results row (1 set won, 3 games won) for the player.
+func seedMatchResult(t *testing.T, matchID, playerID, teamID int64) {
+	t.Helper()
+	if _, err := db.DB.Exec(`
+		INSERT OR IGNORE INTO match_results (match_id, player_id, team_id, sets_won, sets_lost, games_won, games_lost, diff)
+		VALUES (?,?,?,1,0,3,0,3.0)`, matchID, playerID, teamID); err != nil {
+		t.Fatalf("seedMatchResult: %v", err)
+	}
+}
+
+func TestReopenWeek_ClosedWeekCanBeReopened(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+
+	resp := weekReopen(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, b)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["reopened"] != true {
+		t.Errorf("want reopened=true in response body, got %v", result)
+	}
+}
+
+func TestReopenWeek_SetsLeagueWeeksStatusOpen(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	var status string
+	db.DB.QueryRow(`SELECT status FROM league_weeks WHERE season_id=? AND week_number=1`, f.sid).Scan(&status)
+	if status != "open" {
+		t.Errorf("want league_weeks.status='open' after reopen, got %q", status)
+	}
+}
+
+func TestReopenWeek_ClearsClosedAt(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	var closedAt *string
+	db.DB.QueryRow(`SELECT closed_at FROM league_weeks WHERE season_id=? AND week_number=1`, f.sid).Scan(&closedAt)
+	if closedAt != nil {
+		t.Errorf("want league_weeks.closed_at=NULL after reopen, got %q", *closedAt)
+	}
+}
+
+func TestReopenWeek_SetsMatchWeekClosed0(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	var wc int
+	db.DB.QueryRow(`SELECT week_closed FROM matches WHERE id=?`, f.matchID).Scan(&wc)
+	if wc != 0 {
+		t.Errorf("want matches.week_closed=0 after reopen, got %d", wc)
+	}
+}
+
+func TestReopenWeek_PreservesRoundResults(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	var count int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM round_results WHERE match_id=?`, f.matchID).Scan(&count)
+	if count == 0 {
+		t.Error("round_results must survive reopen")
+	}
+}
+
+func TestReopenWeek_PreservesMatchResults(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	seedMatchResult(t, f.matchID, f.playerA, f.teamA)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	var count int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM match_results WHERE match_id=?`, f.matchID).Scan(&count)
+	if count == 0 {
+		t.Error("match_results must survive reopen")
+	}
+}
+
+func TestReopenWeek_StandingsExcludeReopenedWeek(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+
+	// After close: match appears in standings (played >= 1).
+	resp, _ := http.Get(fmt.Sprintf("%s/api/standings?season_id=%d", f.srv.URL, f.sid))
+	var standings []map[string]any
+	json.NewDecoder(resp.Body).Decode(&standings)
+	resp.Body.Close()
+	closedPlayed := 0
+	for _, s := range standings {
+		if p, ok := s["played"].(float64); ok && int(p) > closedPlayed {
+			closedPlayed = int(p)
+		}
+	}
+	if closedPlayed == 0 {
+		t.Fatal("expected standings to reflect closed match (played>0), but got 0")
+	}
+
+	// After reopen: match is excluded (played=0 for all teams).
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+	resp2, _ := http.Get(fmt.Sprintf("%s/api/standings?season_id=%d", f.srv.URL, f.sid))
+	var standings2 []map[string]any
+	json.NewDecoder(resp2.Body).Decode(&standings2)
+	resp2.Body.Close()
+	for _, s := range standings2 {
+		if p, ok := s["played"].(float64); ok && p > 0 {
+			t.Errorf("standings must exclude reopened week: team %v still shows played=%v", s["team_name"], p)
+		}
+	}
+}
+
+func TestReopenWeek_PlayerStatsExcludeReopenedWeek(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	seedMatchResult(t, f.matchID, f.playerA, f.teamA)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+
+	// After close: player stats include games from the closed match.
+	resp, _ := http.Get(fmt.Sprintf("%s/api/player-stats?season_id=%d", f.srv.URL, f.sid))
+	var stats []map[string]any
+	json.NewDecoder(resp.Body).Decode(&stats)
+	resp.Body.Close()
+	maxGamesWon := 0
+	for _, s := range stats {
+		if gw, ok := s["games_won"].(float64); ok && int(gw) > maxGamesWon {
+			maxGamesWon = int(gw)
+		}
+	}
+	if maxGamesWon == 0 {
+		t.Fatal("expected player stats to include closed match games, but got 0")
+	}
+
+	// After reopen: player stats exclude the week (games_won=0 for all players).
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+	resp2, _ := http.Get(fmt.Sprintf("%s/api/player-stats?season_id=%d", f.srv.URL, f.sid))
+	var stats2 []map[string]any
+	json.NewDecoder(resp2.Body).Decode(&stats2)
+	resp2.Body.Close()
+	for _, s := range stats2 {
+		if gw, ok := s["games_won"].(float64); ok && gw > 0 {
+			t.Errorf("player stats must exclude reopened week: player %v still shows games_won=%v", s["player_name"], gw)
+		}
+	}
+}
+
+func TestReopenWeek_OpenWeekReturns409(t *testing.T) {
+	f := weekTestSeed(t)
+	// Week 1 exists (match seeded) but has no league_weeks row: implicitly open.
+	resp := weekReopen(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("reopening an open week must return 409, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestReopenWeek_NoMatchesReturns404(t *testing.T) {
+	f := weekTestSeed(t)
+	// Week 99 has no matches.
+	resp := weekReopen(t, f.srv.URL, f.sid, 99)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("reopening a week with no matches must return 404, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestReopenWeek_ClosingAfterReopenWorks(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("re-close after reopen must succeed: want 200, got %d: %s", resp.StatusCode, b)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["closed"] != true {
+		t.Errorf("want closed=true in re-close response, got %v", result)
+	}
+}
+
+func TestReopenWeek_PreservesAcknowledgmentRows(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks := buildAcks(msgs)
+	weekClose(t, f.srv.URL, f.sid, 1, acks).Body.Close()
+
+	var countBefore int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM week_close_acknowledgments WHERE season_id=? AND week_number=1`, f.sid).Scan(&countBefore)
+	if countBefore == 0 {
+		t.Fatal("expected acknowledgment rows after close, got 0")
+	}
+
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	var countAfter int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM week_close_acknowledgments WHERE season_id=? AND week_number=1`, f.sid).Scan(&countAfter)
+	if countAfter != countBefore {
+		t.Errorf("acknowledgment rows must survive reopen: want %d, got %d", countBefore, countAfter)
+	}
+}
+
 // ─── Skip date and match date normalization ───────────────────────────────────
 
 // seedScheduleFixture creates a league, 3 teams (odd), and one season.

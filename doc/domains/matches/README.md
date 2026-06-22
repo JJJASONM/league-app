@@ -258,7 +258,7 @@ is inserted on each re-close.
 - Actor/user identity on acknowledgments (deferred to auth phase)
 - Required controlled reason codes (deferred to CODES-Q001)
 - Warning invalidation history on reopen
-- Reopen workflow (Phase 2B)
+- Reopen workflow (**implemented in Phase 2B**)
 - Audit log module
 - `sets_won` / `sets_lost` population
 - Handicap update suggestions
@@ -276,6 +276,60 @@ and no errors block close:
 
 When errors are present, warnings are shown as read-only context (no checkboxes).
 When no warnings exist, behavior is unchanged from Phase 1.
+
+## Close Week -- Phase 2B: Reopen Closed Week (implemented 2026-06-21)
+
+### Endpoint
+
+`POST /api/seasons/{id}/weeks/{week}/reopen`
+
+### Behavior
+
+- Requires the week to be currently closed (`league_weeks.status = 'closed'`). Returns
+  HTTP 409 Conflict if the week is open or has no `league_weeks` row.
+- Requires at least one match to exist for the season and week number. Returns HTTP 404
+  if no matches are found (the week does not exist as a schedulable entity).
+- Within a single transaction:
+  - Sets `league_weeks.status = 'open'` and `league_weeks.closed_at = NULL`.
+  - Sets `matches.week_closed = 0` for all matches in the season/week.
+- Returns HTTP 200 `{"reopened": true, "week_number": <n>}` on success.
+
+### Data preserved
+
+- `round_results` rows are not touched.
+- `match_results` rows are not touched.
+- `week_close_acknowledgments` rows from prior close operations are retained.
+  A new set of acknowledgment rows is inserted on the next re-close.
+
+### Standings and player stats impact
+
+Both `getStandings` and `getPlayerStats` (season scope) filter on
+`completed=1 AND week_closed=1`. Setting `week_closed=0` on reopen immediately
+excludes the week's matches from official standings and player stats without any
+additional query changes.
+
+### UI behavior
+
+Closed week cards in the Schedule tab show a yellow **Reopen** button in place of the
+**Review & Close** button. Clicking Reopen opens a confirmation modal with the message:
+
+> This week will be removed from standings until it is closed again. Saved scores will remain.
+
+On successful reopen:
+- The schedule refreshes (week card shows Open badge + Review & Close button).
+- Standings refresh.
+- Player stats refresh (if a season is selected).
+- A success toast is shown.
+
+On failure, the backend error message is shown in a danger toast.
+
+### Deferred (not in Phase 2B)
+
+- `reopen_count` / `last_reopened_at` tracking on `league_weeks`
+- Warning invalidation history (clearing stale acks on reopen)
+- Actor/user identity on reopen
+- Audit log entry for reopen operations
+- Per-match selective reopen (currently reopens the whole week)
 
 ## Close Week Validation (full target -- future phases)
 
