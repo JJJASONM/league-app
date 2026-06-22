@@ -178,8 +178,8 @@ In Phase 1, warnings are surfaced in the UI but do not block close.
 
 ### Deferred (not in Phase 1)
 
-- Warning acknowledgment storage and audited admin override
-- Reopen workflow (`POST /api/seasons/{id}/weeks/{week}/reopen`)
+- Warning acknowledgment storage and audited admin override (**implemented in Phase 2A**)
+- Reopen workflow (`POST /api/seasons/{id}/weeks/{week}/reopen`) (Phase 2B)
 - Handicap update suggestions at close time
 - Duplicate player participation check (`WEEK_PLAYER_DUPLICATE`)
 - `SCORESHEET_PAIRING_UNDETERMINED` and `SCORESHEET_ROUND_INCOMPLETE` codes
@@ -194,6 +194,88 @@ Close Week controls appear in the Schedule tab, in each week's card header:
 - **Open** badge (grey) + "Review & Close" button for open weeks
 - The button opens a validation summary modal; confirm button is disabled
   when errors are present; warnings are shown but do not block confirm
+
+## Close Week -- Phase 2A: Warning Acknowledgment (implemented 2026-06-21)
+
+### MatchID on validation messages
+
+`validation.Message` gained an optional `MatchID *int64` field (`json:"match_id,omitempty"`).
+`ValidateWeek` stamps `MatchID` on every message it emits, including messages forwarded
+from `ValidateRounds`. The compound key `(match_id, warning_code, field)` uniquely
+identifies a warning for acknowledgment purposes.
+
+`ValidateRounds` used directly by `saveRounds` does not set `MatchID` (nil). Existing
+callers are unaffected; the field serializes with `omitempty`.
+
+### Acknowledgment gate
+
+POST `/close` now accepts an optional request body:
+
+```json
+{
+  "acknowledgments": [
+    {
+      "match_id":     5,
+      "warning_code": "SCORESHEET_GAME_INCOMPLETE",
+      "field":        "rounds[0].game2",
+      "notes":        "Optional free-text note"
+    }
+  ]
+}
+```
+
+Behavior:
+- Error-level messages still block close exactly as Phase 1.
+- The close handler re-runs `ValidateWeek` before writing. The current warning
+  set at close time may differ from the set shown to the user at validate time.
+- Every current warning must be acknowledged. The match is: `(match_id, warning_code, field)` all equal.
+- Stale/extra acknowledgments (no matching current warning) are silently ignored.
+- If any current warning is unacknowledged, close returns HTTP 422 with the unacknowledged
+  warnings promoted to error-level messages.
+- Missing body and empty `acknowledgments` array are equivalent (no acks submitted).
+- When no warnings exist, a missing body still succeeds (Phase 1 behavior unchanged).
+
+### Acknowledgment storage
+
+Each acknowledged warning is stored as one row in `week_close_acknowledgments` within
+the same transaction as the week close.
+
+| Column | Notes |
+|--------|-------|
+| `season_id` | Foreign key to seasons; ON DELETE CASCADE |
+| `week_number` | Matches the closed week |
+| `match_id` | Foreign key to matches; ON DELETE SET NULL (history survives match deletion) |
+| `warning_code` | The warning code (e.g. `SCORESHEET_GAME_INCOMPLETE`) |
+| `field` | The warning field; empty string for non-field warnings |
+| `notes` | Optional free-text note from admin; empty string if none |
+| `acknowledged_at` | Timestamp set by database default |
+
+Rows from prior close operations are retained across reopens. A new set of rows
+is inserted on each re-close.
+
+### Deferred (not in Phase 2A)
+
+- Actor/user identity on acknowledgments (deferred to auth phase)
+- Required controlled reason codes (deferred to CODES-Q001)
+- Warning invalidation history on reopen
+- Reopen workflow (Phase 2B)
+- Audit log module
+- `sets_won` / `sets_lost` population
+- Handicap update suggestions
+
+### UI behavior
+
+The Review & Close modal gains acknowledgment checkboxes when warnings are present
+and no errors block close:
+
+- One checkbox and optional notes input per warning
+- Match badge, code, field, and message text are shown per warning
+- Confirm Close is disabled until every checkbox is checked
+- On confirm, all acknowledgments are collected and sent in the POST body
+- If the backend returns 422 (stale/missing acks), a toast shows the error messages
+
+When errors are present, warnings are shown as read-only context (no checkboxes).
+When no warnings exist, behavior is unchanged from Phase 1.
 
 ## Close Week Validation (full target -- future phases)
 

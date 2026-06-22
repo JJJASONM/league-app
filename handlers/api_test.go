@@ -923,6 +923,347 @@ func TestPlayerStats_IncludeClosedMatch(t *testing.T) {
 	}
 }
 
+// Phase 2A: Warning acknowledgment ------------------------------------------------
+
+// seedRoundResultWithIncompleteGame inserts round_results with one game winner (game1)
+// and one incomplete game (game2: 5-3, no winner), triggering SCORESHEET_GAME_INCOMPLETE.
+func seedRoundResultWithIncompleteGame(t *testing.T, matchID, homePlayerID, awayPlayerID int64) {
+	t.Helper()
+	_, err := db.DB.Exec(`
+		INSERT INTO round_results
+		    (match_id, round_number, home_player_id, away_player_id,
+		     game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		     home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
+		VALUES (?,1,?,?,10,5,5,3,0,0,3.0,3.0,0,'')`,
+		matchID, homePlayerID, awayPlayerID)
+	if err != nil {
+		t.Fatalf("seedRoundResultWithIncompleteGame: %v", err)
+	}
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID)
+}
+
+// seedRoundResultWithTwoWarnings inserts round_results with one game winner (game1)
+// and two incomplete games (game2: 5-3, game3: 4-2), each triggering SCORESHEET_GAME_INCOMPLETE.
+func seedRoundResultWithTwoWarnings(t *testing.T, matchID, homePlayerID, awayPlayerID int64) {
+	t.Helper()
+	_, err := db.DB.Exec(`
+		INSERT INTO round_results
+		    (match_id, round_number, home_player_id, away_player_id,
+		     game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		     home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
+		VALUES (?,1,?,?,10,5,5,3,4,2,3.0,3.0,0,'')`,
+		matchID, homePlayerID, awayPlayerID)
+	if err != nil {
+		t.Fatalf("seedRoundResultWithTwoWarnings: %v", err)
+	}
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID)
+}
+
+// weekValidate is a helper that calls GET /validate and decodes messages.
+func weekValidate(t *testing.T, srvURL string, sid int64, weekNum int) []map[string]any {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks/%d/validate", srvURL, sid, weekNum))
+	if err != nil {
+		t.Fatalf("weekValidate: %v", err)
+	}
+	defer resp.Body.Close()
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	msgs, _ := result["messages"].([]any)
+	out := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		if msg, ok := m.(map[string]any); ok {
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+// buildAcks constructs an acknowledgment slice from validate messages (warnings only).
+func buildAcks(msgs []map[string]any) []map[string]any {
+	var acks []map[string]any
+	for _, msg := range msgs {
+		if msg["level"] == "warning" {
+			fieldStr, _ := msg["field"].(string)
+			acks = append(acks, map[string]any{
+				"match_id":     msg["match_id"],
+				"warning_code": msg["code"],
+				"field":        fieldStr,
+				"notes":        "",
+			})
+		}
+	}
+	return acks
+}
+
+// weekClose POSTs to close the week with the given ack body.
+func weekClose(t *testing.T, srvURL string, sid int64, weekNum int, acks []map[string]any) *http.Response {
+	t.Helper()
+	payload, _ := json.Marshal(map[string]any{"acknowledgments": acks})
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/%d/close", srvURL, sid, weekNum),
+		strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("weekClose: %v", err)
+	}
+	return resp
+}
+
+func TestValidateWeek_StampsMatchIDOnErrors(t *testing.T) {
+	f := weekTestSeed(t)
+	// No round results -> WEEK_MATCH_NO_SCORES error
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	for _, msg := range msgs {
+		if msg["code"] == "WEEK_MATCH_NO_SCORES" {
+			mid, ok := msg["match_id"].(float64)
+			if !ok || mid != float64(f.matchID) {
+				t.Errorf("WEEK_MATCH_NO_SCORES: want match_id=%d, got: %v", f.matchID, msg["match_id"])
+			}
+			return
+		}
+	}
+	t.Errorf("WEEK_MATCH_NO_SCORES not found in: %v", msgs)
+}
+
+func TestValidateWeek_StampsMatchIDOnScoresheetWarnings(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	for _, msg := range msgs {
+		if msg["level"] == "warning" {
+			mid, ok := msg["match_id"].(float64)
+			if !ok || mid != float64(f.matchID) {
+				t.Errorf("scoresheet warning: want match_id=%d, got: %v", f.matchID, msg["match_id"])
+			}
+			return
+		}
+	}
+	t.Errorf("no warning found with match_id in: %v", msgs)
+}
+
+func TestCloseWeek_NoWarningsNilBodySucceeds(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid), nil)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("no warnings + nil body must succeed: want 200, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestCloseWeek_MalformedBodyReturns400(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader(`{"acknowledgments": [`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("malformed close body must return 400, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestCloseWeek_BlocksOnUnacknowledgedWarnings(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("unacknowledged warnings must block close: want 422, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestCloseWeek_SucceedsWithAllWarningsAcknowledged(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks := buildAcks(msgs)
+	if len(acks) == 0 {
+		t.Fatal("fixture produced no warnings to acknowledge")
+	}
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, acks)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("all warnings acknowledged: want 200, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestCloseWeek_BlocksOnPartialAcknowledgments(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithTwoWarnings(t, f.matchID, f.playerA, f.playerB)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks := buildAcks(msgs)
+	if len(acks) < 2 {
+		t.Fatalf("need at least 2 warnings for partial ack test, got %d", len(acks))
+	}
+
+	// Acknowledge only the first warning
+	resp := weekClose(t, f.srv.URL, f.sid, 1, acks[:1])
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("partial acknowledgments must block close: want 422, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestCloseWeek_StoresAcknowledgmentRows(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	var acks []map[string]any
+	for _, msg := range msgs {
+		if msg["level"] == "warning" {
+			fieldStr, _ := msg["field"].(string)
+			acks = append(acks, map[string]any{
+				"match_id":     msg["match_id"],
+				"warning_code": msg["code"],
+				"field":        fieldStr,
+				"notes":        "stored note",
+			})
+		}
+	}
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, acks)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 for acked warnings, got %d", resp.StatusCode)
+	}
+
+	var count int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM week_close_acknowledgments WHERE season_id=? AND week_number=1`, f.sid).Scan(&count)
+	if count != len(acks) {
+		t.Errorf("want %d ack row(s) stored, got %d", len(acks), count)
+	}
+
+	var seasonID int64
+	var weekNumber int
+	var matchID int64
+	var warningCode string
+	var field string
+	var notes string
+	db.DB.QueryRow(`
+		SELECT season_id, week_number, match_id, warning_code, field, notes
+		FROM week_close_acknowledgments
+		WHERE season_id=? AND week_number=1`,
+		f.sid).Scan(&seasonID, &weekNumber, &matchID, &warningCode, &field, &notes)
+	if seasonID != f.sid {
+		t.Errorf("want stored season_id=%d, got %d", f.sid, seasonID)
+	}
+	if weekNumber != 1 {
+		t.Errorf("want stored week_number=1, got %d", weekNumber)
+	}
+	if matchID != f.matchID {
+		t.Errorf("want stored match_id=%d, got %d", f.matchID, matchID)
+	}
+	if warningCode != "SCORESHEET_GAME_INCOMPLETE" {
+		t.Errorf("want stored warning_code=SCORESHEET_GAME_INCOMPLETE, got %q", warningCode)
+	}
+	if field == "" {
+		t.Error("want stored field to be non-empty")
+	}
+	if notes != "stored note" {
+		t.Errorf("want notes='stored note', got %q", notes)
+	}
+}
+
+func TestCloseWeek_ExtraStaleAckIgnoredWhenAllCurrentAcknowledged(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks := buildAcks(msgs)
+	// Prepend a stale ack for a warning that does not exist
+	stale := map[string]any{
+		"match_id":     float64(f.matchID),
+		"warning_code": "SCORESHEET_NO_SCORES",
+		"field":        "",
+		"notes":        "stale",
+	}
+	acks = append([]map[string]any{stale}, acks...)
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, acks)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("stale ack should not block close when current warnings acked: want 200, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestCloseWeek_StaleAckAloneDoesNotAllowClose(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	// Only submit a stale ack for a non-existent warning
+	staleOnlyAcks := []map[string]any{{
+		"match_id":     float64(f.matchID),
+		"warning_code": "SCORESHEET_NO_SCORES",
+		"field":        "",
+		"notes":        "stale",
+	}}
+	resp := weekClose(t, f.srv.URL, f.sid, 1, staleOnlyAcks)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("stale ack alone must not allow close: want 422, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestSaveRounds_ValidationMatchIDNil(t *testing.T) {
+	f := weekTestSeed(t)
+	// Submit impossible scores (both score 10) to trigger SCORESHEET_GAME_BOTH_WINNERS error
+	body := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":10,"game2_home":0,"game2_away":0,"game3_home":0,"game3_away":0}]}`,
+		f.playerA, f.playerB)
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("invalid rounds must return 422, got %d: %s", resp.StatusCode, b)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	msgs, _ := result["messages"].([]any)
+	for _, m := range msgs {
+		if msg, ok := m.(map[string]any); ok {
+			if _, hasMatchID := msg["match_id"]; hasMatchID {
+				t.Errorf("saveRounds validation messages must not include match_id, got: %v", msg)
+			}
+		}
+	}
+}
+
 // ─── Skip date and match date normalization ───────────────────────────────────
 
 // seedScheduleFixture creates a league, 3 teams (odd), and one season.

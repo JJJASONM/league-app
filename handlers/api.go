@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
@@ -1561,10 +1562,64 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse optional acknowledgments from request body.
+	type ackEntry struct {
+		MatchID     int64  `json:"match_id"`
+		WarningCode string `json:"warning_code"`
+		Field       string `json:"field"`
+		Notes       string `json:"notes"`
+	}
+	type ackRequest struct {
+		Acknowledgments []ackEntry `json:"acknowledgments"`
+	}
+	var req ackRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			jsonError(w, "invalid close week request body", http.StatusBadRequest)
+			return
+		}
+	}
+
 	cfg := seasonRoundConfig(seasonID)
 	result := matches.ValidateWeek(db.DB, seasonID, int(weekNum), cfg)
 	if result.HasErrors() {
 		jsonValidation(w, result)
+		return
+	}
+
+	// Build acknowledgment lookup: (match_id, warning_code, field) -> notes.
+	type ackKey struct {
+		matchID int64
+		code    string
+		field   string
+	}
+	ackSet := make(map[ackKey]string, len(req.Acknowledgments))
+	for _, a := range req.Acknowledgments {
+		ackSet[ackKey{a.MatchID, a.WarningCode, a.Field}] = a.Notes
+	}
+
+	// Every current warning must be acknowledged; stale/extra acks are ignored.
+	var unacked []validation.Message
+	for _, msg := range result.Warnings() {
+		var mid int64
+		if msg.MatchID != nil {
+			mid = *msg.MatchID
+		}
+		if _, ok := ackSet[ackKey{mid, msg.Code, msg.Field}]; !ok {
+			unacked = append(unacked, msg)
+		}
+	}
+	if len(unacked) > 0 {
+		var ackResult validation.Result
+		for _, msg := range unacked {
+			ackResult.AddError(msg.Code, msg.Field,
+				"warning requires acknowledgment before close: "+msg.Message)
+			if msg.MatchID != nil {
+				id := *msg.MatchID
+				ackResult.Messages[len(ackResult.Messages)-1].MatchID = &id
+			}
+		}
+		jsonValidation(w, ackResult)
 		return
 	}
 
@@ -1595,6 +1650,27 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
+	}
+
+	// Store one acknowledgment row per current warning in the same transaction.
+	for _, msg := range result.Warnings() {
+		var mid int64
+		if msg.MatchID != nil {
+			mid = *msg.MatchID
+		}
+		notes := ackSet[ackKey{mid, msg.Code, msg.Field}]
+		var matchIDVal interface{}
+		if mid != 0 {
+			matchIDVal = mid
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO week_close_acknowledgments
+			    (season_id, week_number, match_id, warning_code, field, notes)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			seasonID, weekNum, matchIDVal, msg.Code, msg.Field, notes); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

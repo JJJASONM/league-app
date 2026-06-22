@@ -20,11 +20,14 @@ const (
 // Message is a single validation finding.
 // Code is stable and machine-readable for API consumers.
 // Field maps to a UI input name when present; empty means a non-field-specific message.
+// MatchID identifies the match this message belongs to when emitted by ValidateWeek;
+// nil for messages not scoped to a specific match (e.g. from ValidateRounds directly).
 type Message struct {
 	Code    string `json:"code"`
 	Field   string `json:"field,omitempty"`
 	Message string `json:"message"`
 	Level   Level  `json:"level"`
+	MatchID *int64 `json:"match_id,omitempty"`
 }
 
 // Result collects validation messages from a single validation pass.

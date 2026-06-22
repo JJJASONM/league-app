@@ -1291,22 +1291,57 @@ async function loadSchedule() {
   : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons → Manage → Schedule.</div>';
 }
 
+// Called by warning acknowledgment checkboxes to update the Confirm Close button state.
+function _cwmUpdateConfirmState() {
+  const checks = document.querySelectorAll('#close-week-modal-body .cwm-ack-check');
+  document.getElementById('close-week-confirm-btn').disabled = [...checks].some(c => !c.checked);
+}
+
 async function reviewCloseWeek(seasonId, weekNum) {
   const result = await api('GET', `/seasons/${seasonId}/weeks/${weekNum}/validate`);
   const msgs = result.messages || [];
   const errors = msgs.filter(m => m.level === 'error');
   const warnings = msgs.filter(m => m.level === 'warning');
 
-  const msgList = items => items.map(m =>
-    `<li>${escapeHTML(m.message)}</li>`).join('');
-
   let body = '';
+
   if (errors.length) {
-    body += `<div class="mb-3"><strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Errors - must fix before close</strong><ul class="mt-1 mb-0">${msgList(errors)}</ul></div>`;
+    const errItems = errors.map(m => `<li>${escapeHTML(m.message)}</li>`).join('');
+    body += `<div class="mb-3"><strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Errors - must fix before close</strong><ul class="mt-1 mb-0">${errItems}</ul></div>`;
   }
-  if (warnings.length) {
-    body += `<div class="mb-3"><strong class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Warnings</strong><ul class="mt-1 mb-0">${msgList(warnings)}</ul></div>`;
+
+  if (warnings.length && !errors.length) {
+    // Build an acknowledgment checklist: one checkbox + optional notes per warning.
+    const ackItems = warnings.map((w, i) => {
+      const matchLabel = w.match_id
+        ? `<span class="badge bg-warning text-dark me-1">Match ${w.match_id}</span>`
+        : '';
+      const fieldLabel = w.field
+        ? ` <span class="text-muted small">(${escapeHTML(w.field)})</span>`
+        : '';
+      return `<div class="border rounded p-2 mb-2">
+        <div class="form-check mb-1">
+          <input class="form-check-input cwm-ack-check" type="checkbox" id="cwm-ack-${i}"
+                 data-idx="${i}">
+          <label class="form-check-label fw-semibold" for="cwm-ack-${i}">
+            ${matchLabel}${escapeHTML(w.code)}${fieldLabel}
+          </label>
+        </div>
+        <div class="ps-3 text-muted small mb-1">${escapeHTML(w.message)}</div>
+        <input type="text" class="form-control form-control-sm cwm-ack-notes"
+               data-idx="${i}" placeholder="Notes (optional)">
+      </div>`;
+    }).join('');
+    body += `<div class="mb-3">
+      <strong class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Warnings - acknowledge each before close</strong>
+      <div class="mt-2">${ackItems}</div>
+    </div>`;
+  } else if (warnings.length) {
+    // Errors are present; show warnings as read-only context.
+    const warnItems = warnings.map(w => `<li>${escapeHTML(w.message)}</li>`).join('');
+    body += `<div class="mb-3"><strong class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Warnings</strong><ul class="mt-1 mb-0">${warnItems}</ul></div>`;
   }
+
   if (!errors.length && !warnings.length) {
     body = '<p class="text-success mb-2"><i class="bi bi-check-circle me-1"></i>All checks passed. Ready to close.</p>';
   }
@@ -1315,12 +1350,32 @@ async function reviewCloseWeek(seasonId, weekNum) {
   }
 
   const modal = new bootstrap.Modal(document.getElementById('close-week-modal'));
-  document.getElementById('close-week-modal-body').innerHTML = body;
+  const modalBody = document.getElementById('close-week-modal-body');
+  modalBody.innerHTML = body;
   const confirmBtn = document.getElementById('close-week-confirm-btn');
-  confirmBtn.disabled = errors.length > 0;
+
+  // Disable if errors exist, or if there are warnings that need acknowledgment.
+  confirmBtn.disabled = errors.length > 0 || warnings.length > 0;
+  modalBody.querySelectorAll('.cwm-ack-check').forEach(check => {
+    check.addEventListener('change', _cwmUpdateConfirmState);
+  });
+
   confirmBtn.onclick = async () => {
+    // Collect acknowledgments from any warning checkboxes.
+    const acks = [];
+    if (warnings.length && !errors.length) {
+      warnings.forEach((w, i) => {
+        const noteEl = modalBody.querySelector(`.cwm-ack-notes[data-idx="${i}"]`);
+        acks.push({
+          match_id: w.match_id || 0,
+          warning_code: w.code,
+          field: w.field || '',
+          notes: noteEl ? noteEl.value.trim() : ''
+        });
+      });
+    }
     try {
-      await api('POST', `/seasons/${seasonId}/weeks/${weekNum}/close`);
+      await api('POST', `/seasons/${seasonId}/weeks/${weekNum}/close`, { acknowledgments: acks });
       modal.hide();
       toast('Week ' + weekNum + ' closed.', 'success');
       loadSchedule();

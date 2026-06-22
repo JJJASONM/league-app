@@ -219,6 +219,20 @@ CREATE TABLE IF NOT EXISTS league_weeks (
 );
 CREATE INDEX IF NOT EXISTS idx_league_weeks_season ON league_weeks(season_id);
 
+-- Warning acknowledgments: one row per warning acknowledged by admin at Close Week time.
+-- match_id is nullable (ON DELETE SET NULL) so history survives match deletion.
+CREATE TABLE IF NOT EXISTS week_close_acknowledgments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id       INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    week_number     INTEGER NOT NULL,
+    match_id        INTEGER REFERENCES matches(id) ON DELETE SET NULL,
+    warning_code    TEXT    NOT NULL,
+    field           TEXT    NOT NULL DEFAULT '',
+    notes           TEXT    NOT NULL DEFAULT '',
+    acknowledged_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wca_season_week ON week_close_acknowledgments(season_id, week_number);
+
 -- Lineup planning: pre-scheduled who plays each week per team
 CREATE TABLE IF NOT EXISTS lineup_plans (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

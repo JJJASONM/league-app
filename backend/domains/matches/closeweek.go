@@ -53,8 +53,10 @@ func ValidateWeek(dbConn *sql.DB, seasonID int64, weekNumber int, cfg RoundConfi
 		field := fmt.Sprintf("match_%d", mi.id)
 
 		if !mi.homeTeamID.Valid || !mi.awayTeamID.Valid {
+			matchID := mi.id
 			res.AddError(CodeWeekMatchUnassigned, field,
 				fmt.Sprintf("match %d: home or away team is not assigned", mi.id))
+			res.Messages[len(res.Messages)-1].MatchID = &matchID
 			continue
 		}
 
@@ -112,13 +114,20 @@ func ValidateWeek(dbConn *sql.DB, seasonID int64, weekNumber int, cfg RoundConfi
 			}
 		}
 		if !hasGameWinner {
+			matchID := mi.id
 			res.AddError(CodeWeekMatchNoScores, field,
 				fmt.Sprintf("match %d: no game winners in saved scoresheet data", mi.id))
+			res.Messages[len(res.Messages)-1].MatchID = &matchID
 			continue
 		}
 
 		ssRes := ValidateRounds(rounds, playerHC, cfg)
+		before := len(res.Messages)
 		res.Messages = append(res.Messages, ssRes.Messages...)
+		matchID := mi.id
+		for i := before; i < len(res.Messages); i++ {
+			res.Messages[i].MatchID = &matchID
+		}
 	}
 
 	return res
