@@ -1202,7 +1202,7 @@ function populateScheduleSeasonSelect(previewSeasonId = null) {
 document.getElementById('schedule-content').addEventListener('click', e => {
   const btn = e.target.closest('[data-action="reopen-week"]');
   if (!btn) return;
-  confirmReopenWeek(parseInt(btn.dataset.seasonId, 10), parseInt(btn.dataset.weekNum, 10));
+  confirmReopenWeek(parseInt(btn.dataset.seasonId, 10), parseInt(btn.dataset.weekNum, 10), btn.dataset.matchDate || '');
 });
 
 document.getElementById('reopen-week-modal').addEventListener('hidden.bs.modal', () => {
@@ -1269,18 +1269,23 @@ async function loadSchedule() {
 
     const ws = weekStatusMap[w];
     const isClosed = ws && ws.status === 'closed';
+    const closedLabel = (ws && ws.closed_at) ? `Closed &middot; ${displayDate(ws.closed_at)}` : 'Closed';
     const statusChip = isClosed
-      ? '<span class="badge bg-success ms-2">Closed</span>'
+      ? `<span class="badge bg-success ms-2">${closedLabel}</span>`
       : '<span class="badge bg-secondary ms-2">Open</span>';
+    const countBadge = ws
+      ? `<span class="text-muted small ms-2">${ws.completed_count}/${ws.match_count} done</span>`
+      : '';
+    const matchDate = byWeek[w][0].match_date;
     const closeBtn = isClosed
-      ? `<button class="btn btn-sm btn-outline-warning py-0 ms-2" data-action="reopen-week" data-season-id="${seasonId}" data-week-num="${w}">Reopen</button>`
+      ? `<button class="btn btn-sm btn-outline-warning py-0 ms-2" data-action="reopen-week" data-season-id="${seasonId}" data-week-num="${w}" data-match-date="${escapeHTML(matchDate || '')}" title="Remove this week from official standings to correct scores, then re-close"><i class="bi bi-arrow-counterclockwise"></i> Reopen</button>`
       : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" onclick="reviewCloseWeek(${seasonId},${w})">Review &amp; Close</button>`;
 
     return `
     <div class="card mb-2">
       <div class="card-header week-header py-1 d-flex align-items-center justify-content-between">
         <span>Week ${w} - ${displayDate(byWeek[w][0].match_date)}</span>
-        <span class="d-flex align-items-center">${statusChip}${closeBtn}</span>
+        <span class="d-flex align-items-center">${countBadge}${statusChip}${closeBtn}</span>
       </div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0" style="table-layout:fixed">
@@ -1334,8 +1339,18 @@ async function reviewCloseWeek(seasonId, weekNum) {
   let body = '';
 
   if (errors.length) {
-    const errItems = errors.map(m => `<li>${escapeHTML(m.message)}</li>`).join('');
-    body += `<div class="mb-3"><strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Errors - must fix before close</strong><ul class="mt-1 mb-0">${errItems}</ul></div>`;
+    const weekErrors = errors.filter(m => !m.match_id);
+    const matchGroups = {};
+    errors.filter(m => m.match_id).forEach(m => {
+      (matchGroups[m.match_id] = matchGroups[m.match_id] || []).push(m);
+    });
+    let errHtml = weekErrors.length
+      ? `<ul class="mt-1 mb-2">${weekErrors.map(m => `<li>${escapeHTML(m.message)}</li>`).join('')}</ul>`
+      : '';
+    Object.entries(matchGroups).forEach(([mid, msgs]) => {
+      errHtml += `<div class="mb-2"><span class="badge bg-warning text-dark me-1">Match ${mid}</span><ul class="mb-0 mt-1">${msgs.map(m => `<li>${escapeHTML(m.message)}</li>`).join('')}</ul></div>`;
+    });
+    body += `<div class="mb-3"><strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Errors - must fix before close</strong>${errHtml}</div>`;
   }
 
   if (warnings.length && !errors.length) {
@@ -1366,7 +1381,11 @@ async function reviewCloseWeek(seasonId, weekNum) {
     </div>`;
   } else if (warnings.length) {
     // Errors are present; show warnings as read-only context.
-    const warnItems = warnings.map(w => `<li>${escapeHTML(w.message)}</li>`).join('');
+    const warnItems = warnings.map(w => {
+      const matchBadge = w.match_id ? `<span class="badge bg-warning text-dark me-1">Match ${w.match_id}</span>` : '';
+      const fieldLabel = w.field ? ` <span class="text-muted small">(${escapeHTML(w.field)})</span>` : '';
+      return `<li>${matchBadge}${escapeHTML(w.message)}${fieldLabel}</li>`;
+    }).join('');
     body += `<div class="mb-3"><strong class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Warnings</strong><ul class="mt-1 mb-0">${warnItems}</ul></div>`;
   }
 
@@ -1374,7 +1393,7 @@ async function reviewCloseWeek(seasonId, weekNum) {
     body = '<p class="text-success mb-2"><i class="bi bi-check-circle me-1"></i>All checks passed. Ready to close.</p>';
   }
   if (!errors.length) {
-    body += '<p class="text-muted small mb-0">Closing marks this week official. Standings will update immediately.</p>';
+    body += '<div class="alert alert-info py-2 mb-0 small"><i class="bi bi-info-circle me-1"></i>Closing makes this week\'s results official. Standings and player stats will update immediately and will reflect this week\'s outcomes.</div>';
   }
 
   const modal = new bootstrap.Modal(document.getElementById('close-week-modal'));
@@ -1384,6 +1403,7 @@ async function reviewCloseWeek(seasonId, weekNum) {
 
   // Disable if errors exist, or if there are warnings that need acknowledgment.
   confirmBtn.disabled = errors.length > 0 || warnings.length > 0;
+  confirmBtn.textContent = (warnings.length && !errors.length) ? 'Acknowledge & Close' : 'Confirm Close';
   modalBody.querySelectorAll('.cwm-ack-check').forEach(check => {
     check.addEventListener('change', _cwmUpdateConfirmState);
   });
@@ -1415,13 +1435,21 @@ async function reviewCloseWeek(seasonId, weekNum) {
   modal.show();
 }
 
-function confirmReopenWeek(seasonId, weekNum) {
+function confirmReopenWeek(seasonId, weekNum, matchDate) {
   const modalBody = document.getElementById('reopen-week-modal-body');
+  const dateStr = matchDate ? ` (${displayDate(matchDate)})` : '';
   modalBody.innerHTML = `
-    <p class="mb-2">Are you sure you want to reopen Week ${weekNum}?</p>
+    <p class="mb-2">Are you sure you want to reopen Week ${weekNum}${dateStr}?</p>
     <div class="alert alert-warning mb-0">
       <i class="bi bi-exclamation-triangle me-1"></i>
-      This week will be removed from standings until it is closed again. Saved scores will remain.
+      <strong>Reopening this week will:</strong>
+      <ul class="mb-0 mt-1">
+        <li>Remove it from official standings and player stats until re-closed</li>
+        <li>Allow scores to be corrected or re-saved</li>
+        <li>Preserve all previously saved scores (nothing is deleted)</li>
+        <li>Preserve prior warning acknowledgments as historical record</li>
+        <li>Allow the week to be re-closed normally when corrections are complete</li>
+      </ul>
     </div>`;
   const modal = new bootstrap.Modal(document.getElementById('reopen-week-modal'));
   reopenWeekContext = { seasonId, weekNum, modal };
