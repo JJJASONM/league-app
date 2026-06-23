@@ -101,6 +101,7 @@ func Register(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/validate", validateWeekHandler)
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close", closeWeekHandler)
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen", reopenWeekHandler)
+	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", getWeekAcknowledgments)
 
 	// Standings & stats
 	mux.HandleFunc("GET /api/standings", getStandings)
@@ -1510,6 +1511,29 @@ func listWeeks(w http.ResponseWriter, r *http.Request) {
 		statusMap[wn] = weekStatusRow{st, ca}
 	}
 
+	// Aggregate acknowledgment counts per week from week_close_acknowledgments.
+	ackCounts := map[int]int{}
+	ackCountRows, err := db.DB.Query(`
+		SELECT week_number, COUNT(*) FROM week_close_acknowledgments
+		WHERE season_id=? GROUP BY week_number`, seasonID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer ackCountRows.Close()
+	for ackCountRows.Next() {
+		var wn, cnt int
+		if err := ackCountRows.Scan(&wn, &cnt); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		ackCounts[wn] = cnt
+	}
+	if err := ackCountRows.Err(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
 	var summaries []models.WeekSummary
 	for _, wn := range weekOrder {
 		c := counts[wn]
@@ -1527,6 +1551,7 @@ func listWeeks(w http.ResponseWriter, r *http.Request) {
 			MatchCount:     c.total,
 			CompletedCount: c.completed,
 			ClosedCount:    c.closed,
+			AckCount:       ackCounts[wn],
 		})
 	}
 	if summaries == nil {
@@ -1736,6 +1761,61 @@ func reopenWeekHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]any{"reopened": true, "week_number": int(weekNum)})
+}
+
+func getWeekAcknowledgments(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	weekNum, err := pathID(r, "week")
+	if err != nil {
+		jsonError(w, "invalid week", 400)
+		return
+	}
+
+	// 404 when no matches exist for this season/week.
+	var matchCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
+		seasonID, weekNum).Scan(&matchCount); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if matchCount == 0 {
+		jsonError(w, "week not found: no matches for this season and week", http.StatusNotFound)
+		return
+	}
+
+	rows, err := db.DB.Query(`
+		SELECT id, season_id, week_number, match_id, warning_code, field, notes, acknowledged_at
+		FROM week_close_acknowledgments
+		WHERE season_id=? AND week_number=?
+		ORDER BY acknowledged_at DESC`, seasonID, weekNum)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer rows.Close()
+
+	var acks []models.CloseAck
+	for rows.Next() {
+		var a models.CloseAck
+		if err := rows.Scan(&a.ID, &a.SeasonID, &a.WeekNumber, &a.MatchID,
+			&a.WarningCode, &a.Field, &a.Notes, &a.AcknowledgedAt); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		acks = append(acks, a)
+	}
+	if err := rows.Err(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if acks == nil {
+		acks = []models.CloseAck{}
+	}
+	jsonOK(w, acks)
 }
 
 // ─── Standings ────────────────────────────────────────────────────────────────

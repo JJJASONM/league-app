@@ -1200,11 +1200,66 @@ function populateScheduleSeasonSelect(previewSeasonId = null) {
   loadSchedule();
 }
 
+// Fetches acknowledgment history for a week and renders it into container.
+// Sets container.dataset.loaded = '1' after first successful fetch so subsequent
+// toggle calls just show/hide without re-fetching.
+async function loadWeekAcknowledgments(seasonId, weekNum, container) {
+  try {
+    const acks = await api('GET', `/seasons/${seasonId}/weeks/${weekNum}/acknowledgments`);
+    container.dataset.loaded = '1';
+    if (!acks || acks.length === 0) {
+      container.innerHTML = '<p class="text-muted small mb-0">No acknowledgment records found.</p>';
+      return;
+    }
+    const rows = acks.map((a, idx) => {
+      const matchBadge = a.match_id
+        ? `<span class="badge bg-secondary me-1">Match ${escapeHTML(String(a.match_id))}</span>`
+        : '';
+      const field = a.field ? ` <span class="text-muted">(${escapeHTML(a.field)})</span>` : '';
+      const notes = a.notes ? ` - <span class="fst-italic">${escapeHTML(a.notes)}</span>` : '';
+      const ts = escapeHTML(String(a.acknowledged_at));
+      const border = idx < acks.length - 1 ? ' border-bottom' : '';
+      return `<li class="small py-1${border}">`
+        + `<span class="text-muted me-2">${ts}</span>`
+        + `${matchBadge}<strong>${escapeHTML(a.warning_code)}</strong>${field}${notes}`
+        + `</li>`;
+    }).join('');
+    container.innerHTML = `<ul class="list-unstyled mb-0">${rows}</ul>`;
+  } catch (_err) {
+    container.innerHTML = '<p class="text-danger small mb-0">Failed to load acknowledgment history.</p>';
+  }
+}
+
 // ── Schedule ──────────────────────────────────────────────────────────────────
 document.getElementById('schedule-content').addEventListener('click', e => {
   const reopenBtn = e.target.closest('[data-action="reopen-week"]');
   if (reopenBtn) {
     confirmReopenWeek(parseInt(reopenBtn.dataset.seasonId, 10), parseInt(reopenBtn.dataset.weekNum, 10), reopenBtn.dataset.matchDate || '');
+    return;
+  }
+  const reviewBtn = e.target.closest('[data-action="review-close-week"]');
+  if (reviewBtn) {
+    reviewCloseWeek(
+      parseInt(reviewBtn.dataset.seasonId, 10),
+      parseInt(reviewBtn.dataset.weekNum, 10),
+      parseInt(reviewBtn.dataset.ackCount, 10) || 0
+    );
+    return;
+  }
+  const toggleAcksBtn = e.target.closest('[data-action="toggle-week-acks"]');
+  if (toggleAcksBtn) {
+    const wn = toggleAcksBtn.dataset.weekNum;
+    const container = document.getElementById('week-acks-' + wn);
+    if (!container) return;
+    if (container.classList.contains('d-none')) {
+      container.classList.remove('d-none');
+      if (container.dataset.loaded !== '1') {
+        const sid = parseInt(document.getElementById('schedule-season-select').value, 10);
+        loadWeekAcknowledgments(sid, parseInt(wn, 10), container);
+      }
+    } else {
+      container.classList.add('d-none');
+    }
     return;
   }
   const entryBtn = e.target.closest('[data-action="open-match-entry"]');
@@ -1216,9 +1271,26 @@ document.getElementById('reopen-week-modal').addEventListener('hidden.bs.modal',
 });
 
 document.getElementById('close-week-modal').addEventListener('click', e => {
-  const btn = e.target.closest('[data-action="open-match-entry"]');
-  if (!btn) return;
-  openMatchEntry(parseInt(btn.dataset.matchId, 10), parseInt(btn.dataset.seasonId, 10) || null);
+  const entryBtn = e.target.closest('[data-action="open-match-entry"]');
+  if (entryBtn) {
+    openMatchEntry(parseInt(entryBtn.dataset.matchId, 10), parseInt(entryBtn.dataset.seasonId, 10) || null);
+    return;
+  }
+  const priorAcksBtn = e.target.closest('[data-action="load-prior-acks"]');
+  if (priorAcksBtn) {
+    const container = document.getElementById('cwm-prior-acks');
+    if (!container) return;
+    if (container.dataset.loaded === '1') {
+      container.classList.toggle('d-none');
+    } else {
+      container.classList.remove('d-none');
+      loadWeekAcknowledgments(
+        parseInt(priorAcksBtn.dataset.seasonId, 10),
+        parseInt(priorAcksBtn.dataset.weekNum, 10),
+        container
+      );
+    }
+  }
 });
 
 document.getElementById('reopen-week-confirm-btn').addEventListener('click', async () => {
@@ -1289,15 +1361,22 @@ async function loadSchedule() {
       ? `<span class="text-muted small ms-2">${ws.completed_count}/${ws.match_count} done</span>`
       : '';
     const matchDate = byWeek[w][0].match_date;
+    const ackCount = ws ? ws.ack_count : 0;
+    const ackToggle = ackCount > 0
+      ? `<button class="btn btn-link btn-sm py-0 ms-1 text-secondary" data-action="toggle-week-acks" data-week-num="${w}" title="Show/hide prior close acknowledgments"><i class="bi bi-clock-history"></i> ${ackCount} prior ack${ackCount !== 1 ? 's' : ''}</button>`
+      : '';
     const closeBtn = isClosed
-      ? `<button class="btn btn-sm btn-outline-warning py-0 ms-2" data-action="reopen-week" data-season-id="${seasonId}" data-week-num="${w}" data-match-date="${escapeHTML(matchDate || '')}" title="Remove this week from official standings to correct scores, then re-close"><i class="bi bi-arrow-counterclockwise"></i> Reopen</button>`
-      : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" onclick="reviewCloseWeek(${seasonId},${w})">Review &amp; Close</button>`;
+      ? `<button class="btn btn-sm btn-outline-warning py-0 ms-2" data-action="reopen-week" data-season-id="${escapeHTML(String(seasonId))}" data-week-num="${w}" data-match-date="${escapeHTML(matchDate || '')}" title="Remove this week from official standings to correct scores, then re-close"><i class="bi bi-arrow-counterclockwise"></i> Reopen</button>`
+      : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" data-action="review-close-week" data-season-id="${escapeHTML(String(seasonId))}" data-week-num="${w}" data-ack-count="${ackCount}">Review &amp; Close</button>`;
+    const ackSection = ackCount > 0
+      ? `<div class="px-3 pb-2 d-none" id="week-acks-${w}" data-loaded="0"></div>`
+      : '';
 
     return `
     <div class="card mb-2">
       <div class="card-header week-header py-1 d-flex align-items-center justify-content-between">
         <span>Week ${w} - ${displayDate(byWeek[w][0].match_date)}</span>
-        <span class="d-flex align-items-center">${countBadge}${statusChip}${closeBtn}</span>
+        <span class="d-flex align-items-center">${countBadge}${statusChip}${ackToggle}${closeBtn}</span>
       </div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0" style="table-layout:fixed">
@@ -1332,6 +1411,7 @@ async function loadSchedule() {
             ${byeRow}
           </tbody>
         </table>
+        ${ackSection}
       </div>
     </div>`;
   }).join('')
@@ -1344,13 +1424,24 @@ function _cwmUpdateConfirmState() {
   document.getElementById('close-week-confirm-btn').disabled = [...checks].some(c => !c.checked);
 }
 
-async function reviewCloseWeek(seasonId, weekNum) {
+async function reviewCloseWeek(seasonId, weekNum, ackCount = 0) {
   const result = await api('GET', `/seasons/${seasonId}/weeks/${weekNum}/validate`);
   const msgs = result.messages || [];
   const errors = msgs.filter(m => m.level === 'error');
   const warnings = msgs.filter(m => m.level === 'warning');
 
   let body = '';
+
+  // Prior history notice: week was previously closed with acknowledged warnings.
+  if (ackCount > 0) {
+    const label = ackCount === 1 ? '1 prior acknowledgment' : `${escapeHTML(String(ackCount))} prior acknowledgments`;
+    body += `<div class="alert alert-secondary py-2 mb-3 small">
+      <i class="bi bi-clock-history me-1"></i>
+      This week has ${label} from a previous close.
+      <button type="button" class="btn btn-link btn-sm p-0 ms-1" data-action="load-prior-acks" data-season-id="${escapeHTML(String(seasonId))}" data-week-num="${escapeHTML(String(weekNum))}">View</button>
+      <div class="mt-2 d-none" id="cwm-prior-acks" data-loaded="0"></div>
+    </div>`
+  }
 
   if (errors.length) {
     const weekErrors = errors.filter(m => !m.match_id);

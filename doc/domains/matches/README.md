@@ -380,10 +380,92 @@ the existing Assign button.
 
 ### Deferred (not in Phase 2D)
 
-- Close Week history UI (reading `week_close_acknowledgments` in a view)
 - `SCORESHEET_PAIRING_UNDETERMINED` - valid outcome; design decision pending
 - `SCORESHEET_ROUND_INCOMPLETE` - definition of "incomplete" vs legal 1-1-1 split pending
 - Audit log module, actor identity, reopen reason codes
+
+## Close Week -- Phase 2E: Acknowledgment History Visibility (implemented 2026-06-23)
+
+### Goal
+
+Surface prior Close Week warning acknowledgments to authorized admins without
+building the full application-wide audit module. Resolves MATCHES-Q003.
+
+### New endpoint
+
+`GET /api/seasons/{id}/weeks/{week}/acknowledgments`
+
+- Returns all `week_close_acknowledgments` rows for the season/week, ordered
+  by `acknowledged_at DESC`.
+- Returns `[]` (empty array) when the week exists but has no acknowledgments.
+- Returns 404 when no matches exist for the season/week.
+- No paging in this phase; operational volumes are small.
+
+Response shape:
+
+```json
+[
+  {
+    "id": 12,
+    "season_id": 3,
+    "week_number": 2,
+    "match_id": 7,
+    "warning_code": "SCORESHEET_GAME_INCOMPLETE",
+    "field": "rounds[1].game3",
+    "notes": "Admin note",
+    "acknowledged_at": "2026-06-23 10:30:00"
+  }
+]
+```
+
+`match_id`, `field`, and `notes` are omitted from the response when empty/null.
+
+### `ack_count` on WeekSummary
+
+`GET /api/seasons/{id}/weeks` now includes `ack_count` per week. This is the
+total number of acknowledgment rows ever written for that season/week (accumulated
+across all close cycles). It remains > 0 after reopen because rows are never
+deleted.
+
+`ack_count` is 0 for weeks that were closed cleanly with no warnings.
+
+### Schedule card history indicator
+
+When `ack_count > 0` for a week (open or closed), the schedule card header
+shows a small "N prior acks" toggle button. Clicking it fetches the new endpoint
+on first expand and renders a compact list of ack rows inline under the match
+table. Subsequent clicks toggle without re-fetching.
+
+The indicator appears on both open and closed weeks. On an open week with
+`ack_count > 0`, the acks are historical (from a previous close cycle).
+
+### Review & Close modal prior history notice
+
+When `reviewCloseWeek` opens for a week whose `ack_count > 0` (i.e. the week
+was previously closed and has been reopened), a collapsible notice appears at
+the top of the modal body, before current errors/warnings. The notice shows
+the count and a "View" button that loads the ack rows inline.
+
+If `ack_count === 0`, the modal behavior is unchanged.
+
+### Files changed
+
+- `models/models.go` -- `WeekSummary.AckCount int`; new `CloseAck` struct
+- `handlers/api.go` -- `listWeeks` ack count aggregate; `getWeekAcknowledgments`
+  handler; route registration
+- `handlers/api_test.go` -- 6 new Phase 2E tests
+- `web/app.js` -- `loadWeekAcknowledgments`; schedule card ack toggle;
+  Review & Close converted to data-action delegation with `data-ack-count`;
+  prior history notice in close modal
+
+### Not in Phase 2E
+
+- Actor/user identity on acknowledgment rows
+- `reopen_count` / `last_reopened_at` on `league_weeks`
+- Controlled reopen reason codes
+- Global audit log table or audit module
+- Grouping acknowledgments by close cycle
+- `SCORESHEET_PAIRING_UNDETERMINED` / `SCORESHEET_ROUND_INCOMPLETE` codes
 
 ## Close Week Validation (full target -- future phases)
 
@@ -446,15 +528,19 @@ statuses or calculation-preview behavior.
 
 ### MATCHES-Q003 - Historical warning display
 
-**Status:** `open`
+**Status:** `resolved`
 **Opened:** `2026-06-08`
-**Resolved:** `pending`
-**Related commit:** `pending`
+**Resolved:** `2026-06-23`
+**Related commit:** `Phase 2E`
 
 **Context:** Warning acknowledgments are audited, but their placement on
 historical match and week screens is not decided.
 
-**Resolution:** Define what authorized users see outside the audit log.
+**Resolution:** Phase 2E. Acknowledgments are read back via
+`GET /api/seasons/{id}/weeks/{week}/acknowledgments`. The schedule card shows
+a count badge and expandable history section when `ack_count > 0`. The Review
+& Close modal shows a prior history notice when re-closing a reopened week.
+No actor identity or audit module is required at this level.
 
 ## Decision History
 

@@ -1655,6 +1655,158 @@ func TestReopenWeek_PreservesAcknowledgmentRows(t *testing.T) {
 	}
 }
 
+// Phase 2E: Acknowledgment history endpoint ----------------------------------
+
+// weekGetAcks calls GET /api/seasons/{id}/weeks/{week}/acknowledgments.
+func weekGetAcks(t *testing.T, srvURL string, sid int64, weekNum int) *http.Response {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks/%d/acknowledgments", srvURL, sid, weekNum))
+	if err != nil {
+		t.Fatalf("weekGetAcks: %v", err)
+	}
+	return resp
+}
+
+func TestGetWeekAcknowledgments_NotFound(t *testing.T) {
+	f := weekTestSeed(t)
+	resp := weekGetAcks(t, f.srv.URL, f.sid, 99)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("week with no matches must return 404, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestGetWeekAcknowledgments_Empty(t *testing.T) {
+	f := weekTestSeed(t)
+	resp := weekGetAcks(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, b)
+	}
+	var acks []map[string]any
+	json.NewDecoder(resp.Body).Decode(&acks)
+	if len(acks) != 0 {
+		t.Errorf("want empty array before any close, got %d items", len(acks))
+	}
+}
+
+func TestGetWeekAcknowledgments_AfterClose(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks := buildAcks(msgs)
+	weekClose(t, f.srv.URL, f.sid, 1, acks).Body.Close()
+
+	resp := weekGetAcks(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200 after close, got %d: %s", resp.StatusCode, b)
+	}
+	var result []map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result) == 0 {
+		t.Fatal("want at least one acknowledgment after close with warnings, got 0")
+	}
+	a := result[0]
+	if code, _ := a["warning_code"].(string); code == "" {
+		t.Errorf("want non-empty warning_code in ack row, got: %v", a)
+	}
+	if a["acknowledged_at"] == nil {
+		t.Error("want acknowledged_at in ack row, got nil")
+	}
+}
+
+func TestGetWeekAcknowledgments_PersistedAfterReopen(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks := buildAcks(msgs)
+	weekClose(t, f.srv.URL, f.sid, 1, acks).Body.Close()
+
+	var countBefore int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM week_close_acknowledgments WHERE season_id=? AND week_number=1`, f.sid).Scan(&countBefore)
+
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	resp := weekGetAcks(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200 after reopen, got %d: %s", resp.StatusCode, b)
+	}
+	var result []map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result) != countBefore {
+		t.Errorf("acknowledgments must persist after reopen: want %d, got %d", countBefore, len(result))
+	}
+}
+
+func TestListWeeks_IncludesAckCount(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	getWeeks := func() []map[string]any {
+		resp, _ := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks", f.srv.URL, f.sid))
+		defer resp.Body.Close()
+		var weeks []map[string]any
+		json.NewDecoder(resp.Body).Decode(&weeks)
+		return weeks
+	}
+	ackCountFor := func(weeks []map[string]any, wn float64) float64 {
+		for _, ws := range weeks {
+			if ws["week_number"] == wn {
+				cnt, _ := ws["ack_count"].(float64)
+				return cnt
+			}
+		}
+		return -1
+	}
+
+	// Before close: ack_count must be 0.
+	if cnt := ackCountFor(getWeeks(), 1); cnt != 0 {
+		t.Errorf("ack_count before close: want 0, got %v", cnt)
+	}
+
+	// Close with acknowledged warnings.
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	weekClose(t, f.srv.URL, f.sid, 1, buildAcks(msgs)).Body.Close()
+
+	// After close: ack_count > 0.
+	if cnt := ackCountFor(getWeeks(), 1); cnt == 0 {
+		t.Error("ack_count after close: want > 0, got 0")
+	}
+
+	// After reopen: ack_count still > 0 (acks persist).
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+	if cnt := ackCountFor(getWeeks(), 1); cnt == 0 {
+		t.Error("ack_count after reopen: want > 0 (acks persist), got 0")
+	}
+}
+
+func TestListWeeks_AckCountZeroForCleanClose(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+
+	resp, _ := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks", f.srv.URL, f.sid))
+	defer resp.Body.Close()
+	var weeks []map[string]any
+	json.NewDecoder(resp.Body).Decode(&weeks)
+	for _, ws := range weeks {
+		if ws["week_number"] == float64(1) {
+			cnt, _ := ws["ack_count"].(float64)
+			if cnt != 0 {
+				t.Errorf("ack_count for warning-free close: want 0, got %v", cnt)
+			}
+		}
+	}
+}
+
 // ─── Skip date and match date normalization ───────────────────────────────────
 
 // seedScheduleFixture creates a league, 3 teams (odd), and one season.

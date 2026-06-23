@@ -245,6 +245,20 @@ type WeekSummary struct {
 	MatchCount     int     `json:"match_count"`
 	CompletedCount int     `json:"completed_count"` // matches with completed=1 (scores entered)
 	ClosedCount    int     `json:"closed_count"`    // matches with week_closed=1 (officially closed)
+	AckCount       int     `json:"ack_count"`       // total acknowledgment rows ever written for this week
+}
+
+// CloseAck is one row from week_close_acknowledgments.
+// Returned by GET /api/seasons/{id}/weeks/{week}/acknowledgments.
+type CloseAck struct {
+	ID             int64  `json:"id"`
+	SeasonID       int64  `json:"season_id"`
+	WeekNumber     int    `json:"week_number"`
+	MatchID        *int64 `json:"match_id,omitempty"`
+	WarningCode    string `json:"warning_code"`
+	Field          string `json:"field,omitempty"`
+	Notes          string `json:"notes,omitempty"`
+	AcknowledgedAt string `json:"acknowledged_at"`
 }
 
 // SaveRoundsRequest is the body for POST /api/matches/{id}/rounds.
