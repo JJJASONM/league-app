@@ -14,6 +14,9 @@ const (
 
 	// CodeWeekMatchUnassigned fires when home_team_id or away_team_id is missing.
 	CodeWeekMatchUnassigned = "WEEK_MATCH_UNASSIGNED"
+
+	// CodeWeekPlayerDuplicate fires when a player appears more than once in a round within the same match.
+	CodeWeekPlayerDuplicate = "WEEK_PLAYER_DUPLICATE"
 )
 
 // ValidateWeek checks all matches in season/week for Close Week readiness.
@@ -102,6 +105,30 @@ func ValidateWeek(dbConn *sql.DB, seasonID int64, weekNumber int, cfg RoundConfi
 			rounds = append(rounds, rr)
 		}
 		rrRows.Close()
+
+		// Detect duplicate player participation: within any round, a player must
+		// appear at most once across all home and away slots.
+		playersByRound := map[int]map[int64]struct{}{}
+		dupFound := false
+		for _, rr := range rounds {
+			rn := rr.RoundNumber
+			if playersByRound[rn] == nil {
+				playersByRound[rn] = map[int64]struct{}{}
+			}
+			for _, pid := range []int64{rr.HomePlayerID, rr.AwayPlayerID} {
+				if _, seen := playersByRound[rn][pid]; seen {
+					matchID := mi.id
+					res.AddError(CodeWeekPlayerDuplicate, field,
+						fmt.Sprintf("match %d: player %d appears more than once in round %d", mi.id, pid, rn))
+					res.Messages[len(res.Messages)-1].MatchID = &matchID
+					dupFound = true
+				}
+				playersByRound[rn][pid] = struct{}{}
+			}
+		}
+		if dupFound {
+			continue
+		}
 
 		// Require at least one game winner (score of 10) in the saved round data.
 		hasGameWinner := false

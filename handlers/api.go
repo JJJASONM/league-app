@@ -2041,7 +2041,8 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 	// games_won  = individual games where the player scored 10 (won the game)
 	// games_lost = individual games where they scored < 10 (lost)
 	// diff       = games_won − games_lost for this match (numerator for Diff handicap)
-	type tally struct{ gw, gl int }
+	// sets_won / sets_lost = rounds won/lost by the player's team
+	type tally struct{ gw, gl, sw, sl int }
 	tallies := map[int64]*tally{}
 	ensure := func(pid int64) *tally {
 		if tallies[pid] == nil {
@@ -2080,14 +2081,33 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 		pTeam[rr.AwayPlayerID] = awayTeamID
 	}
 
+	// Compute per-player sets_won / sets_lost from round winners.
+	for roundNum, winner := range vResult.RoundWinners {
+		if winner == "" {
+			continue
+		}
+		for _, rr := range req.Rounds {
+			if rr.RoundNumber != roundNum {
+				continue
+			}
+			if winner == "home" {
+				ensure(rr.HomePlayerID).sw++
+				ensure(rr.AwayPlayerID).sl++
+			} else {
+				ensure(rr.AwayPlayerID).sw++
+				ensure(rr.HomePlayerID).sl++
+			}
+		}
+	}
+
 	// Replace match_results
 	tx.Exec(`DELETE FROM match_results WHERE match_id=?`, matchID)
 	for pid, t := range tallies {
 		diff := float64(t.gw - t.gl)
 		_, err := tx.Exec(`
-			INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
-			VALUES (?,?,?,?,?,?)`,
-			matchID, pid, pTeam[pid], t.gw, t.gl, diff)
+			INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff, sets_won, sets_lost)
+			VALUES (?,?,?,?,?,?,?,?)`,
+			matchID, pid, pTeam[pid], t.gw, t.gl, diff, t.sw, t.sl)
 		if err != nil {
 			jsonError(w, err.Error(), 500)
 			return

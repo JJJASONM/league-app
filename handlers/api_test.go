@@ -923,6 +923,157 @@ func TestPlayerStats_IncludeClosedMatch(t *testing.T) {
 	}
 }
 
+func TestSaveRounds_PopulatesSets(t *testing.T) {
+	f := weekTestSeed(t)
+	// Disable roster gate so saveRounds reaches sets logic (teams_managed=1 by default via API).
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	// Two home and two away players needed for a two-pairing round with a round winner.
+	rH2, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Home2','P',?,3.0)`, f.teamA)
+	playerA2, _ := rH2.LastInsertId()
+	rA2, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Away2','P',?,3.0)`, f.teamB)
+	playerB2, _ := rA2.LastInsertId()
+
+	// Round 1: home wins both pairings -> RoundWinners[1]="home" -> home players get sets_won=1.
+	body := fmt.Sprintf(`{"rounds":[
+		{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2},
+		{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}
+	]}`, f.playerA, f.playerB, playerA2, playerB2)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("saveRounds: want 200, got %d: %s", resp.StatusCode, b)
+	}
+
+	check := func(label string, playerID int64, wantSW, wantSL int) {
+		t.Helper()
+		var sw, sl int
+		db.DB.QueryRow(`SELECT sets_won, sets_lost FROM match_results WHERE match_id=? AND player_id=?`,
+			f.matchID, playerID).Scan(&sw, &sl)
+		if sw != wantSW || sl != wantSL {
+			t.Errorf("%s: want sets_won=%d sets_lost=%d, got %d/%d", label, wantSW, wantSL, sw, sl)
+		}
+	}
+	check("playerA (home)", f.playerA, 1, 0)
+	check("playerA2 (home)", playerA2, 1, 0)
+	check("playerB (away)", f.playerB, 0, 1)
+	check("playerB2 (away)", playerB2, 0, 1)
+}
+
+func TestPlayerStats_IncludeSetsAfterClose(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	rH2, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Home2','P',?,3.0)`, f.teamA)
+	playerA2, _ := rH2.LastInsertId()
+	rA2, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Away2','P',?,3.0)`, f.teamB)
+	playerB2, _ := rA2.LastInsertId()
+
+	body := fmt.Sprintf(`{"rounds":[
+		{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2},
+		{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}
+	]}`, f.playerA, f.playerB, playerA2, playerB2)
+
+	saveReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		strings.NewReader(body))
+	saveReq.Header.Set("Content-Type", "application/json")
+	saveResp, _ := http.DefaultClient.Do(saveReq)
+	saveResp.Body.Close()
+
+	// Before close: sets must not appear in stats (week_closed gate).
+	statsResp, _ := http.Get(fmt.Sprintf("%s/api/player-stats?season_id=%d", f.srv.URL, f.sid))
+	var beforeStats []map[string]any
+	json.NewDecoder(statsResp.Body).Decode(&beforeStats)
+	statsResp.Body.Close()
+	for _, s := range beforeStats {
+		if sw, _ := s["sets_won"].(float64); sw > 0 {
+			t.Errorf("sets_won before close: want 0, got %.0f for %v", sw, s["player_name"])
+		}
+	}
+
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, _ := http.DefaultClient.Do(closeReq)
+	closeResp.Body.Close()
+
+	// After close: at least one player must show sets_won > 0.
+	statsResp2, _ := http.Get(fmt.Sprintf("%s/api/player-stats?season_id=%d", f.srv.URL, f.sid))
+	var afterStats []map[string]any
+	json.NewDecoder(statsResp2.Body).Decode(&afterStats)
+	statsResp2.Body.Close()
+	found := false
+	for _, s := range afterStats {
+		if sw, _ := s["sets_won"].(float64); sw > 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected sets_won > 0 after week close, got: %v", afterStats)
+	}
+}
+
+func TestCloseWeek_ErrorOnDuplicatePlayer(t *testing.T) {
+	f := weekTestSeed(t)
+
+	// Seed a valid round result (round 1, playerA home, playerB away).
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	// Add a third player and insert them as the home player in a second pairing of round 1,
+	// with playerA as the away player - playerA now appears twice in round 1.
+	rPC, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Extra','P',?,3.0)`, f.teamA)
+	playerC, _ := rPC.LastInsertId()
+	_, err := db.DB.Exec(`
+		INSERT INTO round_results
+		    (match_id, round_number, home_player_id, away_player_id,
+		     game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		     home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
+		VALUES (?,1,?,?,10,5,10,3,10,2,3.0,3.0,0,'')`,
+		f.matchID, playerC, f.playerA)
+	if err != nil {
+		t.Fatalf("insert duplicate round: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("duplicate player must block close: want 422, got %d: %s", resp.StatusCode, b)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	msgs, _ := result["messages"].([]any)
+	found := false
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		if msg["code"] == "WEEK_PLAYER_DUPLICATE" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected WEEK_PLAYER_DUPLICATE error, got: %v", result)
+	}
+}
+
 // Phase 2A: Warning acknowledgment ------------------------------------------------
 
 // seedRoundResultWithIncompleteGame inserts round_results with one game winner (game1)

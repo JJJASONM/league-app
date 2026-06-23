@@ -331,6 +331,60 @@ On failure, the backend error message is shown in a danger toast.
 - Audit log entry for reopen operations
 - Per-match selective reopen (currently reopens the whole week)
 
+## Close Week -- Phase 2D: Sets, Validation, and Navigation (implemented 2026-06-23)
+
+### sets_won / sets_lost in saveRounds
+
+`saveRounds` now populates `sets_won` and `sets_lost` in `match_results` using
+`ScoresheetResult.RoundWinners` returned by `ValidateRounds`.
+
+- A player on the winning side of a round gets `sets_won += 1`.
+- A player on the losing side of a round gets `sets_lost += 1`.
+- A "round winner" requires the team to win 2 or more pairings in that round (`roundHomeWins[rn] >= 2` or `roundAwayWins[rn] >= 2`).
+- Rounds with no determined winner (e.g. 1-1 pairing split or undetermined pairings) contribute 0 sets to either side.
+- `saveRounds` already deletes and re-inserts `match_results` on every save; sets are recomputed automatically on resave.
+- The `week_closed=1` gate on `getPlayerStats` ensures sets do not appear in official stats until after Close Week.
+- **No schema change.** `sets_won` and `sets_lost` columns exist in `match_results` and were previously always written as 0 by this path.
+- **No backfill.** Existing rows only update when the match is re-saved.
+
+### WEEK_PLAYER_DUPLICATE validation
+
+`ValidateWeek` now detects when a player appears more than once in a single round
+within the same match. This is an **error** that blocks close.
+
+**Code:** `WEEK_PLAYER_DUPLICATE`
+
+**Trigger:** For each round number in a match's `round_results`, a player ID must
+appear at most once across all home and away player slots. If any player ID is seen
+twice in the same round, the error is emitted for that match and the match is
+skipped for further validation.
+
+The `UNIQUE(match_id, round_number, home_player_id)` DB constraint prevents a player
+from appearing as HomePlayerID twice in the same round but does not prevent a player
+from appearing as both HomePlayerID in one pairing and AwayPlayerID in another pairing
+of the same round. `WEEK_PLAYER_DUPLICATE` catches this case.
+
+### Schedule-to-match-entry navigation
+
+Open-week match rows in the Schedule tab now show a **Score Entry** button alongside
+the existing Assign button.
+
+- Clicking **Score Entry** hides any open modal, pre-selects the match in the Match
+  Entry tab, and navigates there directly.
+- The button is not shown on closed-week match rows (the backend blocks saves on closed
+  weeks regardless).
+- In the Review & Close modal, per-match error group headers display the Match badge as
+  a clickable button. Clicking it dismisses the modal and opens Match Entry for that match.
+- Navigation is wired via `data-action="open-match-entry"` delegation; no inline event
+  attributes are used for the new buttons.
+
+### Deferred (not in Phase 2D)
+
+- Close Week history UI (reading `week_close_acknowledgments` in a view)
+- `SCORESHEET_PAIRING_UNDETERMINED` - valid outcome; design decision pending
+- `SCORESHEET_ROUND_INCOMPLETE` - definition of "incomplete" vs legal 1-1-1 split pending
+- Audit log module, actor identity, reopen reason codes
+
 ## Close Week Validation (full target -- future phases)
 
 The backend validates the week's score data before official calculations are

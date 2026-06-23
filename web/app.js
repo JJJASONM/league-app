@@ -7,6 +7,8 @@ let allPlayers  = [];
 let allSeasons  = [];
 let activeSeason = null;
 let reopenWeekContext = null;
+let _entryPreSelectSeasonId = null;
+let _entryPreSelectMatchId = null;
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 document.querySelectorAll('[data-section]').forEach(link => {
@@ -1200,13 +1202,23 @@ function populateScheduleSeasonSelect(previewSeasonId = null) {
 
 // ── Schedule ──────────────────────────────────────────────────────────────────
 document.getElementById('schedule-content').addEventListener('click', e => {
-  const btn = e.target.closest('[data-action="reopen-week"]');
-  if (!btn) return;
-  confirmReopenWeek(parseInt(btn.dataset.seasonId, 10), parseInt(btn.dataset.weekNum, 10), btn.dataset.matchDate || '');
+  const reopenBtn = e.target.closest('[data-action="reopen-week"]');
+  if (reopenBtn) {
+    confirmReopenWeek(parseInt(reopenBtn.dataset.seasonId, 10), parseInt(reopenBtn.dataset.weekNum, 10), reopenBtn.dataset.matchDate || '');
+    return;
+  }
+  const entryBtn = e.target.closest('[data-action="open-match-entry"]');
+  if (entryBtn) openMatchEntry(parseInt(entryBtn.dataset.matchId, 10), parseInt(entryBtn.dataset.seasonId, 10) || null);
 });
 
 document.getElementById('reopen-week-modal').addEventListener('hidden.bs.modal', () => {
   reopenWeekContext = null;
+});
+
+document.getElementById('close-week-modal').addEventListener('click', e => {
+  const btn = e.target.closest('[data-action="open-match-entry"]');
+  if (!btn) return;
+  openMatchEntry(parseInt(btn.dataset.matchId, 10), parseInt(btn.dataset.seasonId, 10) || null);
 });
 
 document.getElementById('reopen-week-confirm-btn').addEventListener('click', async () => {
@@ -1218,7 +1230,7 @@ document.getElementById('reopen-week-confirm-btn').addEventListener('click', asy
     modal.hide();
     toast('Week ' + weekNum + ' reopened.', 'success');
     loadSchedule();
-    if (currentSeasonId) loadStandings();
+    loadStandings();
     const statsSeasonId = document.getElementById('stats-season-select').value;
     if (statsSeasonId) loadPlayerStats();
   } catch (e) {
@@ -1313,7 +1325,9 @@ async function loadSchedule() {
                 : '<span class="badge bg-secondary">Pending</span>'}</td>
               <td class="text-end">${isUnassigned(m)
                 ? `<button class="btn btn-outline-primary btn-sm py-0" onclick="openAssignMatchTeams(${m.id})"><i class="bi bi-people"></i> Assign</button>`
-                : ''}</td>
+                : !isClosed
+                  ? `<button class="btn btn-outline-secondary btn-sm py-0" data-action="open-match-entry" data-season-id="${escapeHTML(String(seasonId))}" data-match-id="${m.id}"><i class="bi bi-pencil-square"></i> Score Entry</button>`
+                  : ''}</td>
             </tr>`).join('')}
             ${byeRow}
           </tbody>
@@ -1348,7 +1362,7 @@ async function reviewCloseWeek(seasonId, weekNum) {
       ? `<ul class="mt-1 mb-2">${weekErrors.map(m => `<li>${escapeHTML(m.message)}</li>`).join('')}</ul>`
       : '';
     Object.entries(matchGroups).forEach(([mid, msgs]) => {
-      errHtml += `<div class="mb-2"><span class="badge bg-warning text-dark me-1">Match ${mid}</span><ul class="mb-0 mt-1">${msgs.map(m => `<li>${escapeHTML(m.message)}</li>`).join('')}</ul></div>`;
+      errHtml += `<div class="mb-2"><button class="badge bg-warning text-dark border-0 me-1" data-action="open-match-entry" data-season-id="${escapeHTML(String(seasonId))}" data-match-id="${mid}" title="Go to match entry">Match ${mid}</button><ul class="mb-0 mt-1">${msgs.map(m => `<li>${escapeHTML(m.message)}</li>`).join('')}</ul></div>`;
     });
     body += `<div class="mb-3"><strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Errors - must fix before close</strong>${errHtml}</div>`;
   }
@@ -1427,7 +1441,7 @@ async function reviewCloseWeek(seasonId, weekNum) {
       modal.hide();
       toast('Week ' + weekNum + ' closed.', 'success');
       loadSchedule();
-      if (currentSeasonId) loadStandings();
+      loadStandings();
     } catch (e) {
       toast('Close failed: ' + (e.message || e), 'danger');
     }
@@ -1454,6 +1468,14 @@ function confirmReopenWeek(seasonId, weekNum, matchDate) {
   const modal = new bootstrap.Modal(document.getElementById('reopen-week-modal'));
   reopenWeekContext = { seasonId, weekNum, modal };
   modal.show();
+}
+
+function openMatchEntry(matchId, seasonId) {
+  const openModal = document.querySelector('.modal.show');
+  if (openModal) bootstrap.Modal.getInstance(openModal)?.hide();
+  _entryPreSelectSeasonId = seasonId || null;
+  _entryPreSelectMatchId = matchId;
+  document.querySelector('[data-section="entry"]').click();
 }
 
 // ── Schedule Poster ───────────────────────────────────────────────────────────
@@ -1781,6 +1803,10 @@ let scoresheetGames = Array.from({length:9}, () => ({
 let scoresheetSeasonRules = {};
 
 async function loadEntryMatches() {
+  if (_entryPreSelectSeasonId !== null) {
+    document.getElementById('entry-season-select').value = String(_entryPreSelectSeasonId);
+    _entryPreSelectSeasonId = null;
+  }
   const seasonId = document.getElementById('entry-season-select').value;
   if (!seasonId) return;
   const matches = await api('GET', `/matches?season_id=${seasonId}`);
@@ -1788,6 +1814,10 @@ async function loadEntryMatches() {
   sel.innerHTML = matches.map(m =>
     `<option value="${m.id}">[W${m.week_number}] ${m.home_team_name} vs ${m.away_team_name} ${m.completed?'✓':''}</option>`
   ).join('') || '<option>No matches</option>';
+  if (_entryPreSelectMatchId !== null) {
+    sel.value = String(_entryPreSelectMatchId);
+    _entryPreSelectMatchId = null;
+  }
   loadMatchEntry();
 }
 
