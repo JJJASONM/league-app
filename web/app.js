@@ -1418,6 +1418,44 @@ async function loadSchedule() {
   : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons → Manage → Schedule.</div>';
 }
 
+function _renderAdvancePreview(preview) {
+  const cw = preview.current_week;
+  const nextNum = preview.next_week_number;
+  const nw = preview.next_week;
+  const hc = preview.handicap;
+  let rows = '';
+  rows += `<tr>
+    <td class="text-muted pe-3 text-nowrap">This week</td>
+    <td>${escapeHTML(String(cw.completed_count))}/${escapeHTML(String(cw.match_count))} scored &nbsp;${preview.can_close
+      ? '<span class="badge bg-success">Ready</span>'
+      : '<span class="badge bg-danger">Has errors</span>'}</td>
+  </tr>`;
+  if (nw) {
+    const assignNote = nw.unassigned_count > 0
+      ? ` &middot; <span class="text-warning">${nw.unassigned_count} unassigned</span>` : '';
+    const lineupNote = nw.missing_lineup_team_ids && nw.missing_lineup_team_ids.length > 0
+      ? ` &middot; <span class="text-warning">${nw.missing_lineup_team_ids.length} missing lineup</span>`
+      : ' &middot; <span class="text-success">Lineups set</span>';
+    rows += `<tr>
+      <td class="text-muted pe-3 text-nowrap">Week ${escapeHTML(String(nextNum))}</td>
+      <td>${escapeHTML(String(nw.match_count))} match${nw.match_count !== 1 ? 'es' : ''}${assignNote}${lineupNote}</td>
+    </tr>`;
+  } else {
+    rows += `<tr>
+      <td class="text-muted pe-3 text-nowrap">Next week</td>
+      <td class="fst-italic text-muted">No further weeks scheduled</td>
+    </tr>`;
+  }
+  rows += `<tr>
+    <td class="text-muted pe-3 text-nowrap">Handicap</td>
+    <td class="fst-italic text-muted">${escapeHTML(hc.message)}</td>
+  </tr>`;
+  return `<div class="mt-3 pt-2 border-top">
+    <p class="small fw-semibold text-secondary mb-1"><i class="bi bi-calendar-arrow-up me-1"></i>Advance Preview</p>
+    <table class="table table-sm table-borderless small mb-0"><tbody>${rows}</tbody></table>
+  </div>`;
+}
+
 // Called by warning acknowledgment checkboxes to update the Confirm Close button state.
 function _cwmUpdateConfirmState() {
   const checks = document.querySelectorAll('#close-week-modal-body .cwm-ack-check');
@@ -1425,7 +1463,10 @@ function _cwmUpdateConfirmState() {
 }
 
 async function reviewCloseWeek(seasonId, weekNum, ackCount = 0) {
-  const result = await api('GET', `/seasons/${seasonId}/weeks/${weekNum}/validate`);
+  const [result, preview] = await Promise.all([
+    api('GET', `/seasons/${seasonId}/weeks/${weekNum}/validate`),
+    api('GET', `/seasons/${seasonId}/weeks/${weekNum}/advance-preview`).catch(() => null),
+  ]);
   const msgs = result.messages || [];
   const errors = msgs.filter(m => m.level === 'error');
   const warnings = msgs.filter(m => m.level === 'warning');
@@ -1499,6 +1540,9 @@ async function reviewCloseWeek(seasonId, weekNum, ackCount = 0) {
   }
   if (!errors.length) {
     body += '<div class="alert alert-info py-2 mb-0 small"><i class="bi bi-info-circle me-1"></i>Closing makes this week\'s results official. Standings and player stats will update immediately and will reflect this week\'s outcomes.</div>';
+  }
+  if (preview) {
+    body += _renderAdvancePreview(preview);
   }
 
   const modal = new bootstrap.Modal(document.getElementById('close-week-modal'));

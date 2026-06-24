@@ -467,6 +467,87 @@ If `ack_count === 0`, the modal behavior is unchanged.
 - Grouping acknowledgments by close cycle
 - `SCORESHEET_PAIRING_UNDETERMINED` / `SCORESHEET_ROUND_INCOMPLETE` codes
 
+## Close Week -- Phase 3A: Advance Week Preview (implemented 2026-06-23)
+
+### Goal
+
+Show what advancing the week would mean -- close readiness, next week
+readiness, and handicap update status -- without modifying any data.
+
+### New endpoint
+
+`GET /api/seasons/{id}/weeks/{week}/advance-preview`
+
+- Read-only; no rows are inserted, updated, or deleted.
+- Returns 404 when no matches exist for the season/week.
+- Returns 200 with a preview object even when the week has validation errors.
+
+Response shape:
+
+```json
+{
+  "season_id": 3,
+  "week_number": 2,
+  "can_close": true,
+  "validation_messages": [...],
+  "current_week": {
+    "match_count": 3,
+    "completed_count": 3,
+    "closed_count": 0,
+    "status": "open"
+  },
+  "next_week_number": 3,
+  "next_week": {
+    "match_count": 3,
+    "assigned_count": 2,
+    "unassigned_count": 1,
+    "lineup_plan_count": 4,
+    "missing_lineup_team_ids": [7]
+  },
+  "handicap": {
+    "method": "manual_review",
+    "status": "preview_only",
+    "message": "No handicap changes are applied automatically. Phase 3A preview is read-only."
+  }
+}
+```
+
+`next_week_number` and `next_week` are omitted when no further weeks are
+scheduled. `validation_messages` mirrors `validation.Result.Messages`.
+Use `can_close` to determine close eligibility without parsing the list.
+
+### Review & Close modal Advance Preview section
+
+`reviewCloseWeek` fetches the validate and advance-preview endpoints in
+parallel (`Promise.all`). A compact "Advance Preview" table is appended to
+the modal body showing:
+
+- **This week** -- scored matches / total and a Ready / Has errors badge
+- **Next week** -- match count, unassigned slots, lineup plan status
+- **Handicap** -- read-only status message
+
+The section is always shown when the endpoint succeeds. If the endpoint
+fails (e.g. network error), the section is silently omitted. The existing
+close / warning acknowledgment flow is unchanged.
+
+### Not in Phase 3A
+
+- Automatic handicap writes
+- Blank `round_results` creation
+- `lineup_plans` creation or modification
+- Changes to the Close Week transaction
+- Audit tables
+- Reopen count or last-reopened tracking
+
+### Files changed
+
+- `models/models.go` -- `AdvancePreview`, `AdvancePreviewMessage`,
+  `AdvancePreviewWeekSummary`, `AdvancePreviewNextWeek`, `AdvancePreviewHandicap`
+- `handlers/api.go` -- `getAdvancePreview` handler; route registration
+- `handlers/api_test.go` -- 6 Phase 3A tests
+- `web/app.js` -- `_renderAdvancePreview` helper; `reviewCloseWeek` uses
+  `Promise.all` and appends advance preview section to modal body
+
 ## Close Week Validation (full target -- future phases)
 
 The backend validates the week's score data before official calculations are

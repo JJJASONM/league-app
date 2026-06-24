@@ -1807,6 +1807,149 @@ func TestListWeeks_AckCountZeroForCleanClose(t *testing.T) {
 	}
 }
 
+// --- Phase 3A: Advance Week Preview ------------------------------------------
+
+// weekGetAdvancePreview calls GET /api/seasons/{id}/weeks/{week}/advance-preview.
+func weekGetAdvancePreview(t *testing.T, srvURL string, sid int64, weekNum int) *http.Response {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks/%d/advance-preview", srvURL, sid, weekNum))
+	if err != nil {
+		t.Fatalf("weekGetAdvancePreview: %v", err)
+	}
+	return resp
+}
+
+func TestAdvancePreview_NotFound(t *testing.T) {
+	f := weekTestSeed(t)
+	resp := weekGetAdvancePreview(t, f.srv.URL, f.sid, 99)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("week with no matches must return 404, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestAdvancePreview_WithValidationErrors(t *testing.T) {
+	f := weekTestSeed(t)
+	// No round results: WEEK_MATCH_NO_SCORES is expected.
+	resp := weekGetAdvancePreview(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("advance preview must return 200 even with errors, got %d: %s", resp.StatusCode, b)
+	}
+	var preview map[string]any
+	json.NewDecoder(resp.Body).Decode(&preview)
+	canClose, _ := preview["can_close"].(bool)
+	if canClose {
+		t.Error("can_close must be false when validation errors exist")
+	}
+	msgs, _ := preview["validation_messages"].([]any)
+	if len(msgs) == 0 {
+		t.Error("validation_messages must be non-empty when errors exist")
+	}
+	found := false
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		if msg["code"] == "WEEK_MATCH_NO_SCORES" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected WEEK_MATCH_NO_SCORES in validation_messages, got: %v", msgs)
+	}
+}
+
+func TestAdvancePreview_ClosableWeek(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	resp := weekGetAdvancePreview(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, b)
+	}
+	var preview map[string]any
+	json.NewDecoder(resp.Body).Decode(&preview)
+	canClose, _ := preview["can_close"].(bool)
+	if !canClose {
+		t.Error("can_close must be true when all validation checks pass")
+	}
+	msgs, _ := preview["validation_messages"].([]any)
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		if msg["level"] == "error" {
+			t.Errorf("no error messages expected for closable week, got: %v", msg)
+		}
+	}
+}
+
+func TestAdvancePreview_NextWeekExists(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	// Add a week 2 match.
+	db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number) VALUES (?,?,?,2)`,
+		f.sid, f.teamA, f.teamB)
+
+	resp := weekGetAdvancePreview(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	var preview map[string]any
+	json.NewDecoder(resp.Body).Decode(&preview)
+
+	nextNum, ok := preview["next_week_number"].(float64)
+	if !ok || int(nextNum) != 2 {
+		t.Errorf("next_week_number: want 2, got %v", preview["next_week_number"])
+	}
+	nw, ok := preview["next_week"].(map[string]any)
+	if !ok {
+		t.Fatalf("next_week must be present when a next week exists")
+	}
+	if mc, _ := nw["match_count"].(float64); int(mc) != 1 {
+		t.Errorf("next_week.match_count: want 1, got %v", mc)
+	}
+	if ac, _ := nw["assigned_count"].(float64); int(ac) != 1 {
+		t.Errorf("next_week.assigned_count: want 1, got %v", ac)
+	}
+	if uc, _ := nw["unassigned_count"].(float64); int(uc) != 0 {
+		t.Errorf("next_week.unassigned_count: want 0, got %v", uc)
+	}
+}
+
+func TestAdvancePreview_NextWeekMissing(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	// weekTestSeed only seeds week 1; no further weeks scheduled.
+	resp := weekGetAdvancePreview(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	var preview map[string]any
+	json.NewDecoder(resp.Body).Decode(&preview)
+
+	if _, ok := preview["next_week_number"]; ok {
+		t.Error("next_week_number must be absent when no further weeks are scheduled")
+	}
+	if _, ok := preview["next_week"]; ok {
+		t.Error("next_week must be absent when no further weeks are scheduled")
+	}
+}
+
+func TestAdvancePreview_ReadOnly(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	var countBefore int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM league_weeks WHERE season_id=?`, f.sid).Scan(&countBefore)
+
+	weekGetAdvancePreview(t, f.srv.URL, f.sid, 1).Body.Close()
+	weekGetAdvancePreview(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	var countAfter int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM league_weeks WHERE season_id=?`, f.sid).Scan(&countAfter)
+	if countAfter != countBefore {
+		t.Errorf("advance-preview must not write to league_weeks: before=%d after=%d", countBefore, countAfter)
+	}
+}
+
 // ─── Skip date and match date normalization ───────────────────────────────────
 
 // seedScheduleFixture creates a league, 3 teams (odd), and one season.

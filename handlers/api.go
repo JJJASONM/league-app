@@ -102,6 +102,7 @@ func Register(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close", closeWeekHandler)
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen", reopenWeekHandler)
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", getWeekAcknowledgments)
+	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/advance-preview", getAdvancePreview)
 
 	// Standings & stats
 	mux.HandleFunc("GET /api/standings", getStandings)
@@ -1816,6 +1817,210 @@ func getWeekAcknowledgments(w http.ResponseWriter, r *http.Request) {
 		acks = []models.CloseAck{}
 	}
 	jsonOK(w, acks)
+}
+
+func getAdvancePreview(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	weekNum, err := pathID(r, "week")
+	if err != nil {
+		jsonError(w, "invalid week", 400)
+		return
+	}
+
+	// 404 when no matches exist for this season/week.
+	var matchCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
+		seasonID, weekNum).Scan(&matchCount); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if matchCount == 0 {
+		jsonError(w, "week not found: no matches for this season and week", http.StatusNotFound)
+		return
+	}
+
+	// Run validation to determine can_close and messages.
+	cfg := seasonRoundConfig(seasonID)
+	result := matches.ValidateWeek(db.DB, seasonID, int(weekNum), cfg)
+
+	previewMsgs := make([]models.AdvancePreviewMessage, 0, len(result.Messages))
+	for _, msg := range result.Messages {
+		previewMsgs = append(previewMsgs, models.AdvancePreviewMessage{
+			Code:    msg.Code,
+			Field:   msg.Field,
+			Message: msg.Message,
+			Level:   string(msg.Level),
+			MatchID: msg.MatchID,
+		})
+	}
+
+	// Current week match counts.
+	var completedCount, closedCount int
+	cRows, err := db.DB.Query(`SELECT completed, week_closed FROM matches WHERE season_id=? AND week_number=?`,
+		seasonID, weekNum)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer cRows.Close()
+	for cRows.Next() {
+		var comp, wc int
+		if err := cRows.Scan(&comp, &wc); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		completedCount += comp
+		closedCount += wc
+	}
+	if err := cRows.Err(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	// Week status: ErrNoRows means no league_weeks row (implicitly open).
+	var weekStatus string
+	switch err := db.DB.QueryRow(`SELECT COALESCE(status,'open') FROM league_weeks WHERE season_id=? AND week_number=?`,
+		seasonID, weekNum).Scan(&weekStatus); err {
+	case nil:
+	case sql.ErrNoRows:
+		weekStatus = "open"
+	default:
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if weekStatus == "" {
+		weekStatus = "open"
+	}
+
+	currentWeek := models.AdvancePreviewWeekSummary{
+		MatchCount:     matchCount,
+		CompletedCount: completedCount,
+		ClosedCount:    closedCount,
+		Status:         weekStatus,
+	}
+
+	// Find the next scheduled week (aggregate always returns one row; ErrNoRows cannot occur).
+	var nextWeekNum int
+	if err := db.DB.QueryRow(`SELECT COALESCE(MIN(week_number),0) FROM matches WHERE season_id=? AND week_number>?`,
+		seasonID, weekNum).Scan(&nextWeekNum); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	var nextWeekNumPtr *int
+	var nextWeek *models.AdvancePreviewNextWeek
+
+	if nextWeekNum > 0 {
+		nextWeekNumPtr = &nextWeekNum
+
+		var nextMatchCount int
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
+			seasonID, nextWeekNum).Scan(&nextMatchCount); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+
+		var assignedCount int
+		if err := db.DB.QueryRow(`
+			SELECT COUNT(*) FROM matches
+			WHERE season_id=? AND week_number=?
+			  AND home_team_id IS NOT NULL AND away_team_id IS NOT NULL`,
+			seasonID, nextWeekNum).Scan(&assignedCount); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+
+		var lineupPlanCount int
+		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lineup_plans WHERE season_id=? AND week_number=?`,
+			seasonID, nextWeekNum).Scan(&lineupPlanCount); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+
+		// Teams that appear in next week's matches.
+		teamRows, tErr := db.DB.Query(`
+			SELECT DISTINCT t FROM (
+				SELECT home_team_id AS t FROM matches
+				WHERE season_id=? AND week_number=? AND home_team_id IS NOT NULL
+				UNION
+				SELECT away_team_id AS t FROM matches
+				WHERE season_id=? AND week_number=? AND away_team_id IS NOT NULL
+			)`, seasonID, nextWeekNum, seasonID, nextWeekNum)
+		if tErr != nil {
+			jsonError(w, tErr.Error(), 500)
+			return
+		}
+		defer teamRows.Close()
+		var allTeamIDs []int64
+		for teamRows.Next() {
+			var tid int64
+			if err := teamRows.Scan(&tid); err != nil {
+				jsonError(w, err.Error(), 500)
+				return
+			}
+			allTeamIDs = append(allTeamIDs, tid)
+		}
+		if err := teamRows.Err(); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+
+		missingTeamIDs := make([]int64, 0)
+		for _, tid := range allTeamIDs {
+			var planCount int
+			if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lineup_plans WHERE season_id=? AND week_number=? AND team_id=?`,
+				seasonID, nextWeekNum, tid).Scan(&planCount); err != nil {
+				jsonError(w, err.Error(), 500)
+				return
+			}
+			if planCount == 0 {
+				missingTeamIDs = append(missingTeamIDs, tid)
+			}
+		}
+
+		nextWeek = &models.AdvancePreviewNextWeek{
+			MatchCount:           nextMatchCount,
+			AssignedCount:        assignedCount,
+			UnassignedCount:      nextMatchCount - assignedCount,
+			LineupPlanCount:      lineupPlanCount,
+			MissingLineupTeamIDs: missingTeamIDs,
+		}
+	}
+
+	// Handicap update method: ErrNoRows means the rule is not set; default to manual_review.
+	var handicapMethod string
+	switch err := db.DB.QueryRow(`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_update_method'`,
+		seasonID).Scan(&handicapMethod); err {
+	case nil:
+	case sql.ErrNoRows:
+		handicapMethod = "manual_review"
+	default:
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if handicapMethod == "" {
+		handicapMethod = "manual_review"
+	}
+
+	preview := models.AdvancePreview{
+		SeasonID:           seasonID,
+		WeekNumber:         int(weekNum),
+		CanClose:           !result.HasErrors(),
+		ValidationMessages: previewMsgs,
+		CurrentWeek:        currentWeek,
+		NextWeekNumber:     nextWeekNumPtr,
+		NextWeek:           nextWeek,
+		Handicap: models.AdvancePreviewHandicap{
+			Method:  handicapMethod,
+			Status:  "preview_only",
+			Message: "No handicap changes are applied automatically. Phase 3A preview is read-only.",
+		},
+	}
+	jsonOK(w, preview)
 }
 
 // ─── Standings ────────────────────────────────────────────────────────────────

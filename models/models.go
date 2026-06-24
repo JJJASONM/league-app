@@ -261,6 +261,52 @@ type CloseAck struct {
 	AcknowledgedAt string `json:"acknowledged_at"`
 }
 
+// AdvancePreviewMessage mirrors validation.Message in the advance-preview response.
+type AdvancePreviewMessage struct {
+	Code    string `json:"code"`
+	Field   string `json:"field,omitempty"`
+	Message string `json:"message"`
+	Level   string `json:"level"`
+	MatchID *int64 `json:"match_id,omitempty"`
+}
+
+// AdvancePreviewWeekSummary holds match counts for a week in an advance preview.
+type AdvancePreviewWeekSummary struct {
+	MatchCount     int    `json:"match_count"`
+	CompletedCount int    `json:"completed_count"`
+	ClosedCount    int    `json:"closed_count"`
+	Status         string `json:"status"`
+}
+
+// AdvancePreviewNextWeek holds readiness counts for the next scheduled week.
+type AdvancePreviewNextWeek struct {
+	MatchCount           int     `json:"match_count"`
+	AssignedCount        int     `json:"assigned_count"`
+	UnassignedCount      int     `json:"unassigned_count"`
+	LineupPlanCount      int     `json:"lineup_plan_count"`
+	MissingLineupTeamIDs []int64 `json:"missing_lineup_team_ids"`
+}
+
+// AdvancePreviewHandicap summarizes the handicap update mode for an advance preview.
+type AdvancePreviewHandicap struct {
+	Method  string `json:"method"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// AdvancePreview is the response for GET /api/seasons/{id}/weeks/{week}/advance-preview.
+// Read-only; no data is modified by this endpoint.
+type AdvancePreview struct {
+	SeasonID           int64                     `json:"season_id"`
+	WeekNumber         int                       `json:"week_number"`
+	CanClose           bool                      `json:"can_close"`
+	ValidationMessages []AdvancePreviewMessage   `json:"validation_messages"`
+	CurrentWeek        AdvancePreviewWeekSummary `json:"current_week"`
+	NextWeekNumber     *int                      `json:"next_week_number,omitempty"`
+	NextWeek           *AdvancePreviewNextWeek   `json:"next_week,omitempty"`
+	Handicap           AdvancePreviewHandicap    `json:"handicap"`
+}
+
 // SaveRoundsRequest is the body for POST /api/matches/{id}/rounds.
 type SaveRoundsRequest struct {
 	Rounds []RoundResult `json:"rounds"`
