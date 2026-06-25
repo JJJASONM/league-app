@@ -548,6 +548,84 @@ close / warning acknowledgment flow is unchanged.
 - `web/app.js` -- `_renderAdvancePreview` helper; `reviewCloseWeek` uses
   `Promise.all` and appends advance preview section to modal body
 
+## Close Week -- Phase 3B: Advance Result After Close (implemented 2026-06-24)
+
+### Goal
+
+Return a close result summary in the `POST /close` success response so the
+admin sees a compact success view in the modal after closing a week, instead
+of the modal dismissing immediately.
+
+### Backend changes
+
+`closeWeekHandler` now returns after a successful commit:
+
+```json
+{
+  "closed": true,
+  "week_number": 2,
+  "acknowledgment_count": 1,
+  "advance_result": {
+    "message": "Week closed. Standings and player stats now include this week's results.",
+    "closed_week": {
+      "match_count": 3,
+      "completed_count": 3,
+      "closed_count": 3,
+      "status": "closed"
+    },
+    "next_week_number": 3,
+    "next_week": {
+      "match_count": 3,
+      "assigned_count": 2,
+      "unassigned_count": 1,
+      "lineup_plan_count": 4,
+      "missing_lineup_team_ids": [7]
+    },
+    "handicap": {
+      "method": "manual_review",
+      "status": "preview_only",
+      "message": "No handicap changes are applied automatically."
+    }
+  }
+}
+```
+
+`next_week_number` and `next_week` are omitted when no further weeks are
+scheduled. `advance_result` is best-effort: if the post-commit summary query
+fails, the response still returns `{"closed": true, "week_number": N,
+"acknowledgment_count": N}` so the close is never misreported as failed.
+
+The data-collection logic was extracted into `buildAdvanceResult(seasonID,
+weekNum int64) (models.AdvanceResult, error)`, a package-level helper called
+from both `getAdvancePreview` and `closeWeekHandler`. No writes are performed
+by the helper.
+
+### Frontend changes
+
+After a successful close, the Review & Close modal body is replaced with a
+success summary built by `_renderCloseSuccess(closeData, weekNum)`. The
+confirm button changes to "Done" (dismisses the modal). Schedule, standings,
+and player stats are refreshed in the background as before.
+
+The Phase 3A "Advance Preview" section still appears before close. After
+close, the modal body is replaced entirely with the success view.
+
+### Not in Phase 3B
+
+- Automatic handicap writes
+- Blank `round_results` creation
+- `lineup_plans` creation or modification
+- Audit tables
+
+### Files changed
+
+- `models/models.go` -- `AdvanceResult` struct
+- `handlers/api.go` -- `buildAdvanceResult` helper extracted; `closeWeekHandler`
+  returns `advance_result`; `getAdvancePreview` delegates to helper
+- `handlers/api_test.go` -- 8 Phase 3B tests
+- `web/app.js` -- `_renderCloseSuccess` helper; `confirmBtn.onclick` shows
+  success view instead of dismissing immediately
+
 ## Close Week Validation (full target -- future phases)
 
 The backend validates the week's score data before official calculations are

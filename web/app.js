@@ -1456,6 +1456,49 @@ function _renderAdvancePreview(preview) {
   </div>`;
 }
 
+function _renderCloseSuccess(closeData, weekNum) {
+  const ar = closeData.advance_result || {};
+  const cw = ar.closed_week || {};
+  const nw = ar.next_week;
+  const nextNum = ar.next_week_number;
+  const hc = ar.handicap || {};
+  const ackCount = closeData.acknowledgment_count || 0;
+
+  let rows = '';
+  rows += `<tr>
+    <td class="text-muted pe-3 text-nowrap">Week ${escapeHTML(String(weekNum))}</td>
+    <td>${escapeHTML(String(cw.completed_count || 0))}/${escapeHTML(String(cw.match_count || 0))} scored &nbsp;<span class="badge bg-success">Closed</span></td>
+  </tr>`;
+  if (nw) {
+    const assignNote = nw.unassigned_count > 0
+      ? ` &middot; <span class="text-warning">${nw.unassigned_count} unassigned</span>` : '';
+    const lineupNote = nw.missing_lineup_team_ids && nw.missing_lineup_team_ids.length > 0
+      ? ` &middot; <span class="text-warning">${nw.missing_lineup_team_ids.length} missing lineup</span>`
+      : ' &middot; <span class="text-success">Lineups set</span>';
+    rows += `<tr>
+      <td class="text-muted pe-3 text-nowrap">Week ${escapeHTML(String(nextNum))}</td>
+      <td>${escapeHTML(String(nw.match_count))} match${nw.match_count !== 1 ? 'es' : ''}${assignNote}${lineupNote}</td>
+    </tr>`;
+  } else {
+    rows += `<tr>
+      <td class="text-muted pe-3 text-nowrap">Next week</td>
+      <td class="fst-italic text-muted">No further weeks scheduled</td>
+    </tr>`;
+  }
+  rows += `<tr>
+    <td class="text-muted pe-3 text-nowrap">Handicap</td>
+    <td class="fst-italic text-muted">${escapeHTML(hc.message || 'No changes applied.')}</td>
+  </tr>`;
+
+  const ackNote = ackCount > 0
+    ? ` (${ackCount} warning${ackCount !== 1 ? 's' : ''} acknowledged)` : '';
+  return `<div class="alert alert-success py-2 mb-3 small d-flex align-items-center gap-2">
+    <i class="bi bi-check-circle-fill flex-shrink-0"></i>
+    <span><strong>Week ${escapeHTML(String(weekNum))} closed.</strong>${escapeHTML(ackNote)} Standings and player stats updated.</span>
+  </div>
+  <table class="table table-sm table-borderless small mb-0"><tbody>${rows}</tbody></table>`;
+}
+
 // Called by warning acknowledgment checkboxes to update the Confirm Close button state.
 function _cwmUpdateConfirmState() {
   const checks = document.querySelectorAll('#close-week-modal-body .cwm-ack-check');
@@ -1572,11 +1615,16 @@ async function reviewCloseWeek(seasonId, weekNum, ackCount = 0) {
       });
     }
     try {
-      await api('POST', `/seasons/${seasonId}/weeks/${weekNum}/close`, { acknowledgments: acks });
-      modal.hide();
-      toast('Week ' + weekNum + ' closed.', 'success');
+      const closeData = await api('POST', `/seasons/${seasonId}/weeks/${weekNum}/close`, { acknowledgments: acks });
+      // Replace modal body with success summary; let admin read before dismissing.
+      modalBody.innerHTML = _renderCloseSuccess(closeData, weekNum);
+      confirmBtn.textContent = 'Done';
+      confirmBtn.disabled = false;
+      confirmBtn.onclick = () => modal.hide();
       loadSchedule();
       loadStandings();
+      const statsSeasonId = document.getElementById('stats-season-select').value;
+      if (statsSeasonId) loadPlayerStats();
     } catch (e) {
       toast('Close failed: ' + (e.message || e), 'danger');
     }

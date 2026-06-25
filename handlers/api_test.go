@@ -1950,6 +1950,234 @@ func TestAdvancePreview_ReadOnly(t *testing.T) {
 	}
 }
 
+// --- Phase 3B: Close Week advance_result in close response -------------------
+
+func TestCloseWeek_ResponseIncludesAdvanceResult(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200 on close, got %d: %s", resp.StatusCode, b)
+	}
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	if v, _ := body["closed"].(bool); !v {
+		t.Errorf("want closed=true, got %v", body["closed"])
+	}
+	if _, ok := body["advance_result"]; !ok {
+		t.Error("close response must include advance_result")
+	}
+	if _, ok := body["acknowledgment_count"]; !ok {
+		t.Error("close response must include acknowledgment_count")
+	}
+}
+
+func TestCloseWeek_AdvanceResult_ClosedWeekStatus(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	ar, _ := body["advance_result"].(map[string]any)
+	if ar == nil {
+		t.Fatal("advance_result missing from close response")
+	}
+	cw, _ := ar["closed_week"].(map[string]any)
+	if cw == nil {
+		t.Fatal("advance_result.closed_week missing")
+	}
+	if status, _ := cw["status"].(string); status != "closed" {
+		t.Errorf("closed_week.status: want closed, got %q", status)
+	}
+	if mc, _ := cw["match_count"].(float64); int(mc) != 1 {
+		t.Errorf("closed_week.match_count: want 1, got %v", mc)
+	}
+}
+
+func TestCloseWeek_AdvanceResult_NextWeekIncluded(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number) VALUES (?,?,?,2)`,
+		f.sid, f.teamA, f.teamB)
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	ar, _ := body["advance_result"].(map[string]any)
+	if ar == nil {
+		t.Fatal("advance_result missing")
+	}
+	nextNum, ok := ar["next_week_number"].(float64)
+	if !ok {
+		t.Fatal("next_week_number must be present when week 2 exists")
+	}
+	if int(nextNum) != 2 {
+		t.Errorf("next_week_number: want 2, got %v", nextNum)
+	}
+	nw, _ := ar["next_week"].(map[string]any)
+	if nw == nil {
+		t.Fatal("next_week must be present")
+	}
+	if mc, _ := nw["match_count"].(float64); int(mc) != 1 {
+		t.Errorf("next_week.match_count: want 1, got %v", mc)
+	}
+}
+
+func TestCloseWeek_AdvanceResult_NextWeekOmitted(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	// weekTestSeed only seeds week 1; no week 2 exists.
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	ar, _ := body["advance_result"].(map[string]any)
+	if ar == nil {
+		t.Fatal("advance_result missing")
+	}
+	if _, ok := ar["next_week_number"]; ok {
+		t.Error("next_week_number must be absent for final week")
+	}
+	if _, ok := ar["next_week"]; ok {
+		t.Error("next_week must be absent for final week")
+	}
+}
+
+func TestCloseWeek_AdvanceResult_AcknowledgmentCount(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks := buildAcks(msgs)
+	if len(acks) == 0 {
+		t.Fatal("expected at least one warning to acknowledge")
+	}
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, acks)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, b)
+	}
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	ackCount, _ := body["acknowledgment_count"].(float64)
+	if int(ackCount) != len(acks) {
+		t.Errorf("acknowledgment_count: want %d, got %v", len(acks), ackCount)
+	}
+}
+
+func TestCloseWeek_AdvanceResult_NoHandicapHistory(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	var beforeCount int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM handicap_history`).Scan(&beforeCount)
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal("want 200 on close")
+	}
+
+	var afterCount int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM handicap_history`).Scan(&afterCount)
+	if afterCount != beforeCount {
+		t.Errorf("close must not write handicap_history: before=%d after=%d", beforeCount, afterCount)
+	}
+}
+
+func TestCloseWeek_AdvanceResult_NoLineupPlansMutated(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	var beforeCount int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM lineup_plans WHERE season_id=?`, f.sid).Scan(&beforeCount)
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal("want 200 on close")
+	}
+
+	var afterCount int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM lineup_plans WHERE season_id=?`, f.sid).Scan(&afterCount)
+	if afterCount != beforeCount {
+		t.Errorf("close must not mutate lineup_plans: before=%d after=%d", beforeCount, afterCount)
+	}
+}
+
+func TestCloseWeek_AckCountIsCurrentCycleOnly(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResultWithIncompleteGame(t, f.matchID, f.playerA, f.playerB)
+
+	// First close: acknowledge all warnings.
+	msgs1 := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks1 := buildAcks(msgs1)
+	if len(acks1) == 0 {
+		t.Fatal("expected at least one warning for first close")
+	}
+	weekClose(t, f.srv.URL, f.sid, 1, acks1).Body.Close()
+
+	// Reopen so the week can be closed again.
+	weekReopen(t, f.srv.URL, f.sid, 1).Body.Close()
+
+	// Second close: the same warning still exists; acknowledge it again.
+	msgs2 := weekValidate(t, f.srv.URL, f.sid, 1)
+	acks2 := buildAcks(msgs2)
+	resp2 := weekClose(t, f.srv.URL, f.sid, 1, acks2)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("want 200 on re-close, got %d: %s", resp2.StatusCode, b)
+	}
+	var body map[string]any
+	json.NewDecoder(resp2.Body).Decode(&body)
+
+	ackCount, _ := body["acknowledgment_count"].(float64)
+	// DB now holds rows from both close cycles, but acknowledgment_count must
+	// reflect only the current cycle's warnings, not the cumulative historical total.
+	if int(ackCount) != len(acks2) {
+		t.Errorf("acknowledgment_count: want %d (current cycle only), got %v", len(acks2), ackCount)
+	}
+}
+
+func TestAdvancePreview_StillWorksAfterHelperExtraction(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+
+	resp := weekGetAdvancePreview(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200 from advance-preview after helper extraction, got %d: %s", resp.StatusCode, b)
+	}
+	var preview map[string]any
+	json.NewDecoder(resp.Body).Decode(&preview)
+
+	if v, _ := preview["can_close"].(bool); !v {
+		t.Errorf("can_close must be true for closable week, got %v", preview["can_close"])
+	}
+	if _, ok := preview["current_week"]; !ok {
+		t.Error("current_week must be present in advance-preview response")
+	}
+	if _, ok := preview["handicap"]; !ok {
+		t.Error("handicap must be present in advance-preview response")
+	}
+}
+
 // ─── Skip date and match date normalization ───────────────────────────────────
 
 // seedScheduleFixture creates a league, 3 teams (odd), and one season.

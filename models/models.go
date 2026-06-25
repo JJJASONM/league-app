@@ -307,6 +307,16 @@ type AdvancePreview struct {
 	Handicap           AdvancePreviewHandicap    `json:"handicap"`
 }
 
+// AdvanceResult is embedded in the POST close response after a successful close.
+// It summarizes the state immediately after the week transaction commits.
+type AdvanceResult struct {
+	Message        string                    `json:"message"`
+	ClosedWeek     AdvancePreviewWeekSummary `json:"closed_week"`
+	NextWeekNumber *int                      `json:"next_week_number,omitempty"`
+	NextWeek       *AdvancePreviewNextWeek   `json:"next_week,omitempty"`
+	Handicap       AdvancePreviewHandicap    `json:"handicap"`
+}
+
 // SaveRoundsRequest is the body for POST /api/matches/{id}/rounds.
 type SaveRoundsRequest struct {
 	Rounds []RoundResult `json:"rounds"`
