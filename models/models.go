@@ -287,11 +287,28 @@ type AdvancePreviewNextWeek struct {
 	MissingLineupTeamIDs []int64 `json:"missing_lineup_team_ids"`
 }
 
+// PlayerHandicapRec is one player's read-only handicap recommendation in an advance preview.
+// The recommendation is computed from closed official match data only.
+// No changes are written anywhere; this is informational draft output only.
+type PlayerHandicapRec struct {
+	PlayerID            int64   `json:"player_id"`
+	PlayerName          string  `json:"player_name"`
+	CurrentHandicap     float64 `json:"current_handicap"`
+	RecommendedHandicap float64 `json:"recommended_handicap"`
+	MatchesPlayed       int     `json:"matches_played"`
+	AdminHold           bool    `json:"admin_hold"`
+	Skipped             bool    `json:"skipped"`
+	Reason              string  `json:"reason,omitempty"` // "no_data"|"admin_hold"|"no_change"|"capped"|"unsupported_method"
+}
+
 // AdvancePreviewHandicap summarizes the handicap update mode for an advance preview.
+// Recommendations is populated only when method is "game_diff_average" and closed
+// match data exists. It is absent (omitempty) for "manual_review" and "kicker_average_preview".
 type AdvancePreviewHandicap struct {
-	Method  string `json:"method"`
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	Method          string             `json:"method"`
+	Status          string             `json:"status"`
+	Message         string             `json:"message"`
+	Recommendations []PlayerHandicapRec `json:"recommendations,omitempty"`
 }
 
 // AdvancePreview is the response for GET /api/seasons/{id}/weeks/{week}/advance-preview.

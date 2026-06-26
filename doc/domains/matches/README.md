@@ -626,6 +626,179 @@ close, the modal body is replaced entirely with the success view.
 - `web/app.js` -- `_renderCloseSuccess` helper; `confirmBtn.onclick` shows
   success view instead of dismissing immediately
 
+## Close Week -- Phase 3C: Handicap Recommendation Preview (implemented 2026-06-25)
+
+### Goal
+
+Show read-only handicap recommendations in the Advance Preview and post-close
+success summary. Recommendations are computed from closed official match data only.
+No handicap values are written anywhere in this phase.
+
+### Scope: read-only / no writes
+
+Phase 3C does **not** write to:
+- `players.handicap`
+- `handicap_history`
+- `lineup_plans`
+- `round_results`
+- Any other table beyond what Close Week already writes (Phase 1)
+
+Because no handicap writes occur, the Reopen workflow requires no new rollback logic.
+
+### Response shape extension
+
+`AdvancePreviewHandicap` now carries an optional `recommendations` field:
+
+```json
+{
+  "method": "game_diff_average",
+  "status": "preview",
+  "message": "2 players have recommended handicap changes (not yet applied).",
+  "recommendations": [
+    {
+      "player_id": 12,
+      "player_name": "John Smith",
+      "current_handicap": 1.5,
+      "recommended_handicap": 2.3,
+      "matches_played": 4,
+      "admin_hold": false,
+      "skipped": false
+    },
+    {
+      "player_id": 17,
+      "player_name": "Jane Doe",
+      "current_handicap": 2.0,
+      "recommended_handicap": 2.0,
+      "matches_played": 3,
+      "admin_hold": false,
+      "skipped": false,
+      "reason": "no_change"
+    },
+    {
+      "player_id": 22,
+      "player_name": "Bob Lee",
+      "current_handicap": 3.0,
+      "recommended_handicap": 3.0,
+      "matches_played": 0,
+      "admin_hold": false,
+      "skipped": true,
+      "reason": "no_data"
+    },
+    {
+      "player_id": 31,
+      "player_name": "Alice Wu",
+      "current_handicap": 2.0,
+      "recommended_handicap": 2.0,
+      "matches_played": 2,
+      "admin_hold": true,
+      "skipped": true,
+      "reason": "admin_hold"
+    }
+  ]
+}
+```
+
+`recommendations` is absent (`omitempty`) for `manual_review` and `kicker_average_preview`.
+
+### Method routing
+
+| `handicap_update_method` rule | Status | Recommendations |
+|-------------------------------|--------|-----------------|
+| `manual_review` (default) | `no_auto_apply` | absent |
+| `game_diff_average` | `preview` | present |
+| `kicker_average_preview` | `unsupported` | absent |
+
+The rule is read from `season_rules`. If absent or empty, `manual_review` is assumed.
+
+### Stable reason codes
+
+| Code | Meaning |
+|------|---------|
+| `no_data` | Player is on the season roster but has no closed match data |
+| `admin_hold` | Player has `admin_hold=1`; no recommendation computed |
+| `no_change` | Computed recommendation equals current handicap |
+| `capped` | Computed average exceeded `max_individual_handicap` and was capped |
+| `unsupported_method` | Reserved for future use |
+
+### game_diff_average formula (draft)
+
+The `game_diff_average` recommendation is **draft preview logic, not confirmed
+league policy**. It is a starting point for discussion only.
+
+Formula: `recommended = round(avg_diff, 1)` where
+
+```
+avg_diff = SUM(match_results.diff) / COUNT(match_results)
+```
+
+across all matches in the season where `completed = 1 AND week_closed = 1`.
+
+`round(x, 1)` rounds to the nearest 0.1 (same as `math.Round(x*10)/10`).
+
+The `max_individual_handicap` season rule (default 4.5) caps the absolute value
+of the recommendation: if `|recommended| > maxHC`, the value is capped and marked
+`reason: "capped"`.
+
+Players are sourced from `season_rosters` (managed seasons) UNION players with
+closed `match_results` in the season (legacy seasons). This ensures players on the
+roster with no play time appear as `skipped: true, reason: "no_data"`.
+
+### kicker_average_preview status
+
+`kicker_average_preview` returns `status: "unsupported"` with a plain-text message.
+No recommendations are computed. The kicker average formula is deferred to a future
+phase once the league defines it.
+
+### Endpoints affected
+
+Both endpoints populate the `handicap` field via the shared `buildHandicapPreview`
+helper, which calls `buildAdvanceResult`:
+
+| Endpoint | Trigger |
+|----------|---------|
+| `GET /api/seasons/{id}/weeks/{week}/advance-preview` | pre-close dry-run |
+| `POST /api/seasons/{id}/weeks/{week}/close` (on success) | post-commit result |
+
+### UI behavior
+
+When `recommendations` is present and non-empty, a compact table is appended below
+the Advance Preview summary rows:
+
+- Columns: Player, Current, Recommended, Matches, Notes
+- Skipped rows (`admin_hold` or `no_data`): muted text, lock badge or "No data"
+- `no_change` rows: show same value in both columns, "No change" note
+- `capped` rows: show capped value, "Capped" badge
+- A warning paragraph above the table states: **"Recommendations are not applied
+  automatically -- review and update manually if needed."**
+- No Apply button. No checkboxes.
+
+The same table appears in the post-close success modal under the close confirmation
+header.
+
+For `manual_review` (default), no table is rendered. The existing text-only
+message ("No handicap changes are applied automatically.") is preserved.
+
+### Not in Phase 3C
+
+- Writing `players.handicap`
+- Writing `handicap_history`
+- An "Apply" button or any automatic application flow
+- `kicker_average_preview` formula implementation
+- `handicap_rounding` rule enforcement on recommendations
+- Multi-season aggregation
+- Audit table entries for recommendations
+
+### Files changed
+
+- `models/models.go` -- `PlayerHandicapRec` struct; `Recommendations` field on
+  `AdvancePreviewHandicap`
+- `handlers/api.go` -- `buildHandicapPreview`, `computeGameDiffAverageRecs`,
+  `seasonHandicapUpdateMethod`, `seasonMaxIndividualHC` helpers; `buildAdvanceResult`
+  delegates to `buildHandicapPreview`
+- `handlers/api_test.go` -- 11 Phase 3C tests
+- `web/app.js` -- `_renderHandicapRecs` helper; `_renderAdvancePreview` and
+  `_renderCloseSuccess` include recommendations table when present
+
 ## Close Week Validation (full target -- future phases)
 
 The backend validates the week's score data before official calculations are

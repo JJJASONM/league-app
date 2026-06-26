@@ -14,6 +14,7 @@ import (
 	"league_app/logic"
 	"league_app/models"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -1956,18 +1957,9 @@ func buildAdvanceResult(seasonID, weekNum int64) (models.AdvanceResult, error) {
 		}
 	}
 
-	// Handicap update method: ErrNoRows means the rule is not set; default to manual_review.
-	var handicapMethod string
-	switch err := db.DB.QueryRow(`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_update_method'`,
-		seasonID).Scan(&handicapMethod); err {
-	case nil:
-	case sql.ErrNoRows:
-		handicapMethod = "manual_review"
-	default:
+	hc, err := buildHandicapPreview(seasonID, weekNum)
+	if err != nil {
 		return models.AdvanceResult{}, err
-	}
-	if handicapMethod == "" {
-		handicapMethod = "manual_review"
 	}
 
 	return models.AdvanceResult{
@@ -1979,12 +1971,200 @@ func buildAdvanceResult(seasonID, weekNum int64) (models.AdvanceResult, error) {
 		},
 		NextWeekNumber: nextWeekNumPtr,
 		NextWeek:       nextWeek,
-		Handicap: models.AdvancePreviewHandicap{
-			Method:  handicapMethod,
-			Status:  "preview_only",
-			Message: "No handicap changes are applied automatically.",
-		},
+		Handicap:       hc,
 	}, nil
+}
+
+// buildHandicapPreview computes read-only handicap recommendations for a season.
+// No writes are performed to players, handicap_history, or any other table.
+// Recommendations are draft preview logic (game_diff_average) -- not confirmed league policy.
+func buildHandicapPreview(seasonID, _ int64) (models.AdvancePreviewHandicap, error) {
+	method, err := seasonHandicapUpdateMethod(seasonID)
+	if err != nil {
+		return models.AdvancePreviewHandicap{}, err
+	}
+	switch method {
+	case "kicker_average_preview":
+		return models.AdvancePreviewHandicap{
+			Method:  method,
+			Status:  "unsupported",
+			Message: "Kicker average handicap recommendations are not implemented yet. No handicap changes are applied automatically.",
+		}, nil
+	case "game_diff_average":
+		maxHC, err := seasonMaxIndividualHC(seasonID)
+		if err != nil {
+			return models.AdvancePreviewHandicap{}, err
+		}
+		recs, err := computeGameDiffAverageRecs(seasonID, maxHC)
+		if err != nil {
+			return models.AdvancePreviewHandicap{}, err
+		}
+		changedCount := 0
+		for _, r := range recs {
+			if !r.Skipped && r.Reason != "no_change" {
+				changedCount++
+			}
+		}
+		var msg string
+		switch {
+		case changedCount == 1:
+			msg = "1 player has a recommended handicap change (not yet applied)."
+		case changedCount > 1:
+			msg = fmt.Sprintf("%d players have recommended handicap changes (not yet applied).", changedCount)
+		default:
+			msg = "No handicap changes recommended. No changes are applied automatically."
+		}
+		return models.AdvancePreviewHandicap{
+			Method:          method,
+			Status:          "preview",
+			Message:         msg,
+			Recommendations: recs,
+		}, nil
+	default: // "manual_review" and any unknown method
+		return models.AdvancePreviewHandicap{
+			Method:  method,
+			Status:  "no_auto_apply",
+			Message: "No handicap changes are applied automatically.",
+		}, nil
+	}
+}
+
+// computeGameDiffAverageRecs returns per-player handicap recommendations using average
+// game diff across all completed, officially closed matches for the season.
+// Players are sourced from season_rosters (managed seasons) and/or match_results for
+// closed matches (legacy seasons), so no_data entries can be represented.
+// No writes are performed.
+func computeGameDiffAverageRecs(seasonID int64, maxHC float64) ([]models.PlayerHandicapRec, error) {
+	rows, err := db.DB.Query(`
+		SELECT
+		    p.id,
+		    p.first_name || ' ' || p.last_name,
+		    p.handicap,
+		    p.admin_hold,
+		    COUNT(mr.id),
+		    COALESCE(SUM(mr.diff), 0.0)
+		FROM (
+		    SELECT DISTINCT player_id FROM season_rosters WHERE season_id = ?
+		    UNION
+		    SELECT DISTINCT mr2.player_id
+		    FROM match_results mr2
+		    JOIN matches m2 ON m2.id = mr2.match_id
+		    WHERE m2.season_id = ? AND m2.completed = 1 AND m2.week_closed = 1
+		) AS candidates
+		JOIN players p ON p.id = candidates.player_id
+		LEFT JOIN match_results mr ON mr.player_id = p.id
+		    AND mr.match_id IN (
+		        SELECT id FROM matches
+		        WHERE season_id = ? AND completed = 1 AND week_closed = 1
+		    )
+		GROUP BY p.id, p.first_name, p.last_name, p.handicap, p.admin_hold
+		ORDER BY p.first_name, p.last_name`,
+		seasonID, seasonID, seasonID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var recs []models.PlayerHandicapRec
+	for rows.Next() {
+		var (
+			playerID   int64
+			playerName string
+			currentHC  float64
+			adminHold  bool
+			matchCount int
+			totalDiff  float64
+		)
+		if err := rows.Scan(&playerID, &playerName, &currentHC, &adminHold, &matchCount, &totalDiff); err != nil {
+			return nil, err
+		}
+
+		rec := models.PlayerHandicapRec{
+			PlayerID:        playerID,
+			PlayerName:      playerName,
+			CurrentHandicap: currentHC,
+			AdminHold:       adminHold,
+			MatchesPlayed:   matchCount,
+		}
+
+		if adminHold {
+			rec.Skipped             = true
+			rec.Reason              = "admin_hold"
+			rec.RecommendedHandicap = currentHC
+			recs = append(recs, rec)
+			continue
+		}
+
+		if matchCount == 0 {
+			rec.Skipped             = true
+			rec.Reason              = "no_data"
+			rec.RecommendedHandicap = currentHC
+			recs = append(recs, rec)
+			continue
+		}
+
+		avg := totalDiff / float64(matchCount)
+		recommended := math.Round(avg*10) / 10 // nearest 0.1
+
+		capped := false
+		if recommended > maxHC {
+			recommended = math.Round(maxHC*10) / 10
+			capped = true
+		} else if recommended < -maxHC {
+			recommended = math.Round(-maxHC*10) / 10
+			capped = true
+		}
+		rec.RecommendedHandicap = recommended
+
+		switch {
+		case capped:
+			rec.Reason = "capped"
+		case math.Round(currentHC*10)/10 == recommended:
+			rec.Reason = "no_change"
+		}
+
+		recs = append(recs, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return recs, nil
+}
+
+// seasonHandicapUpdateMethod returns the handicap_update_method rule for a season,
+// defaulting to "manual_review" if absent or empty.
+func seasonHandicapUpdateMethod(seasonID int64) (string, error) {
+	var val string
+	err := db.DB.QueryRow(
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_update_method'`,
+		seasonID).Scan(&val)
+	if err == sql.ErrNoRows || val == "" {
+		return "manual_review", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return val, nil
+}
+
+// seasonMaxIndividualHC returns the max_individual_handicap rule for a season,
+// defaulting to 4.5 if absent or invalid.
+func seasonMaxIndividualHC(seasonID int64) (float64, error) {
+	var val string
+	err := db.DB.QueryRow(
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='max_individual_handicap'`,
+		seasonID).Scan(&val)
+	if err == sql.ErrNoRows || val == "" {
+		return 4.5, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	f, parseErr := strconv.ParseFloat(val, 64)
+	if parseErr != nil || f <= 0 {
+		return 4.5, nil
+	}
+	return f, nil
 }
 
 func getAdvancePreview(w http.ResponseWriter, r *http.Request) {

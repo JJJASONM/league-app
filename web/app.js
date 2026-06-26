@@ -1418,6 +1418,39 @@ async function loadSchedule() {
   : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons → Manage → Schedule.</div>';
 }
 
+// _renderHandicapRecs returns an HTML recommendations table when hc.recommendations
+// is present and non-empty, otherwise returns ''. No Apply button is included.
+function _renderHandicapRecs(hc) {
+  if (!hc || !Array.isArray(hc.recommendations) || hc.recommendations.length === 0) return '';
+  const rows = hc.recommendations.map(r => {
+    let recCell, noteCell;
+    if (r.skipped) {
+      recCell = '<span class="text-muted">N/A</span>';
+      noteCell = r.reason === 'admin_hold'
+        ? '<span class="badge bg-secondary">Admin Hold</span>'
+        : r.reason === 'no_data'
+          ? '<span class="text-muted fst-italic">No data</span>'
+          : '<span class="text-muted fst-italic">' + escapeHTML(r.reason || '') + '</span>';
+    } else {
+      recCell = escapeHTML(fmtHC(r.recommended_handicap));
+      noteCell = r.reason === 'no_change'
+        ? '<span class="text-muted fst-italic">No change</span>'
+        : r.reason === 'capped'
+          ? '<span class="badge bg-warning text-dark">Capped</span>'
+          : '';
+    }
+    const trClass = r.skipped ? ' class="text-muted"' : '';
+    return `<tr${trClass}><td>${escapeHTML(r.player_name)}</td><td>${escapeHTML(fmtHC(r.current_handicap))}</td><td>${recCell}</td><td>${r.matches_played}</td><td>${noteCell}</td></tr>`;
+  }).join('');
+  return `<div class="mt-2">
+    <p class="small fw-bold text-danger mb-1"><i class="bi bi-exclamation-circle me-1"></i>Recommendations are <strong>not applied automatically</strong> -- review and update manually if needed.</p>
+    <table class="table table-sm table-borderless small mb-0">
+      <thead><tr><th class="text-muted fw-normal small">Player</th><th class="text-muted fw-normal small">Current</th><th class="text-muted fw-normal small">Recommended</th><th class="text-muted fw-normal small">Matches</th><th class="text-muted fw-normal small">Notes</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
 function _renderAdvancePreview(preview) {
   const cw = preview.current_week;
   const nextNum = preview.next_week_number;
@@ -1453,6 +1486,7 @@ function _renderAdvancePreview(preview) {
   return `<div class="mt-3 pt-2 border-top">
     <p class="small fw-semibold text-secondary mb-1"><i class="bi bi-calendar-arrow-up me-1"></i>Advance Preview</p>
     <table class="table table-sm table-borderless small mb-0"><tbody>${rows}</tbody></table>
+    ${_renderHandicapRecs(hc)}
   </div>`;
 }
 
@@ -1496,7 +1530,8 @@ function _renderCloseSuccess(closeData, weekNum) {
     <i class="bi bi-check-circle-fill flex-shrink-0"></i>
     <span><strong>Week ${escapeHTML(String(weekNum))} closed.</strong>${escapeHTML(ackNote)} Standings and player stats updated.</span>
   </div>
-  <table class="table table-sm table-borderless small mb-0"><tbody>${rows}</tbody></table>`;
+  <table class="table table-sm table-borderless small mb-0"><tbody>${rows}</tbody></table>
+  ${_renderHandicapRecs(hc)}`;
 }
 
 // Called by warning acknowledgment checkboxes to update the Confirm Close button state.
