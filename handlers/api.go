@@ -104,6 +104,7 @@ func Register(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen", reopenWeekHandler)
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", getWeekAcknowledgments)
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/advance-preview", getAdvancePreview)
+	mux.HandleFunc("GET /api/seasons/{id}/handicap-recommendations", getHandicapRecommendations)
 
 	// Standings & stats
 	mux.HandleFunc("GET /api/standings", getStandings)
@@ -2223,6 +2224,218 @@ func getAdvancePreview(w http.ResponseWriter, r *http.Request) {
 		Handicap:           ar.Handicap,
 	}
 	jsonOK(w, preview)
+}
+
+// --- Handicap Review ---------------------------------------------------------
+
+// computeHandicapReviewRecs returns per-player handicap recommendations for the
+// Handicap Review screen. Extends the game_diff_average logic with team_name and
+// change_amount. Recommendations recompute live; no rows are written anywhere.
+func computeHandicapReviewRecs(seasonID int64, maxHC float64) ([]models.HandicapReviewRec, error) {
+	rows, err := db.DB.Query(`
+		SELECT
+		    p.id,
+		    p.first_name || ' ' || p.last_name,
+		    COALESCE(t.name, ''),
+		    p.handicap,
+		    p.admin_hold,
+		    COUNT(mr.id),
+		    COALESCE(SUM(mr.diff), 0.0)
+		FROM (
+		    SELECT DISTINCT player_id FROM season_rosters WHERE season_id = ?
+		    UNION
+		    SELECT DISTINCT mr2.player_id
+		    FROM match_results mr2
+		    JOIN matches m2 ON m2.id = mr2.match_id
+		    WHERE m2.season_id = ? AND m2.completed = 1 AND m2.week_closed = 1
+		) AS candidates
+		JOIN players p ON p.id = candidates.player_id
+		LEFT JOIN teams t ON t.id = p.team_id
+		LEFT JOIN match_results mr ON mr.player_id = p.id
+		    AND mr.match_id IN (
+		        SELECT id FROM matches
+		        WHERE season_id = ? AND completed = 1 AND week_closed = 1
+		    )
+		GROUP BY p.id, p.first_name, p.last_name, t.name, p.handicap, p.admin_hold
+		ORDER BY t.name, p.first_name, p.last_name`,
+		seasonID, seasonID, seasonID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var recs []models.HandicapReviewRec
+	for rows.Next() {
+		var (
+			playerID   int64
+			playerName string
+			teamName   string
+			currentHC  float64
+			adminHold  bool
+			matchCount int
+			totalDiff  float64
+		)
+		if err := rows.Scan(&playerID, &playerName, &teamName, &currentHC, &adminHold, &matchCount, &totalDiff); err != nil {
+			return nil, err
+		}
+
+		rec := models.HandicapReviewRec{
+			PlayerID:        playerID,
+			PlayerName:      playerName,
+			TeamName:        teamName,
+			CurrentHandicap: currentHC,
+			AdminHold:       adminHold,
+			MatchesPlayed:   matchCount,
+		}
+
+		if adminHold {
+			rec.Skipped             = true
+			rec.Reason              = "admin_hold"
+			rec.RecommendedHandicap = currentHC
+			recs = append(recs, rec)
+			continue
+		}
+
+		if matchCount == 0 {
+			rec.Skipped             = true
+			rec.Reason              = "no_data"
+			rec.RecommendedHandicap = currentHC
+			recs = append(recs, rec)
+			continue
+		}
+
+		avg := totalDiff / float64(matchCount)
+		recommended := math.Round(avg*10) / 10
+
+		capped := false
+		if recommended > maxHC {
+			recommended = math.Round(maxHC*10) / 10
+			capped = true
+		} else if recommended < -maxHC {
+			recommended = math.Round(-maxHC*10) / 10
+			capped = true
+		}
+		rec.RecommendedHandicap = recommended
+		rec.ChangeAmount        = math.Round((recommended-currentHC)*10) / 10
+
+		switch {
+		case capped:
+			rec.Reason = "capped"
+		case math.Round(currentHC*10)/10 == recommended:
+			rec.Reason = "no_change"
+		}
+
+		recs = append(recs, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return recs, nil
+}
+
+// getHandicapRecommendations handles GET /api/seasons/{id}/handicap-recommendations.
+// Returns season-wide read-only handicap recommendations based on all closed weeks.
+// No writes are performed to players, handicap_history, or any other table.
+// Recommendations recompute live; reopening a week automatically removes its data
+// from the next response because reopened matches have week_closed=0.
+func getHandicapRecommendations(w http.ResponseWriter, r *http.Request) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+
+	var exists int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM seasons WHERE id=?`, seasonID).Scan(&exists); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if exists == 0 {
+		jsonError(w, "season not found", http.StatusNotFound)
+		return
+	}
+
+	method, err := seasonHandicapUpdateMethod(seasonID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	emptyResponse := func(status, message string, weeksClosed int) {
+		jsonOK(w, models.HandicapReviewResponse{
+			SeasonID:        seasonID,
+			Method:          method,
+			Status:          status,
+			Message:         message,
+			WeeksClosed:     weeksClosed,
+			Recommendations: []models.HandicapReviewRec{},
+		})
+	}
+
+	switch method {
+	case "manual_review":
+		emptyResponse("no_auto_apply",
+			"No handicap changes are applied automatically. Update player handicaps manually via the Players tab.",
+			0)
+		return
+	case "kicker_average_preview":
+		emptyResponse("unsupported",
+			"kicker_average_preview is not yet implemented. No changes are applied automatically.",
+			0)
+		return
+	}
+
+	// game_diff_average path.
+	var weeksClosed int
+	if err := db.DB.QueryRow(
+		`SELECT COUNT(DISTINCT week_number) FROM matches WHERE season_id=? AND week_closed=1`,
+		seasonID).Scan(&weeksClosed); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if weeksClosed == 0 {
+		emptyResponse("no_data",
+			"No closed weeks available. Close a week to generate handicap recommendations.",
+			0)
+		return
+	}
+
+	maxHC, err := seasonMaxIndividualHC(seasonID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	recs, err := computeHandicapReviewRecs(seasonID, maxHC)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	changed := 0
+	for _, rec := range recs {
+		if !rec.Skipped && rec.Reason != "no_change" {
+			changed++
+		}
+	}
+	var msg string
+	switch {
+	case changed == 0:
+		msg = "No handicap changes recommended. Review complete."
+	case changed == 1:
+		msg = "1 player has a recommended handicap change (not yet applied)."
+	default:
+		msg = fmt.Sprintf("%d players have recommended handicap changes (not yet applied).", changed)
+	}
+
+	jsonOK(w, models.HandicapReviewResponse{
+		SeasonID:        seasonID,
+		Method:          method,
+		Status:          "preview",
+		Message:         msg,
+		WeeksClosed:     weeksClosed,
+		Recommendations: recs,
+	})
 }
 
 // ─── Standings ────────────────────────────────────────────────────────────────

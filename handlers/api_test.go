@@ -4828,6 +4828,240 @@ func TestHandicapPreview_DBError_Returns500(t *testing.T) {
 	}
 }
 
+// --- Phase 3D: Handicap Review Screen ---
+
+// getHandicapRecs calls GET /api/seasons/{id}/handicap-recommendations and
+// returns the decoded response body as a map.
+func getHandicapRecs(t *testing.T, srvURL string, sid int64) (map[string]any, int) {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/handicap-recommendations", srvURL, sid))
+	if err != nil {
+		t.Fatalf("getHandicapRecs: %v", err)
+	}
+	defer resp.Body.Close()
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result, resp.StatusCode
+}
+
+func TestHandicapRecs_GameDiffAverage(t *testing.T) {
+	f := weekTestSeed(t)
+	// playerA: handicap=1.0, 1 closed match, diff=3.0 -> recommended=3.0, change=+2.0
+	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,0,3,-3.0)`, f.matchID, f.playerB, f.teamB)
+	closeWeek1ForHC(t, f.sid, f.matchID)
+	setHandicapMethod(t, f.sid, "game_diff_average")
+
+	data, status := getHandicapRecs(t, f.srv.URL, f.sid)
+	if status != http.StatusOK {
+		t.Fatalf("want 200, got %d", status)
+	}
+	if m, _ := data["method"].(string); m != "game_diff_average" {
+		t.Errorf("want method=game_diff_average, got %q", m)
+	}
+	if s, _ := data["status"].(string); s != "preview" {
+		t.Errorf("want status=preview, got %q", s)
+	}
+	wc, _ := data["weeks_closed"].(float64)
+	if int(wc) != 1 {
+		t.Errorf("want weeks_closed=1, got %v", wc)
+	}
+	recs, _ := data["recommendations"].([]any)
+	if len(recs) == 0 {
+		t.Fatal("want recommendations, got none")
+	}
+	for _, r := range recs {
+		rec, _ := r.(map[string]any)
+		pid := int64(rec["player_id"].(float64))
+		if pid == f.playerA {
+			recHC, _ := rec["recommended_handicap"].(float64)
+			if recHC != 3.0 {
+				t.Errorf("playerA: want recommended_handicap=3.0, got %v", recHC)
+			}
+			chg, _ := rec["change_amount"].(float64)
+			if chg != 2.0 {
+				t.Errorf("playerA: want change_amount=2.0, got %v", chg)
+			}
+			if _, ok := rec["team_name"]; !ok {
+				t.Error("want team_name field in recommendation")
+			}
+		}
+	}
+}
+
+func TestHandicapRecs_AdminHold(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE players SET admin_hold=1 WHERE id=?`, f.playerA)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
+	closeWeek1ForHC(t, f.sid, f.matchID)
+	setHandicapMethod(t, f.sid, "game_diff_average")
+
+	data, status := getHandicapRecs(t, f.srv.URL, f.sid)
+	if status != http.StatusOK {
+		t.Fatalf("want 200, got %d", status)
+	}
+	recs, _ := data["recommendations"].([]any)
+	for _, r := range recs {
+		rec, _ := r.(map[string]any)
+		if int64(rec["player_id"].(float64)) == f.playerA {
+			if rec["skipped"] != true {
+				t.Error("admin_hold player: want skipped=true")
+			}
+			if reason, _ := rec["reason"].(string); reason != "admin_hold" {
+				t.Errorf("want reason=admin_hold, got %q", reason)
+			}
+			if ah, _ := rec["admin_hold"].(bool); !ah {
+				t.Error("want admin_hold=true in response")
+			}
+			return
+		}
+	}
+	t.Errorf("playerA not found in recommendations")
+}
+
+func TestHandicapRecs_NoData(t *testing.T) {
+	f := weekTestSeed(t)
+	// playerA on season_rosters but never in a closed match_result.
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	// Close the week but insert no match_results for playerA.
+	closeWeek1ForHC(t, f.sid, f.matchID)
+	setHandicapMethod(t, f.sid, "game_diff_average")
+
+	data, status := getHandicapRecs(t, f.srv.URL, f.sid)
+	if status != http.StatusOK {
+		t.Fatalf("want 200, got %d", status)
+	}
+	recs, _ := data["recommendations"].([]any)
+	for _, r := range recs {
+		rec, _ := r.(map[string]any)
+		if int64(rec["player_id"].(float64)) == f.playerA {
+			if rec["skipped"] != true {
+				t.Error("no closed data: want skipped=true")
+			}
+			if reason, _ := rec["reason"].(string); reason != "no_data" {
+				t.Errorf("want reason=no_data, got %q", reason)
+			}
+			return
+		}
+	}
+	t.Errorf("playerA not found in recommendations")
+}
+
+func TestHandicapRecs_ManualReview(t *testing.T) {
+	f := weekTestSeed(t)
+	// Default method is manual_review (no rule set).
+
+	data, status := getHandicapRecs(t, f.srv.URL, f.sid)
+	if status != http.StatusOK {
+		t.Fatalf("want 200, got %d", status)
+	}
+	if m, _ := data["method"].(string); m != "manual_review" {
+		t.Errorf("want method=manual_review, got %q", m)
+	}
+	if s, _ := data["status"].(string); s != "no_auto_apply" {
+		t.Errorf("want status=no_auto_apply, got %q", s)
+	}
+	recs, _ := data["recommendations"].([]any)
+	if len(recs) != 0 {
+		t.Errorf("manual_review: want empty recommendations, got %d", len(recs))
+	}
+	if msg, _ := data["message"].(string); msg == "" {
+		t.Error("want non-empty message for manual_review")
+	}
+}
+
+func TestHandicapRecs_NoClosedWeeks(t *testing.T) {
+	f := weekTestSeed(t)
+	// Scores saved and completed=1, but week NOT closed (week_closed=0).
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,5.0)`, f.matchID, f.playerA, f.teamA)
+	// Do NOT call closeWeek1ForHC -- week remains open.
+	setHandicapMethod(t, f.sid, "game_diff_average")
+
+	data, status := getHandicapRecs(t, f.srv.URL, f.sid)
+	if status != http.StatusOK {
+		t.Fatalf("want 200, got %d", status)
+	}
+	if s, _ := data["status"].(string); s != "no_data" {
+		t.Errorf("want status=no_data when no closed weeks, got %q", s)
+	}
+	recs, _ := data["recommendations"].([]any)
+	if len(recs) != 0 {
+		t.Errorf("no closed weeks: want empty recommendations, got %d", len(recs))
+	}
+}
+
+func TestHandicapRecs_SeasonNotFound(t *testing.T) {
+	f := weekTestSeed(t)
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/9999/handicap-recommendations", f.srv.URL))
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandicapRecs_DBError(t *testing.T) {
+	f := weekTestSeed(t)
+	setHandicapMethod(t, f.sid, "game_diff_average")
+	// Insert a closed week so we get past the weeksClosed==0 gate.
+	closeWeek1ForHC(t, f.sid, f.matchID)
+
+	// Drop season_rosters so computeHandicapReviewRecs fails with a real SQL error.
+	if _, err := db.DB.Exec(`DROP TABLE season_rosters`); err != nil {
+		t.Fatalf("DROP TABLE season_rosters: %v", err)
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/handicap-recommendations", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("want 500 on DB error, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestHandicapRecs_ReadOnly(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE players SET handicap=2.0 WHERE id=?`, f.playerA)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,4.0)`, f.matchID, f.playerA, f.teamA)
+	closeWeek1ForHC(t, f.sid, f.matchID)
+	setHandicapMethod(t, f.sid, "game_diff_average")
+
+	var hcBefore float64
+	db.DB.QueryRow(`SELECT handicap FROM players WHERE id=?`, f.playerA).Scan(&hcBefore)
+	var histBefore int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM handicap_history`).Scan(&histBefore)
+
+	http.Get(fmt.Sprintf("%s/api/seasons/%d/handicap-recommendations", f.srv.URL, f.sid))
+
+	var hcAfter float64
+	db.DB.QueryRow(`SELECT handicap FROM players WHERE id=?`, f.playerA).Scan(&hcAfter)
+	if hcAfter != hcBefore {
+		t.Errorf("handicap-recommendations must not modify players.handicap: was %v, now %v", hcBefore, hcAfter)
+	}
+	var histAfter int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM handicap_history`).Scan(&histAfter)
+	if histAfter != histBefore {
+		t.Errorf("handicap-recommendations must not write handicap_history: was %d, now %d", histBefore, histAfter)
+	}
+}
+
 func TestPhase3C_NoWritesToHandicapTables(t *testing.T) {
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)

@@ -35,6 +35,7 @@ function loadSection(sec) {
     case 'entry':     populateSeasonSelect('entry-season-select', loadEntryMatches); break;
     case 'standings': populateSeasonSelect('standings-season-select', loadStandings); break;
     case 'stats':     populateSeasonSelect('stats-season-select', loadPlayerStats); break;
+    case 'handicap':  populateSeasonSelect('handicap-season-select', loadHandicapReview); break;
   }
 }
 
@@ -2781,6 +2782,93 @@ async function loadPlayerStats() {
     </tr>`).join('') || '<tr><td colspan="9" class="text-center text-muted py-3">No stats yet</td></tr>';
 }
 
+// -- Handicap Review ----------------------------------------------------------
+
+async function loadHandicapReview() {
+  const seasonId = document.getElementById('handicap-season-select').value;
+  const el = document.getElementById('handicap-review-content');
+  if (!seasonId) { el.innerHTML = ''; return; }
+  try {
+    const data = await api('GET', `/seasons/${seasonId}/handicap-recommendations`);
+    el.innerHTML = renderHandicapReviewTable(data);
+  } catch(e) {
+    el.innerHTML = `<div class="alert alert-danger small">Failed to load recommendations: ${escapeHTML(e.message)}</div>`;
+  }
+}
+
+function renderHandicapReviewTable(data) {
+  const recs = data.recommendations || [];
+  const wc   = data.weeks_closed || 0;
+  const wcNote = wc > 0
+    ? `<span class="text-muted ms-2">Based on ${wc} closed week${wc !== 1 ? 's' : ''}</span>`
+    : '';
+  let html = `<div class="alert alert-info py-2 mb-3 small">
+    <i class="bi bi-info-circle me-1"></i>${escapeHTML(data.message || '')}${wcNote}
+  </div>`;
+
+  if (recs.length === 0) return html;
+
+  html += `<p class="small text-danger fw-bold mb-2"><i class="bi bi-exclamation-circle me-1"></i>`
+    + `Recommendations are <strong>not applied automatically</strong>`
+    + ` -- review and update player handicaps manually via the Players tab.</p>`;
+
+  const rows = recs.map(r => {
+    let recCell, changeCell, noteCell;
+    if (r.skipped) {
+      recCell    = '<span class="text-muted">N/A</span>';
+      changeCell = '<span class="text-muted">--</span>';
+      if (r.reason === 'admin_hold') {
+        noteCell = '<span class="badge bg-secondary">Admin Hold</span>';
+      } else if (r.reason === 'no_data') {
+        noteCell = '<span class="text-muted fst-italic">No data</span>';
+      } else {
+        noteCell = `<span class="text-muted fst-italic">${escapeHTML(r.reason || '')}</span>`;
+      }
+    } else {
+      recCell = escapeHTML(fmtHC(r.recommended_handicap));
+      const chg = r.change_amount;
+      if (chg === 0) {
+        changeCell = '<span class="text-muted">0</span>';
+      } else {
+        const cls = chg > 0 ? 'text-success' : 'text-danger';
+        changeCell = `<span class="${cls}">${chg > 0 ? '+' : ''}${chg}</span>`;
+      }
+      if (r.reason === 'no_change') {
+        noteCell = '<span class="text-muted fst-italic">No change</span>';
+      } else if (r.reason === 'capped') {
+        noteCell = '<span class="badge bg-warning text-dark">Capped</span>';
+      } else {
+        noteCell = '';
+      }
+    }
+    const trClass = r.skipped ? ' class="text-muted"' : '';
+    return `<tr${trClass}>
+      <td class="text-muted small">${escapeHTML(r.team_name)}</td>
+      <td>${escapeHTML(r.player_name)}</td>
+      <td class="text-end">${escapeHTML(fmtHC(r.current_handicap))}</td>
+      <td class="text-end">${recCell}</td>
+      <td class="text-end">${changeCell}</td>
+      <td class="text-center">${r.matches_played}</td>
+      <td>${noteCell}</td>
+    </tr>`;
+  }).join('');
+
+  return html + `<div class="card"><div class="card-body p-0">
+    <table class="table table-hover table-sm mb-0" id="handicap-review-table">
+      <thead><tr>
+        <th class="text-muted fw-normal small">Team</th>
+        <th class="text-muted fw-normal small">Player</th>
+        <th class="text-muted fw-normal small text-end">Current</th>
+        <th class="text-muted fw-normal small text-end">Recommended</th>
+        <th class="text-muted fw-normal small text-end">Change</th>
+        <th class="text-muted fw-normal small text-center">Matches</th>
+        <th class="text-muted fw-normal small">Notes</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div></div>`;
+}
+
 // ── Leagues management modal ──────────────────────────────────────────────────
 
 // Fetches team counts for every known league and re-renders the table + checklist.
@@ -2886,6 +2974,9 @@ async function deleteLeague(id) {
     loadSection('dashboard');
   } catch(e) { toast(e.message,'danger'); }
 }
+
+// -- Listener registrations (replaces inline onchange where new code is added) --
+document.getElementById('handicap-season-select')?.addEventListener('change', loadHandicapReview);
 
 // ── Backup ────────────────────────────────────────────────────────────────────
 async function backup() {

@@ -301,6 +301,34 @@ type PlayerHandicapRec struct {
 	Reason              string  `json:"reason,omitempty"` // "no_data"|"admin_hold"|"no_change"|"capped"|"unsupported_method"
 }
 
+// HandicapReviewRec is one player's read-only recommendation for the Handicap Review screen.
+// It adds TeamName and ChangeAmount that are absent from PlayerHandicapRec (advance-preview only).
+// No changes are written anywhere; this is informational draft output only.
+type HandicapReviewRec struct {
+	PlayerID            int64   `json:"player_id"`
+	PlayerName          string  `json:"player_name"`
+	TeamName            string  `json:"team_name"`
+	CurrentHandicap     float64 `json:"current_handicap"`
+	RecommendedHandicap float64 `json:"recommended_handicap"`
+	ChangeAmount        float64 `json:"change_amount"`
+	MatchesPlayed       int     `json:"matches_played"`
+	AdminHold           bool    `json:"admin_hold"`
+	Skipped             bool    `json:"skipped"`
+	Reason              string  `json:"reason,omitempty"` // "no_data"|"admin_hold"|"no_change"|"capped"
+}
+
+// HandicapReviewResponse is the response for GET /api/seasons/{id}/handicap-recommendations.
+// Read-only; recommendations recompute live from completed=1 AND week_closed=1 data only.
+// No writes are performed to players, handicap_history, or any other table.
+type HandicapReviewResponse struct {
+	SeasonID        int64              `json:"season_id"`
+	Method          string             `json:"method"`
+	Status          string             `json:"status"`
+	Message         string             `json:"message"`
+	WeeksClosed     int                `json:"weeks_closed"`
+	Recommendations []HandicapReviewRec `json:"recommendations"`
+}
+
 // AdvancePreviewHandicap summarizes the handicap update mode for an advance preview.
 // Recommendations is populated only when method is "game_diff_average" and closed
 // match data exists. It is absent (omitempty) for "manual_review" and "kicker_average_preview".

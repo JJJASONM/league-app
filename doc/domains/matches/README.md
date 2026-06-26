@@ -799,6 +799,108 @@ message ("No handicap changes are applied automatically.") is preserved.
 - `web/app.js` -- `_renderHandicapRecs` helper; `_renderAdvancePreview` and
   `_renderCloseSuccess` include recommendations table when present
 
+## Phase 3D -- Handicap Review Screen
+
+### Goal
+
+Dedicated read-only screen so admins can review season-wide handicap
+recommendations outside the Close Week modal. Remain read-only; no apply
+workflow yet.
+
+### New endpoint
+
+```
+GET /api/seasons/{id}/handicap-recommendations
+```
+
+Returns season-wide recommendations based on all `completed=1 AND
+week_closed=1` matches. Response shape:
+
+```json
+{
+  "season_id": 1,
+  "method":     "game_diff_average",
+  "status":     "preview",
+  "message":    "3 players have recommended handicap changes (not yet applied).",
+  "weeks_closed": 2,
+  "recommendations": [
+    {
+      "player_id":            1,
+      "player_name":          "Alice Active",
+      "team_name":            "Rack City",
+      "current_handicap":     1.5,
+      "recommended_handicap": 2.0,
+      "change_amount":        0.5,
+      "matches_played":       2,
+      "admin_hold":           false,
+      "skipped":              false,
+      "reason":               ""
+    }
+  ]
+}
+```
+
+**Status codes returned by method:**
+
+| Method | status | notes |
+|--------|--------|-------|
+| `manual_review` (default) | `no_auto_apply` | empty recommendations |
+| `kicker_average_preview` | `unsupported` | empty recommendations |
+| `game_diff_average`, no closed weeks | `no_data` | empty recommendations |
+| `game_diff_average`, weeks closed | `preview` | full recommendations |
+
+**Reason codes** (same set as Phase 3C): `no_data`, `admin_hold`, `no_change`,
+`capped`.
+
+**Live recompute:** recommendations are computed fresh on every request.
+Reopening a week sets `week_closed=0` on its matches; the next response
+automatically excludes that data. No stored recommendation rows exist to
+invalidate.
+
+**Error behavior:** Season not found returns 404. Real DB failures return 500;
+empty recommendations are never returned to mask query errors.
+
+**Read-only contract:** No writes to `players.handicap`, `handicap_history`,
+or any other table.
+
+### New model types
+
+`HandicapReviewRec` -- per-player row for the review screen. Adds `TeamName`
+and `ChangeAmount` relative to `PlayerHandicapRec` (advance-preview only).
+
+`HandicapReviewResponse` -- top-level response wrapping the recommendations
+with method, status, message, and weeks_closed.
+
+### Frontend
+
+New sidebar tab "Handicap" (`data-section="handicap"`, icon `bi-graph-up-arrow`)
+added after Player Stats. Section contains:
+
+- season selector (populated from `allSeasons`)
+- status/message card
+- "Based on N closed week(s)" context note
+- Table columns: Team, Player, Current, Recommended, Change, Matches, Notes
+
+Table behavior: skipped rows muted; Admin Hold badge; No data text; no Apply
+button; no edit controls.
+
+### Not in Phase 3D
+
+- Writing `players.handicap` or `handicap_history`
+- Apply button or automatic application
+- Per-week breakdown or drill-down
+- Filter/sort controls
+- Export or mark-as-reviewed workflow
+
+### Files changed
+
+- `models/models.go` -- `HandicapReviewRec` and `HandicapReviewResponse` structs
+- `handlers/api.go` -- `computeHandicapReviewRecs`, `getHandicapRecommendations`
+  handler; route registered as `GET /api/seasons/{id}/handicap-recommendations`
+- `handlers/api_test.go` -- 8 Phase 3D tests
+- `web/index.html` -- Handicap nav item and `#section-handicap` div
+- `web/app.js` -- `loadHandicapReview`, `renderHandicapReviewTable`
+
 ## Close Week Validation (full target -- future phases)
 
 The backend validates the week's score data before official calculations are
