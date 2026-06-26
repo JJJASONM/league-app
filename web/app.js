@@ -1451,6 +1451,8 @@ function _renderHandicapRecs(hc) {
   </div>`;
 }
 
+function fmtHC(v) { return (v >= 0 ? '+' : '') + v; }
+
 function _renderAdvancePreview(preview) {
   const cw = preview.current_week;
   const nextNum = preview.next_week_number;
@@ -2255,7 +2257,6 @@ function renderScoresheet(existingRounds) {
     scoresheetGames[idx] = {g1w:g1.w,g1lb:g1.lb,g2w:g2.w,g2lb:g2.lb,g3w:g3.w,g3lb:g3.lb};
   });
 
-  const fmtHC = v => (v >= 0 ? '+' : '') + v;
   const leagueName = activeLeague?.name || 'League';
 
   // ── No-print toolbar ──
