@@ -17,6 +17,9 @@ const (
 
 	// CodeWeekPlayerDuplicate fires when a player appears more than once in a round within the same match.
 	CodeWeekPlayerDuplicate = "WEEK_PLAYER_DUPLICATE"
+
+	// CodeWeekInternalError fires when a database operation fails unexpectedly during validation.
+	CodeWeekInternalError = "WEEK_INTERNAL_ERROR"
 )
 
 // ValidateWeek checks all matches in season/week for Close Week readiness.
@@ -40,7 +43,7 @@ func ValidateWeek(dbConn *sql.DB, seasonID int64, weekNumber int, cfg RoundConfi
 		WHERE season_id=? AND week_number=?
 		ORDER BY id`, seasonID, weekNumber)
 	if err != nil {
-		res.AddError("WEEK_INTERNAL_ERROR", "", fmt.Sprintf("query failed: %v", err))
+		res.AddError(CodeWeekInternalError, "", fmt.Sprintf("query failed: %v", err))
 		return res
 	}
 	defer rows.Close()
@@ -73,38 +76,57 @@ func ValidateWeek(dbConn *sql.DB, seasonID int64, weekNumber int, cfg RoundConfi
 			WHERE match_id=?
 			ORDER BY round_number, home_player_id`, mi.id)
 		if err != nil {
+			matchID := mi.id
+			res.AddError(CodeWeekInternalError, field,
+				fmt.Sprintf("match %d: round results query failed: %v", mi.id, err))
+			res.Messages[len(res.Messages)-1].MatchID = &matchID
 			continue
 		}
 
 		var rounds []models.RoundResult
-		playerHC := map[int64]float64{}
+		var pairingHC []PairingHC
 
+		var rowErr error
 		for rrRows.Next() {
 			var rr models.RoundResult
 			var homeHCUsed, awayHCUsed sql.NullFloat64
-			rrRows.Scan(
+			if rowErr = rrRows.Scan(
 				&rr.RoundNumber, &rr.HomePlayerID, &rr.AwayPlayerID,
 				&rr.Game1Home, &rr.Game1Away,
 				&rr.Game2Home, &rr.Game2Away,
 				&rr.Game3Home, &rr.Game3Away,
-				&homeHCUsed, &awayHCUsed)
+				&homeHCUsed, &awayHCUsed); rowErr != nil {
+				break
+			}
+			var h, a float64
 			if homeHCUsed.Valid {
-				playerHC[rr.HomePlayerID] = homeHCUsed.Float64
+				h = homeHCUsed.Float64
 			} else {
-				var hc float64
-				dbConn.QueryRow(`SELECT handicap FROM players WHERE id=?`, rr.HomePlayerID).Scan(&hc)
-				playerHC[rr.HomePlayerID] = hc
+				if rowErr = dbConn.QueryRow(`SELECT handicap FROM players WHERE id=?`, rr.HomePlayerID).Scan(&h); rowErr != nil {
+					break
+				}
 			}
 			if awayHCUsed.Valid {
-				playerHC[rr.AwayPlayerID] = awayHCUsed.Float64
+				a = awayHCUsed.Float64
 			} else {
-				var hc float64
-				dbConn.QueryRow(`SELECT handicap FROM players WHERE id=?`, rr.AwayPlayerID).Scan(&hc)
-				playerHC[rr.AwayPlayerID] = hc
+				if rowErr = dbConn.QueryRow(`SELECT handicap FROM players WHERE id=?`, rr.AwayPlayerID).Scan(&a); rowErr != nil {
+					break
+				}
 			}
+			pairingHC = append(pairingHC, PairingHC{HomeHC: h, AwayHC: a})
 			rounds = append(rounds, rr)
 		}
 		rrRows.Close()
+		if rowErr == nil {
+			rowErr = rrRows.Err()
+		}
+		if rowErr != nil {
+			matchID := mi.id
+			res.AddError(CodeWeekInternalError, field,
+				fmt.Sprintf("match %d: round data read failed: %v", mi.id, rowErr))
+			res.Messages[len(res.Messages)-1].MatchID = &matchID
+			continue
+		}
 
 		// Detect duplicate player participation: within any round, a player must
 		// appear at most once across all home and away slots.
@@ -148,7 +170,7 @@ func ValidateWeek(dbConn *sql.DB, seasonID int64, weekNumber int, cfg RoundConfi
 			continue
 		}
 
-		ssRes := ValidateRounds(rounds, playerHC, cfg)
+		ssRes := ValidateRounds(rounds, pairingHC, cfg)
 		before := len(res.Messages)
 		res.Messages = append(res.Messages, ssRes.Messages...)
 		matchID := mi.id

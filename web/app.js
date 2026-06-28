@@ -2812,43 +2812,75 @@ function renderHandicapReviewTable(data) {
     + `Recommendations are <strong>not applied automatically</strong>`
     + ` -- review and update player handicaps manually via the Players tab.</p>`;
 
+  const windowSize = (recs[0] && recs[0].window_size) ? recs[0].window_size : 15;
+
   const rows = recs.map(r => {
-    let recCell, changeCell, noteCell;
-    if (r.skipped) {
+    const nonActionable = r.recommended_hc === null || r.recommended_hc === undefined;
+
+    // Lifetime HC cell
+    let lifetimeCell;
+    if (r.lifetime_hc === null || r.lifetime_hc === undefined) {
+      lifetimeCell = '<span class="text-muted">--</span>';
+    } else {
+      lifetimeCell = `${escapeHTML(fmtHC(r.lifetime_hc))}<br><span class="text-muted" style="font-size:0.75em">(${r.lifetime_racks} racks)</span>`;
+    }
+
+    // Window HC cell
+    let windowCell;
+    if (r.window_hc === null || r.window_hc === undefined) {
+      windowCell = '<span class="text-muted">--</span>';
+    } else {
+      windowCell = `${escapeHTML(fmtHC(r.window_hc))}<br><span class="text-muted" style="font-size:0.75em">(${r.window_racks}/${windowSize})</span>`;
+    }
+
+    // Recommended HC cell
+    let recCell, changeCell;
+    if (nonActionable) {
       recCell    = '<span class="text-muted">N/A</span>';
       changeCell = '<span class="text-muted">--</span>';
-      if (r.reason === 'admin_hold') {
-        noteCell = '<span class="badge bg-secondary">Admin Hold</span>';
-      } else if (r.reason === 'no_data') {
-        noteCell = '<span class="text-muted fst-italic">No data</span>';
-      } else {
-        noteCell = `<span class="text-muted fst-italic">${escapeHTML(r.reason || '')}</span>`;
-      }
     } else {
-      recCell = escapeHTML(fmtHC(r.recommended_handicap));
+      recCell = escapeHTML(fmtHC(r.recommended_hc));
       const chg = r.change_amount;
       if (chg === 0) {
         changeCell = '<span class="text-muted">0</span>';
       } else {
         const cls = chg > 0 ? 'text-success' : 'text-danger';
-        changeCell = `<span class="${cls}">${chg > 0 ? '+' : ''}${chg}</span>`;
-      }
-      if (r.reason === 'no_change') {
-        noteCell = '<span class="text-muted fst-italic">No change</span>';
-      } else if (r.reason === 'capped') {
-        noteCell = '<span class="badge bg-warning text-dark">Capped</span>';
-      } else {
-        noteCell = '';
+        changeCell = `<span class="${cls}">${chg > 0 ? '+' : ''}${escapeHTML(String(chg))}</span>`;
       }
     }
-    const trClass = r.skipped ? ' class="text-muted"' : '';
+
+    // Missing snapshots cell
+    const missing = r.missing_snapshot_racks || 0;
+    const missingCell = missing > 0
+      ? `<span class="badge bg-warning text-dark">${missing}</span>`
+      : '<span class="text-muted">--</span>';
+
+    // Notes / status cell
+    let noteCell;
+    if (r.reason === 'admin_hold') {
+      noteCell = '<span class="badge bg-secondary">Admin Hold</span>';
+    } else if (r.reason === 'no_data') {
+      noteCell = '<span class="text-muted fst-italic">No data</span>';
+    } else if (r.reason === 'below_threshold') {
+      noteCell = `<span class="text-muted fst-italic">Below threshold (${r.eligibility_threshold})</span>`;
+    } else if (r.reason === 'no_change') {
+      noteCell = '<span class="text-muted fst-italic">No change</span>';
+    } else if (r.reason === 'capped') {
+      noteCell = '<span class="badge bg-warning text-dark">Capped</span>';
+    } else {
+      noteCell = '';
+    }
+
+    const trClass = nonActionable ? ' class="text-muted"' : '';
     return `<tr${trClass}>
-      <td class="text-muted small">${escapeHTML(r.team_name)}</td>
+      <td class="text-muted small">${escapeHTML(r.team_name || '')}</td>
       <td>${escapeHTML(r.player_name)}</td>
-      <td class="text-end">${escapeHTML(fmtHC(r.current_handicap))}</td>
+      <td class="text-end">${escapeHTML(fmtHC(r.assigned_hc))}</td>
+      <td class="text-end">${lifetimeCell}</td>
+      <td class="text-end">${windowCell}</td>
       <td class="text-end">${recCell}</td>
       <td class="text-end">${changeCell}</td>
-      <td class="text-center">${r.matches_played}</td>
+      <td class="text-center">${missingCell}</td>
       <td>${noteCell}</td>
     </tr>`;
   }).join('');
@@ -2858,11 +2890,13 @@ function renderHandicapReviewTable(data) {
       <thead><tr>
         <th class="text-muted fw-normal small">Team</th>
         <th class="text-muted fw-normal small">Player</th>
-        <th class="text-muted fw-normal small text-end">Current</th>
+        <th class="text-muted fw-normal small text-end">Assigned</th>
+        <th class="text-muted fw-normal small text-end">Lifetime HC</th>
+        <th class="text-muted fw-normal small text-end">Window HC (W=${windowSize})</th>
         <th class="text-muted fw-normal small text-end">Recommended</th>
         <th class="text-muted fw-normal small text-end">Change</th>
-        <th class="text-muted fw-normal small text-center">Matches</th>
-        <th class="text-muted fw-normal small">Notes</th>
+        <th class="text-muted fw-normal small text-center">Excl.</th>
+        <th class="text-muted fw-normal small">Status</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>

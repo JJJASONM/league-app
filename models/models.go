@@ -301,31 +301,58 @@ type PlayerHandicapRec struct {
 	Reason              string  `json:"reason,omitempty"` // "no_data"|"admin_hold"|"no_change"|"capped"|"unsupported_method"
 }
 
-// HandicapReviewRec is one player's read-only recommendation for the Handicap Review screen.
-// It adds TeamName and ChangeAmount that are absent from PlayerHandicapRec (advance-preview only).
+// HandicapReviewRec is one player's read-only entry for the Handicap Review screen.
+// Population comes from season_teams + season_rosters (season-specific membership).
+// Historical rack calculations are player-ID based and cross all 8-ball leagues/seasons.
+// Only racks from completed, week_closed matches with a valid opponent HC snapshot are included.
 // No changes are written anywhere; this is informational draft output only.
+//
+// Reason priority: no_data > admin_hold > below_threshold > capped > no_change > "" (actionable).
+// RecommendedHC and ChangeAmount are nil for non-actionable players (no_data/admin_hold/below_threshold).
+// LifetimeHC and WindowHC are nil when IncludedRacks == 0.
+// All calculated HC values use 0.01 precision.
 type HandicapReviewRec struct {
-	PlayerID            int64   `json:"player_id"`
-	PlayerName          string  `json:"player_name"`
-	TeamName            string  `json:"team_name"`
-	CurrentHandicap     float64 `json:"current_handicap"`
-	RecommendedHandicap float64 `json:"recommended_handicap"`
-	ChangeAmount        float64 `json:"change_amount"`
-	MatchesPlayed       int     `json:"matches_played"`
-	AdminHold           bool    `json:"admin_hold"`
-	Skipped             bool    `json:"skipped"`
-	Reason              string  `json:"reason,omitempty"` // "no_data"|"admin_hold"|"no_change"|"capped"
+	// Identity
+	PlayerID   int64  `json:"player_id"`
+	PlayerName string `json:"player_name"`
+	TeamName   string `json:"team_name"` // season-specific name from season_teams.season_name
+	AdminHold  bool   `json:"admin_hold"`
+
+	// Assigned handicap from players.handicap at query time
+	AssignedHC float64 `json:"assigned_hc"`
+
+	// Rack inventory
+	ScoreEligibleRacks   int `json:"score_eligible_racks"`   // valid 8-ball slots before snapshot check
+	MissingSnapshotRacks int `json:"missing_snapshot_racks"` // excluded: opponent snapshot NULL
+	IncludedRacks        int `json:"included_racks"`         // used in calculation
+
+	// Configuration echoed per-record for UI rendering
+	WindowSize           int `json:"window_size"`
+	EligibilityThreshold int `json:"eligibility_threshold"`
+
+	// Calculated values -- nil when IncludedRacks == 0
+	LifetimeHC    *float64 `json:"lifetime_hc"`
+	LifetimeRacks int      `json:"lifetime_racks"`
+	WindowHC      *float64 `json:"window_hc"`    // raw window value, before cap
+	WindowRacks   int      `json:"window_racks"`
+
+	// Recommendation -- nil when non-actionable (no_data/admin_hold/below_threshold)
+	RecommendedHC *float64 `json:"recommended_hc"` // capped window value
+	ChangeAmount  *float64 `json:"change_amount"`   // recommended_hc - assigned_hc
+
+	// Reason: "" | "no_data" | "admin_hold" | "below_threshold" | "capped" | "no_change"
+	Reason string `json:"reason"`
 }
 
 // HandicapReviewResponse is the response for GET /api/seasons/{id}/handicap-recommendations.
 // Read-only; recommendations recompute live from completed=1 AND week_closed=1 data only.
 // No writes are performed to players, handicap_history, or any other table.
 type HandicapReviewResponse struct {
-	SeasonID        int64              `json:"season_id"`
-	Method          string             `json:"method"`
-	Status          string             `json:"status"`
-	Message         string             `json:"message"`
-	WeeksClosed     int                `json:"weeks_closed"`
+	SeasonID        int64               `json:"season_id"`
+	Method          string              `json:"method"`
+	Status          string              `json:"status"`
+	Message         string              `json:"message"`
+	WeeksClosed     int                 `json:"weeks_closed"`
 	Recommendations []HandicapReviewRec `json:"recommendations"`
 }
 

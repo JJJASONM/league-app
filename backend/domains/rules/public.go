@@ -132,6 +132,22 @@ var definitions = []Definition{
 		Status: "draft", Version: "0.1",
 	},
 	{
+		Domain: "handicaps", Group: "handicap", GroupLabel: "Handicap Settings",
+		GroupOrder: 10, Order: 70, Key: "handicap_current_game_window",
+		Label: "Current game window", Type: TypeInteger,
+		DefaultValue: "15", Minimum: number(1), Step: number(1),
+		Help:   "Number of most-recent eligible 8-ball individual game racks used for the current-window handicap calculation. Only racks with a valid opponent handicap snapshot count.",
+		Status: "draft", Version: "0.1",
+	},
+	{
+		Domain: "handicaps", Group: "handicap", GroupLabel: "Handicap Settings",
+		GroupOrder: 10, Order: 80, Key: "handicap_min_games_for_recommendation",
+		Label: "Minimum games for recommendation", Type: TypeInteger,
+		DefaultValue: "15", Minimum: number(1), Step: number(1),
+		Help:   "Minimum included 8-ball game racks required before a handicap recommendation is generated. Racks excluded due to a missing opponent snapshot do not count toward this threshold.",
+		Status: "draft", Version: "0.1",
+	},
+	{
 		Domain: "schedules", Group: "scheduling", GroupLabel: "Scheduling Settings",
 		GroupOrder: 30, Order: 10, Key: "allow_bye_requests",
 		Label: "Allow bye requests", Type: TypeBoolean, DefaultValue: "true",

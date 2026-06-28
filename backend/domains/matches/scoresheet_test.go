@@ -42,7 +42,7 @@ func TestValidCompletedPairing(t *testing.T) {
 		Game2Home: 4, Game2Away: 10,
 		Game3Home: 10, Game3Away: 3,
 	}}
-	res := ValidateRounds(rounds, map[int64]float64{1: 0, 2: 0}, defaultCfg)
+	res := ValidateRounds(rounds, []PairingHC{{HomeHC: 0, AwayHC: 0}}, defaultCfg)
 	if res.HasErrors() {
 		t.Errorf("unexpected errors: %v", errorCodes(res))
 	}
@@ -64,7 +64,7 @@ func TestValidEarlyStop(t *testing.T) {
 		Game2Home: 10, Game2Away: 0,
 		// Game3 not entered
 	}}
-	res := ValidateRounds(rounds, map[int64]float64{1: 0, 2: 0}, defaultCfg)
+	res := ValidateRounds(rounds, []PairingHC{{HomeHC: 0, AwayHC: 0}}, defaultCfg)
 	if res.HasErrors() {
 		t.Errorf("unexpected errors: %v", errorCodes(res))
 	}
@@ -80,7 +80,7 @@ func TestNoScoresWarning(t *testing.T) {
 		HomePlayerID: 1, AwayPlayerID: 2,
 		// all zeros
 	}}
-	res := ValidateRounds(rounds, map[int64]float64{1: 0, 2: 0}, defaultCfg)
+	res := ValidateRounds(rounds, []PairingHC{{HomeHC: 0, AwayHC: 0}}, defaultCfg)
 	if res.HasErrors() {
 		t.Errorf("no-score sheet should not produce errors: %v", errorCodes(res))
 	}
@@ -96,7 +96,7 @@ func TestGameIncompleteWarning(t *testing.T) {
 		HomePlayerID: 1, AwayPlayerID: 2,
 		Game1Home: 5, Game1Away: 3, // non-zero but no 10
 	}}
-	res := ValidateRounds(rounds, map[int64]float64{1: 0, 2: 0}, defaultCfg)
+	res := ValidateRounds(rounds, []PairingHC{{HomeHC: 0, AwayHC: 0}}, defaultCfg)
 	if res.HasErrors() {
 		t.Errorf("incomplete game should be a warning, not an error: %v", errorCodes(res))
 	}
@@ -112,7 +112,7 @@ func TestLoserScoreAbove7(t *testing.T) {
 		HomePlayerID: 1, AwayPlayerID: 2,
 		Game1Home: 10, Game1Away: 8, // away loser score > 7
 	}}
-	res := ValidateRounds(rounds, map[int64]float64{1: 0, 2: 0}, defaultCfg)
+	res := ValidateRounds(rounds, []PairingHC{{HomeHC: 0, AwayHC: 0}}, defaultCfg)
 	if !res.HasErrors() {
 		t.Error("expected error for loser score > 7")
 	}
@@ -128,7 +128,7 @@ func TestBothWinnersError(t *testing.T) {
 		HomePlayerID: 1, AwayPlayerID: 2,
 		Game1Home: 10, Game1Away: 10,
 	}}
-	res := ValidateRounds(rounds, map[int64]float64{1: 0, 2: 0}, defaultCfg)
+	res := ValidateRounds(rounds, []PairingHC{{HomeHC: 0, AwayHC: 0}}, defaultCfg)
 	if !res.HasErrors() {
 		t.Error("expected error when both players score 10")
 	}
@@ -144,7 +144,7 @@ func TestScoreOutOfRange(t *testing.T) {
 		HomePlayerID: 1, AwayPlayerID: 2,
 		Game1Home: 11, Game1Away: 5, // 11 exceeds maximum
 	}}
-	res := ValidateRounds(rounds, map[int64]float64{1: 0, 2: 0}, defaultCfg)
+	res := ValidateRounds(rounds, []PairingHC{{HomeHC: 0, AwayHC: 0}}, defaultCfg)
 	if !res.HasErrors() {
 		t.Error("expected error for score > 10")
 	}
@@ -167,8 +167,8 @@ func TestAdjScoreTieGamesWonTiebreak(t *testing.T) {
 		Game2Home: 7, Game2Away: 10,
 		Game3Home: 10, Game3Away: 7,
 	}}
-	playerHC := map[int64]float64{1: 1.0, 2: 0.0}
-	res := ValidateRounds(rounds, playerHC, defaultCfg)
+	pHC := []PairingHC{{HomeHC: 1.0, AwayHC: 0.0}}
+	res := ValidateRounds(rounds, pHC, defaultCfg)
 	if res.HasErrors() {
 		t.Errorf("unexpected errors: %v", errorCodes(res))
 	}
@@ -184,8 +184,8 @@ func TestHandicapOnlyNoWinner(t *testing.T) {
 		HomePlayerID: 1, AwayPlayerID: 2,
 		// all zeros -- no games played
 	}}
-	playerHC := map[int64]float64{1: 0.0, 2: 5.0}
-	res := ValidateRounds(rounds, playerHC, defaultCfg)
+	pHC := []PairingHC{{HomeHC: 0.0, AwayHC: 5.0}}
+	res := ValidateRounds(rounds, pHC, defaultCfg)
 	if res.HasErrors() {
 		t.Errorf("no-game submission should not be an error: %v", errorCodes(res))
 	}
@@ -220,7 +220,7 @@ func TestRoundWinAfterTwoPairings(t *testing.T) {
 		}
 	}
 
-	res := ValidateRounds(rounds, map[int64]float64{1: 0.0, 2: 0.0}, defaultCfg)
+	res := ValidateRounds(rounds, make([]PairingHC, len(rounds)), defaultCfg)
 
 	if res.HasErrors() {
 		t.Errorf("unexpected errors: %v", errorCodes(res))
@@ -236,5 +236,37 @@ func TestRoundWinAfterTwoPairings(t *testing.T) {
 	}
 	if res.PairingWinners[2] != "" {
 		t.Errorf("pairing 2: expected undecided, got %q", res.PairingWinners[2])
+	}
+}
+
+// 11. pairingHC shorter than rounds -- produces SCORESHEET_PAIRING_HC_LENGTH_MISMATCH error.
+func TestValidateRounds_PairingHCShorterThanRounds(t *testing.T) {
+	rounds := []models.RoundResult{{
+		RoundNumber:  1,
+		HomePlayerID: 1, AwayPlayerID: 2,
+		Game1Home: 10, Game1Away: 5,
+	}}
+	res := ValidateRounds(rounds, []PairingHC{}, defaultCfg) // 0 HC entries vs 1 round
+	if !res.HasErrors() {
+		t.Error("expected error when pairingHC is shorter than rounds")
+	}
+	if !findCode(errorCodes(res), CodePairingHCLengthMismatch) {
+		t.Errorf("expected %s, got errors: %v", CodePairingHCLengthMismatch, errorCodes(res))
+	}
+}
+
+// 12. pairingHC longer than rounds -- produces SCORESHEET_PAIRING_HC_LENGTH_MISMATCH error.
+func TestValidateRounds_PairingHCLongerThanRounds(t *testing.T) {
+	rounds := []models.RoundResult{{
+		RoundNumber:  1,
+		HomePlayerID: 1, AwayPlayerID: 2,
+		Game1Home: 10, Game1Away: 5,
+	}}
+	res := ValidateRounds(rounds, []PairingHC{{}, {}}, defaultCfg) // 2 HC entries vs 1 round
+	if !res.HasErrors() {
+		t.Error("expected error when pairingHC is longer than rounds")
+	}
+	if !findCode(errorCodes(res), CodePairingHCLengthMismatch) {
+		t.Errorf("expected %s, got errors: %v", CodePairingHCLengthMismatch, errorCodes(res))
 	}
 }

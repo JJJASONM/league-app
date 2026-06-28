@@ -74,6 +74,38 @@ Key: `min_ball_handicap` | Type: integer, min 0, default 0 | Group: Handicap Set
 
 **Where applied:** `calcHandicap()` in `web/app.js`. Not yet backend-authoritative. Stored in `season_rules.rule_key = 'min_ball_handicap'` via the existing rules tab; read at match-entry time from `/api/seasons/{id}/rules`.
 
+### handicap_current_game_window
+
+Key: `handicap_current_game_window` | Type: integer, min 1, default 15 | Group: Handicap Settings | Order: 70
+
+**Status:** draft: backend-enforced (read by `seasonHandicapWindowConfig` in `handlers/api.go`)
+
+**Behavior:** Controls the rolling window for the opponent-normalized rack calculation.
+
+- The most-recent `N` eligible racks (ordered by match date DESC, then game slot DESC) form the "current window".
+- `window_hc` is the implied handicap across those `N` racks; `lifetime_hc` uses all racks regardless of this setting.
+- When `lifetime_racks < window_size`, all lifetime racks are used for both values.
+- Missing/blank stored value defaults to 15 with no error.
+- Stored zero, negative, or non-integer value returns HTTP 500 from the recommendations endpoint.
+
+**Where applied:** `GET /api/seasons/{id}/handicap-recommendations` via `seasonHandicapWindowConfig`.
+
+### handicap_min_games_for_recommendation
+
+Key: `handicap_min_games_for_recommendation` | Type: integer, min 1, default 15 | Group: Handicap Settings | Order: 80
+
+**Status:** draft: backend-enforced (read by `seasonHandicapWindowConfig` in `handlers/api.go`)
+
+**Behavior:** Minimum number of included racks required before a recommendation is generated.
+
+- "Included racks" excludes racks with a NULL opponent snapshot; those racks are counted in `missing_snapshot_racks` and do **not** count toward this threshold.
+- Players with `window_racks < threshold` receive `reason = "below_threshold"` and nil `recommended_hc`/`change_amount`.
+- `lifetime_hc` and `window_hc` are still populated for below-threshold players when `included_racks > 0` (provisional context only).
+- Missing/blank stored value defaults to 15 with no error.
+- Stored zero, negative, or non-integer value returns HTTP 500 from the recommendations endpoint.
+
+**Where applied:** `GET /api/seasons/{id}/handicap-recommendations` via `seasonHandicapWindowConfig`.
+
 ## Questions
 
 ### RULES-Q001 - Mid-season amendments

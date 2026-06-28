@@ -4,8 +4,10 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
@@ -2228,107 +2230,285 @@ func getAdvancePreview(w http.ResponseWriter, r *http.Request) {
 
 // --- Handicap Review ---------------------------------------------------------
 
-// computeHandicapReviewRecs returns per-player handicap recommendations for the
-// Handicap Review screen. Extends the game_diff_average logic with team_name and
-// change_amount. Recommendations recompute live; no rows are written anywhere.
-func computeHandicapReviewRecs(seasonID int64, maxHC float64) ([]models.HandicapReviewRec, error) {
+// seasonHandicapWindowConfig returns the current-window size and eligibility
+// threshold for the opponent-normalized handicap calculation.
+// Missing or blank stored values default to 15. A stored non-integer, zero, or
+// negative value is an error; the caller propagates it as HTTP 500 so the invalid
+// configuration can be corrected via the Rules tab.
+func seasonHandicapWindowConfig(seasonID int64) (window, threshold int, err error) {
+	const defaultVal = 15
+
 	rows, err := db.DB.Query(`
-		SELECT
-		    p.id,
-		    p.first_name || ' ' || p.last_name,
-		    COALESCE(t.name, ''),
-		    p.handicap,
-		    p.admin_hold,
-		    COUNT(mr.id),
-		    COALESCE(SUM(mr.diff), 0.0)
-		FROM (
-		    SELECT DISTINCT player_id FROM season_rosters WHERE season_id = ?
-		    UNION
-		    SELECT DISTINCT mr2.player_id
-		    FROM match_results mr2
-		    JOIN matches m2 ON m2.id = mr2.match_id
-		    WHERE m2.season_id = ? AND m2.completed = 1 AND m2.week_closed = 1
-		) AS candidates
-		JOIN players p ON p.id = candidates.player_id
-		LEFT JOIN teams t ON t.id = p.team_id
-		LEFT JOIN match_results mr ON mr.player_id = p.id
-		    AND mr.match_id IN (
-		        SELECT id FROM matches
-		        WHERE season_id = ? AND completed = 1 AND week_closed = 1
-		    )
-		GROUP BY p.id, p.first_name, p.last_name, t.name, p.handicap, p.admin_hold
-		ORDER BY t.name, p.first_name, p.last_name`,
-		seasonID, seasonID, seasonID)
+		SELECT rule_key, rule_value FROM season_rules
+		WHERE season_id=? AND rule_key IN
+		('handicap_current_game_window','handicap_min_games_for_recommendation')`,
+		seasonID)
 	if err != nil {
-		return nil, err
+		return 0, 0, err
 	}
 	defer rows.Close()
 
-	var recs []models.HandicapReviewRec
+	window = defaultVal
+	threshold = defaultVal
+
 	for rows.Next() {
+		var key, val string
+		if err := rows.Scan(&key, &val); err != nil {
+			return 0, 0, err
+		}
+		if val == "" {
+			continue // absent/blank = use default, not an error
+		}
+		f, parseErr := strconv.ParseFloat(val, 64)
+		if parseErr != nil || f != float64(int64(f)) {
+			return 0, 0, fmt.Errorf("rule %s: %q is not a valid integer", key, val)
+		}
+		n := int(f)
+		if n <= 0 {
+			return 0, 0, fmt.Errorf("rule %s: value %d must be >= 1", key, n)
+		}
+		switch key {
+		case "handicap_current_game_window":
+			window = n
+		case "handicap_min_games_for_recommendation":
+			threshold = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	return window, threshold, nil
+}
+
+// computeOpponentNormalizedRecs returns per-player handicap recommendations for the
+// Handicap Review screen using the opponent-normalized rack formula.
+//
+// Review population: season_teams + season_rosters (season-specific membership).
+// Team name: season_teams.season_name (season snapshot, not the permanent team name).
+//
+// Rack data: all eligible 8-ball game racks for each player ID, cross-league and
+// cross-season. Racks are eligible when their match has completed=1 AND week_closed=1
+// and the league game_format is '8ball'. Within a round_results row, game slots are
+// iterated in DESC order (game3, game2, game1) so the most-recent racks sort first.
+//
+// Opponent snapshot direction: when the reviewed player is HOME, the opponent HC
+// baseline is away_handicap_used. When AWAY, the baseline is home_handicap_used.
+// A rack is excluded (counted in missing_snapshot_racks) when the opponent snapshot
+// is NULL; excluded racks do not count toward the eligibility threshold.
+//
+// No writes are performed anywhere.
+func computeOpponentNormalizedRecs(seasonID int64, window, threshold int, maxHC float64) ([]models.HandicapReviewRec, error) {
+	// 1. Roster: players registered for this season via season_teams + season_rosters.
+	type rosterEntry struct {
+		PlayerID   int64
+		PlayerName string
+		TeamName   string  // season_teams.season_name
+		AssignedHC float64 // players.handicap at query time
+		AdminHold  bool
+	}
+
+	rosterRows, err := db.DB.Query(`
+		SELECT sr.player_id,
+		       p.first_name || ' ' || p.last_name,
+		       st.season_name,
+		       p.handicap,
+		       p.admin_hold
+		FROM season_rosters sr
+		JOIN players p     ON p.id        = sr.player_id
+		JOIN season_teams st ON st.season_id = sr.season_id AND st.team_id = sr.team_id
+		WHERE sr.season_id = ?
+		ORDER BY st.season_name, p.last_name, p.first_name`,
+		seasonID)
+	if err != nil {
+		return nil, err
+	}
+
+	var roster []rosterEntry
+	rosterSet := make(map[int64]bool)
+	for rosterRows.Next() {
+		var e rosterEntry
+		var adminHold int
+		if err := rosterRows.Scan(&e.PlayerID, &e.PlayerName, &e.TeamName, &e.AssignedHC, &adminHold); err != nil {
+			rosterRows.Close()
+			return nil, err
+		}
+		e.AdminHold = adminHold != 0
+		roster = append(roster, e)
+		rosterSet[e.PlayerID] = true
+	}
+	if err := rosterRows.Err(); err != nil {
+		return nil, err
+	}
+	rosterRows.Close()
+
+	if len(roster) == 0 {
+		return []models.HandicapReviewRec{}, nil
+	}
+
+	// 2. Bulk rack query: one query for all rostered player IDs.
+	// Bounded by roster size (typically 9-18 players for a 3-6 team season).
+	playerIDs := make([]int64, len(roster))
+	for i, e := range roster {
+		playerIDs[i] = e.PlayerID
+	}
+	ph := strings.Repeat("?,", len(playerIDs))
+	ph = ph[:len(ph)-1]
+
+	args := make([]any, len(playerIDs)*2)
+	for i, pid := range playerIDs {
+		args[i] = pid
+		args[len(playerIDs)+i] = pid
+	}
+
+	// ORDER BY ensures most-recent-first so window slicing in ComputeImpliedHandicap
+	// takes the correct racks; game slots within a row are iterated 3,2,1 (DESC).
+	rackRows, err := db.DB.Query(fmt.Sprintf(`
+		SELECT rr.home_player_id, rr.away_player_id,
+		       rr.game1_home, rr.game1_away,
+		       rr.game2_home, rr.game2_away,
+		       rr.game3_home, rr.game3_away,
+		       rr.home_handicap_used, rr.away_handicap_used
+		FROM round_results rr
+		JOIN matches m  ON m.id  = rr.match_id
+		JOIN seasons  s ON s.id  = m.season_id
+		JOIN leagues  l ON l.id  = s.league_id
+		WHERE (rr.home_player_id IN (%s) OR rr.away_player_id IN (%s))
+		  AND m.completed   = 1
+		  AND m.week_closed = 1
+		  AND l.game_format = '8ball'
+		ORDER BY m.match_date DESC, m.id DESC, rr.round_number DESC`,
+		ph, ph), args...)
+	if err != nil {
+		return nil, err
+	}
+
+	type rackAccum struct {
+		scoreEligible   int
+		missingSnapshot int
+		samples         []handicaps.RackSample
+	}
+	accum := make(map[int64]*rackAccum, len(roster))
+	for _, e := range roster {
+		accum[e.PlayerID] = &rackAccum{}
+	}
+
+	for rackRows.Next() {
 		var (
-			playerID   int64
-			playerName string
-			teamName   string
-			currentHC  float64
-			adminHold  bool
-			matchCount int
-			totalDiff  float64
+			homePlayerID, awayPlayerID              int64
+			g1h, g1a, g2h, g2a, g3h, g3a           int
+			homeHCUsed, awayHCUsed                  sql.NullFloat64
 		)
-		if err := rows.Scan(&playerID, &playerName, &teamName, &currentHC, &adminHold, &matchCount, &totalDiff); err != nil {
+		if err := rackRows.Scan(
+			&homePlayerID, &awayPlayerID,
+			&g1h, &g1a, &g2h, &g2a, &g3h, &g3a,
+			&homeHCUsed, &awayHCUsed,
+		); err != nil {
+			rackRows.Close()
 			return nil, err
 		}
 
+		// Game slots iterated in DESC order (game3, game2, game1) to maintain
+		// most-recent-first ordering within a row.
+		type slot struct{ player, opp int }
+		homeSlots := []slot{{g3h, g3a}, {g2h, g2a}, {g1h, g1a}}
+		awaySlots := []slot{{g3a, g3h}, {g2a, g2h}, {g1a, g1h}}
+
+		processSlots := func(pid int64, slots []slot, opponentHC sql.NullFloat64) {
+			acc, ok := accum[pid]
+			if !ok {
+				return
+			}
+			for _, s := range slots {
+				// Eligibility: exactly one player scores 10 (wins), the other 0-7.
+				eligible := (s.player == 10 && s.opp >= 0 && s.opp <= 7) ||
+					(s.opp == 10 && s.player >= 0 && s.player <= 7)
+				if !eligible {
+					continue
+				}
+				acc.scoreEligible++
+				if !opponentHC.Valid {
+					acc.missingSnapshot++
+					continue
+				}
+				acc.samples = append(acc.samples, handicaps.RackSample{
+					OpponentHC: opponentHC.Float64,
+					RackDiff:   float64(s.player - s.opp),
+				})
+			}
+		}
+
+		// When the reviewed player is HOME, opponent HC = away_handicap_used; vice versa.
+		if rosterSet[homePlayerID] {
+			processSlots(homePlayerID, homeSlots, awayHCUsed)
+		}
+		if rosterSet[awayPlayerID] {
+			processSlots(awayPlayerID, awaySlots, homeHCUsed)
+		}
+	}
+	if err := rackRows.Err(); err != nil {
+		return nil, err
+	}
+	rackRows.Close()
+
+	// 3. Build recommendations.
+	recs := make([]models.HandicapReviewRec, 0, len(roster))
+	for _, e := range roster {
+		acc := accum[e.PlayerID]
+		included := acc.scoreEligible - acc.missingSnapshot
+		result := handicaps.ComputeImpliedHandicap(acc.samples, window)
+
 		rec := models.HandicapReviewRec{
-			PlayerID:        playerID,
-			PlayerName:      playerName,
-			TeamName:        teamName,
-			CurrentHandicap: currentHC,
-			AdminHold:       adminHold,
-			MatchesPlayed:   matchCount,
+			PlayerID:             e.PlayerID,
+			PlayerName:           e.PlayerName,
+			TeamName:             e.TeamName,
+			AdminHold:            e.AdminHold,
+			AssignedHC:           e.AssignedHC,
+			ScoreEligibleRacks:   acc.scoreEligible,
+			MissingSnapshotRacks: acc.missingSnapshot,
+			IncludedRacks:        included,
+			WindowSize:           window,
+			EligibilityThreshold: threshold,
+			LifetimeRacks:        result.LifetimeRacks,
+			WindowRacks:          result.WindowRacks,
 		}
 
-		if adminHold {
-			rec.Skipped             = true
-			rec.Reason              = "admin_hold"
-			rec.RecommendedHandicap = currentHC
-			recs = append(recs, rec)
-			continue
+		if result.LifetimeRacks > 0 {
+			lhc := result.LifetimeImplied
+			rec.LifetimeHC = &lhc
+			whc := result.WindowImplied
+			rec.WindowHC = &whc
 		}
 
-		if matchCount == 0 {
-			rec.Skipped             = true
-			rec.Reason              = "no_data"
-			rec.RecommendedHandicap = currentHC
-			recs = append(recs, rec)
-			continue
-		}
-
-		avg := totalDiff / float64(matchCount)
-		recommended := math.Round(avg*10) / 10
-
-		capped := false
-		if recommended > maxHC {
-			recommended = math.Round(maxHC*10) / 10
-			capped = true
-		} else if recommended < -maxHC {
-			recommended = math.Round(-maxHC*10) / 10
-			capped = true
-		}
-		rec.RecommendedHandicap = recommended
-		rec.ChangeAmount        = math.Round((recommended-currentHC)*10) / 10
-
+		// Reason priority: no_data > admin_hold > below_threshold > capped > no_change > "".
 		switch {
-		case capped:
-			rec.Reason = "capped"
-		case math.Round(currentHC*10)/10 == recommended:
-			rec.Reason = "no_change"
+		case included == 0:
+			rec.Reason = "no_data"
+		case e.AdminHold:
+			rec.Reason = "admin_hold"
+		case result.WindowRacks < threshold:
+			rec.Reason = "below_threshold"
+		default:
+			recommended := result.WindowImplied
+			capped := false
+			if recommended > maxHC {
+				recommended = math.Round(maxHC*100) / 100
+				capped = true
+			} else if recommended < -maxHC {
+				recommended = math.Round(-maxHC*100) / 100
+				capped = true
+			}
+			rec.RecommendedHC = &recommended
+			change := math.Round((recommended-e.AssignedHC)*100) / 100
+			rec.ChangeAmount = &change
+			switch {
+			case capped:
+				rec.Reason = "capped"
+			case recommended == math.Round(e.AssignedHC*100)/100:
+				rec.Reason = "no_change"
+			}
 		}
 
 		recs = append(recs, rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	return recs, nil
 }
@@ -2400,13 +2580,19 @@ func getHandicapRecommendations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	window, threshold, err := seasonHandicapWindowConfig(seasonID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
 	maxHC, err := seasonMaxIndividualHC(seasonID)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
 
-	recs, err := computeHandicapReviewRecs(seasonID, maxHC)
+	recs, err := computeOpponentNormalizedRecs(seasonID, window, threshold, maxHC)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -2414,7 +2600,7 @@ func getHandicapRecommendations(w http.ResponseWriter, r *http.Request) {
 
 	changed := 0
 	for _, rec := range recs {
-		if !rec.Skipped && rec.Reason != "no_change" {
+		if rec.RecommendedHC != nil && rec.Reason != "no_change" {
 			changed++
 		}
 	}
@@ -2543,6 +2729,55 @@ func seasonRoundConfig(seasonID int64) matches.RoundConfig {
 		seasonID).Scan(&minBallStr)
 	minBallHC, _ := strconv.Atoi(minBallStr)
 	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}
+}
+
+// txSeasonMultiplier reads handicap_multiplier through the given transaction.
+// sql.ErrNoRows returns the documented default. Any other query/scan error, or an
+// unparseable or non-positive stored value, returns an error.
+func txSeasonMultiplier(tx *sql.Tx, seasonID int64) (float64, error) {
+	var val string
+	err := tx.QueryRow(
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_multiplier'`,
+		seasonID).Scan(&val)
+	if errors.Is(err, sql.ErrNoRows) {
+		return logic.Multiplier, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("season %d: handicap_multiplier query: %w", seasonID, err)
+	}
+	f, parseErr := strconv.ParseFloat(val, 64)
+	if parseErr != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
+		return 0, fmt.Errorf("season %d: handicap_multiplier %q is not a positive finite number", seasonID, val)
+	}
+	return f, nil
+}
+
+// txSeasonRoundConfig builds a RoundConfig through the given transaction.
+// sql.ErrNoRows on either rule key returns the documented default. Any other query/scan
+// error, or an unparseable stored value, returns an error.
+func txSeasonRoundConfig(tx *sql.Tx, seasonID int64) (matches.RoundConfig, error) {
+	mult, err := txSeasonMultiplier(tx, seasonID)
+	if err != nil {
+		return matches.RoundConfig{}, err
+	}
+	var minBallStr string
+	err = tx.QueryRow(
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
+		seasonID).Scan(&minBallStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return matches.RoundConfig{Multiplier: mult, MinBallHC: 0}, nil
+	}
+	if err != nil {
+		return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap query: %w", seasonID, err)
+	}
+	minBallHC, parseErr := strconv.Atoi(minBallStr)
+	if parseErr != nil {
+		return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap %q is not an integer", seasonID, minBallStr)
+	}
+	if minBallHC < 0 {
+		return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap %d must be >= 0", seasonID, minBallHC)
+	}
+	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}, nil
 }
 
 // matchWeekClosed returns true when the match's week has been officially closed.
@@ -2682,43 +2917,151 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect all player IDs to look up their current handicaps
-	playerIDs := make(map[int64]float64)
+	// Begin transaction first; all reads and writes go through the transaction
+	// so snapshot reads, deletes, and inserts are consistent.
+	tx, txErr := db.DB.Begin()
+	if txErr != nil {
+		jsonError(w, txErr.Error(), 500)
+		return
+	}
+	defer tx.Rollback()
+
+	// Look up current handicaps via transaction. Missing player is a 500.
+	currentHC := make(map[int64]float64)
 	for _, rr := range req.Rounds {
-		playerIDs[rr.HomePlayerID] = 0
-		playerIDs[rr.AwayPlayerID] = 0
+		currentHC[rr.HomePlayerID] = 0
+		currentHC[rr.AwayPlayerID] = 0
 	}
-	for pid := range playerIDs {
+	for pid := range currentHC {
 		var hc float64
-		db.DB.QueryRow(`SELECT handicap FROM players WHERE id=?`, pid).Scan(&hc)
-		playerIDs[pid] = hc
+		if err := tx.QueryRow(`SELECT handicap FROM players WHERE id=?`, pid).Scan(&hc); err != nil {
+			jsonError(w, fmt.Sprintf("player %d not found: %v", pid, err), 500)
+			return
+		}
+		currentHC[pid] = hc
 	}
 
-	// Look up season rules before validation and save.
+	// Look up season ID via transaction; match not found is a 500.
 	var saveSeasonID int64
-	db.DB.QueryRow(`SELECT season_id FROM matches WHERE id=?`, matchID).Scan(&saveSeasonID)
-	saveCfg := seasonRoundConfig(saveSeasonID)
+	if err := tx.QueryRow(`SELECT season_id FROM matches WHERE id=?`, matchID).Scan(&saveSeasonID); err != nil {
+		jsonError(w, fmt.Sprintf("match %d not found: %v", matchID, err), 500)
+		return
+	}
+	saveCfg, err := txSeasonRoundConfig(tx, saveSeasonID)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("season %d: round config unavailable: %v", saveSeasonID, err), 500)
+		return
+	}
 
-	// Backend validation -- errors block save; warnings are noted but do not block.
-	// Warnings are not currently returned to the frontend; they are available for Close Week use.
-	vResult := matches.ValidateRounds(req.Rounds, playerIDs, saveCfg)
+	// Load prior snapshots grouped by round number. Each round may have multiple
+	// prior rows (one per home_player_id). Matching is by player identity below,
+	// not by (round, home) key, so home-side substitutions correctly preserve
+	// the unchanged away snapshot.
+	type priorRow struct {
+		homePlayerID     int64
+		awayPlayerID     int64
+		homeHandicapUsed sql.NullFloat64
+		awayHandicapUsed sql.NullFloat64
+	}
+	priorByRound := map[int][]priorRow{}
+	snapRows, snapErr := tx.Query(`
+		SELECT round_number, home_player_id, away_player_id,
+		       home_handicap_used, away_handicap_used
+		FROM round_results WHERE match_id=?`, matchID)
+	if snapErr != nil {
+		jsonError(w, snapErr.Error(), 500)
+		return
+	}
+	for snapRows.Next() {
+		var rn int
+		var pr priorRow
+		if err := snapRows.Scan(&rn, &pr.homePlayerID, &pr.awayPlayerID,
+			&pr.homeHandicapUsed, &pr.awayHandicapUsed); err != nil {
+			snapRows.Close()
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		priorByRound[rn] = append(priorByRound[rn], pr)
+	}
+	if err := snapRows.Err(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	snapRows.Close()
+
+	// Resolve effective handicap per pairing (indexed by submission slot).
+	// - home same:  preserve home HC; preserve away HC only when away also same.
+	// - home new:   search for prior row where away matches (unambiguous only);
+	//               preserve away HC; fresh HC for the substituted home player.
+	// - no match:   fresh HCs for both.
+	type effectiveHCEntry struct{ home, away float64 }
+	effectiveBySlot := make([]effectiveHCEntry, len(req.Rounds))
+	for i, rr := range req.Rounds {
+		homeHC := currentHC[rr.HomePlayerID]
+		awayHC := currentHC[rr.AwayPlayerID]
+
+		priors := priorByRound[rr.RoundNumber]
+
+		var matchedByHome *priorRow
+		for j := range priors {
+			if priors[j].homePlayerID == rr.HomePlayerID {
+				matchedByHome = &priors[j]
+				break
+			}
+		}
+
+		if matchedByHome != nil {
+			if matchedByHome.homeHandicapUsed.Valid {
+				homeHC = matchedByHome.homeHandicapUsed.Float64
+			}
+			if matchedByHome.awayPlayerID == rr.AwayPlayerID && matchedByHome.awayHandicapUsed.Valid {
+				awayHC = matchedByHome.awayHandicapUsed.Float64
+			}
+		} else {
+			var matchedByAway *priorRow
+			var awayCount int
+			for j := range priors {
+				if priors[j].awayPlayerID == rr.AwayPlayerID {
+					matchedByAway = &priors[j]
+					awayCount++
+				}
+			}
+			if awayCount > 1 {
+				jsonError(w, fmt.Sprintf(
+					"round %d: away player %d appears in %d prior pairings; cannot determine which snapshot to preserve",
+					rr.RoundNumber, rr.AwayPlayerID, awayCount), http.StatusUnprocessableEntity)
+				return
+			}
+			if awayCount == 1 && matchedByAway.awayHandicapUsed.Valid {
+				awayHC = matchedByAway.awayHandicapUsed.Float64
+			}
+		}
+
+		effectiveBySlot[i] = effectiveHCEntry{homeHC, awayHC}
+	}
+
+	// Per-pairing HC for ValidateRounds: each pairing validated with exactly
+	// the handicaps that will be stored.
+	pairingHCSlice := make([]matches.PairingHC, len(req.Rounds))
+	for i, e := range effectiveBySlot {
+		pairingHCSlice[i] = matches.PairingHC{HomeHC: e.home, AwayHC: e.away}
+	}
+
+	vResult := matches.ValidateRounds(req.Rounds, pairingHCSlice, saveCfg)
 	if vResult.HasErrors() {
 		jsonValidation(w, vResult.Result)
 		return
 	}
 
-	tx, err := db.DB.Begin()
-	if err != nil {
+	// Delete existing round results; abort on failure so no inserts follow a partial delete.
+	if _, err := tx.Exec(`DELETE FROM round_results WHERE match_id=?`, matchID); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer tx.Rollback()
 
-	// Replace all round results for this match
-	tx.Exec(`DELETE FROM round_results WHERE match_id=?`, matchID)
-
-	for _, rr := range req.Rounds {
-		spot := logic.CalcSpotM(playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID], saveCfg.Multiplier)
+	for i, rr := range req.Rounds {
+		ehc := effectiveBySlot[i]
+		spot := logic.CalcSpotM(ehc.home, ehc.away, saveCfg.Multiplier)
 		_, err := tx.Exec(`
 			INSERT INTO round_results
 			  (match_id, round_number, home_player_id, away_player_id,
@@ -2729,7 +3072,7 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 			rr.Game1Home, rr.Game1Away,
 			rr.Game2Home, rr.Game2Away,
 			rr.Game3Home, rr.Game3Away,
-			playerIDs[rr.HomePlayerID], playerIDs[rr.AwayPlayerID],
+			ehc.home, ehc.away,
 			spot.Pts, spot.To)
 		if err != nil {
 			jsonError(w, err.Error(), 500)
@@ -2770,10 +3113,13 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Resolve team IDs from the match
+	// Resolve team IDs from the match via transaction; failure is a 500.
 	var homeTeamID, awayTeamID int64
-	db.DB.QueryRow(`SELECT home_team_id, away_team_id FROM matches WHERE id=?`, matchID).
-		Scan(&homeTeamID, &awayTeamID)
+	if err := tx.QueryRow(`SELECT home_team_id, away_team_id FROM matches WHERE id=?`, matchID).
+		Scan(&homeTeamID, &awayTeamID); err != nil {
+		jsonError(w, fmt.Sprintf("match %d team lookup failed: %v", matchID, err), 500)
+		return
+	}
 
 	pTeam := map[int64]int64{}
 	for _, rr := range req.Rounds {
@@ -2801,7 +3147,10 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Replace match_results
-	tx.Exec(`DELETE FROM match_results WHERE match_id=?`, matchID)
+	if _, err := tx.Exec(`DELETE FROM match_results WHERE match_id=?`, matchID); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
 	for pid, t := range tallies {
 		diff := float64(t.gw - t.gl)
 		_, err := tx.Exec(`

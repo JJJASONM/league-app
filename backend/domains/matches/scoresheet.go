@@ -32,6 +32,10 @@ const (
 
 	// CodeRoundIncomplete is reserved for Close Week finalization.
 	CodeRoundIncomplete = "SCORESHEET_ROUND_INCOMPLETE"
+
+	// CodePairingHCLengthMismatch fires when pairingHC length does not match rounds length.
+	// This is a caller error; no pairing scores are computed.
+	CodePairingHCLengthMismatch = "SCORESHEET_PAIRING_HC_LENGTH_MISMATCH"
 )
 
 // RoundConfig holds per-season scoring configuration for a validation pass.
@@ -41,6 +45,15 @@ type RoundConfig struct {
 	// MinBallHC is the minimum-ball threshold; 0 = disabled.
 	// A computed spot below this threshold is suppressed to 0 (threshold semantics, not floor).
 	MinBallHC int
+}
+
+// PairingHC holds the effective handicap for one pairing, indexed in parallel with
+// the rounds slice passed to ValidateRounds. Each pairing is validated using exactly
+// its own stored (or resolved) handicap values, not a player-level lookup that would
+// overwrite when the same player appears in multiple pairings.
+type PairingHC struct {
+	HomeHC float64
+	AwayHC float64
 }
 
 // ScoresheetResult extends validation.Result with per-pairing and per-round outcome tracking.
@@ -60,14 +73,24 @@ type ScoresheetResult struct {
 }
 
 // ValidateRounds validates a submitted set of 8-ball round results for a match.
-// playerHC maps player IDs to their current handicap values.
+// pairingHC is indexed in parallel with rounds: pairingHC[i] holds the effective
+// handicaps for rounds[i]. Each pairing is validated with exactly the handicaps
+// that will be stored, not a player-level map that would silently overwrite when
+// the same player appears in multiple pairings.
 //
 // Errors block save (caller returns HTTP 422).
 // Warnings do not block save; they are returned for future Close Week use.
-func ValidateRounds(rounds []models.RoundResult, playerHC map[int64]float64, cfg RoundConfig) ScoresheetResult {
+func ValidateRounds(rounds []models.RoundResult, pairingHC []PairingHC, cfg RoundConfig) ScoresheetResult {
 	var res ScoresheetResult
 	res.PairingWinners = make([]string, len(rounds))
 	res.RoundWinners = map[int]string{}
+
+	// Length mismatch is a caller error: no pairing can be validated safely.
+	if len(pairingHC) != len(rounds) {
+		res.AddError(CodePairingHCLengthMismatch, "",
+			fmt.Sprintf("pairingHC length %d does not match rounds length %d", len(pairingHC), len(rounds)))
+		return res
+	}
 
 	// Sheet-level: warn when no game has a winner across the entire submission.
 	anyScore := false
@@ -157,9 +180,9 @@ func ValidateRounds(rounds []models.RoundResult, playerHC map[int64]float64, cfg
 			}
 		}
 
-		// Handicap spot for this pairing
-		hHC := playerHC[rr.HomePlayerID]
-		aHC := playerHC[rr.AwayPlayerID]
+		// Handicap spot for this pairing (indexed by submission slot, not player ID).
+		hHC := pairingHC[i].HomeHC
+		aHC := pairingHC[i].AwayHC
 		spot := logic.CalcSpotM(hHC, aHC, cfg.Multiplier)
 
 		spotPts := spot.Pts

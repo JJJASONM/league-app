@@ -1,9 +1,11 @@
 package handlers_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -86,7 +88,7 @@ func TestListRuleDefinitions_ReturnsOK(t *testing.T) {
 func TestListRuleDefinitions_ExactCount(t *testing.T) {
 	srv := testServer(t)
 	defs := fetchDefs(t, srv)
-	const want = 12
+	const want = 14
 	if len(defs) != want {
 		t.Fatalf("want %d definitions, got %d", want, len(defs))
 	}
@@ -134,6 +136,8 @@ func TestListRuleDefinitions_StableMetadata(t *testing.T) {
 		{"max_pairing_spot", "Max spot per pairing", "15", "handicap", 10, 40},
 		{"max_match_spot", "Max total spot per match", "15", "handicap", 10, 50},
 		{"handicap_update_method", "Handicap update method", "manual_review", "handicap", 10, 60},
+		{"handicap_current_game_window", "Current game window", "15", "handicap", 10, 70},
+		{"handicap_min_games_for_recommendation", "Minimum games for recommendation", "15", "handicap", 10, 80},
 		{"lineup_players_per_team", "Players per team per match", "3", "lineup", 20, 10},
 		{"games_per_pairing", "Games per pairing", "3", "lineup", 20, 20},
 		{"allow_substitutes", "Allow substitutes", "true", "lineup", 20, 30},
@@ -4846,15 +4850,16 @@ func getHandicapRecs(t *testing.T, srvURL string, sid int64) (map[string]any, in
 
 func TestHandicapRecs_GameDiffAverage(t *testing.T) {
 	f := weekTestSeed(t)
-	// playerA: handicap=1.0, 1 closed match, diff=3.0 -> recommended=3.0, change=+2.0
 	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team A')`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team B')`, f.sid, f.teamB)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, f.playerB)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
-		VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
-		VALUES (?,?,?,0,3,-3.0)`, f.matchID, f.playerB, f.teamB)
 	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
+	// Threshold=3 so playerA's 3 included racks meet the minimum.
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "3")
 
 	data, status := getHandicapRecs(t, f.srv.URL, f.sid)
 	if status != http.StatusOK {
@@ -4878,13 +4883,11 @@ func TestHandicapRecs_GameDiffAverage(t *testing.T) {
 		rec, _ := r.(map[string]any)
 		pid := int64(rec["player_id"].(float64))
 		if pid == f.playerA {
-			recHC, _ := rec["recommended_handicap"].(float64)
-			if recHC != 3.0 {
-				t.Errorf("playerA: want recommended_handicap=3.0, got %v", recHC)
+			if rec["recommended_hc"] == nil {
+				t.Error("playerA: want non-nil recommended_hc")
 			}
-			chg, _ := rec["change_amount"].(float64)
-			if chg != 2.0 {
-				t.Errorf("playerA: want change_amount=2.0, got %v", chg)
+			if rec["change_amount"] == nil {
+				t.Error("playerA: want non-nil change_amount")
 			}
 			if _, ok := rec["team_name"]; !ok {
 				t.Error("want team_name field in recommendation")
@@ -4896,9 +4899,11 @@ func TestHandicapRecs_GameDiffAverage(t *testing.T) {
 func TestHandicapRecs_AdminHold(t *testing.T) {
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE players SET admin_hold=1 WHERE id=?`, f.playerA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team A')`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team B')`, f.sid, f.teamB)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, f.playerB)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
-		VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
 	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
@@ -4910,14 +4915,14 @@ func TestHandicapRecs_AdminHold(t *testing.T) {
 	for _, r := range recs {
 		rec, _ := r.(map[string]any)
 		if int64(rec["player_id"].(float64)) == f.playerA {
-			if rec["skipped"] != true {
-				t.Error("admin_hold player: want skipped=true")
-			}
 			if reason, _ := rec["reason"].(string); reason != "admin_hold" {
 				t.Errorf("want reason=admin_hold, got %q", reason)
 			}
 			if ah, _ := rec["admin_hold"].(bool); !ah {
 				t.Error("want admin_hold=true in response")
+			}
+			if rec["recommended_hc"] != nil {
+				t.Error("admin_hold player must have nil recommended_hc")
 			}
 			return
 		}
@@ -4927,11 +4932,9 @@ func TestHandicapRecs_AdminHold(t *testing.T) {
 
 func TestHandicapRecs_NoData(t *testing.T) {
 	f := weekTestSeed(t)
-	// playerA on season_rosters but never in a closed match_result.
-	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	// playerA is rostered but has no round_results at all => included_racks=0 => no_data.
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team A')`, f.sid, f.teamA)
 	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
-	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	// Close the week but insert no match_results for playerA.
 	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
@@ -4943,11 +4946,11 @@ func TestHandicapRecs_NoData(t *testing.T) {
 	for _, r := range recs {
 		rec, _ := r.(map[string]any)
 		if int64(rec["player_id"].(float64)) == f.playerA {
-			if rec["skipped"] != true {
-				t.Error("no closed data: want skipped=true")
-			}
 			if reason, _ := rec["reason"].(string); reason != "no_data" {
 				t.Errorf("want reason=no_data, got %q", reason)
+			}
+			if rec["recommended_hc"] != nil {
+				t.Error("no_data player must have nil recommended_hc")
 			}
 			return
 		}
@@ -5092,5 +5095,1277 @@ func TestPhase3C_NoWritesToHandicapTables(t *testing.T) {
 	db.DB.QueryRow(`SELECT COUNT(*) FROM handicap_history`).Scan(&hcHistAfter)
 	if hcHistAfter != hcHistBefore {
 		t.Errorf("Phase 3C must not write handicap_history: was %d, now %d", hcHistBefore, hcHistAfter)
+	}
+}
+
+// --- Phase 3E: Handicap Review (opponent-normalized) ----------------------------
+
+// hrFixture is a running server with a seeded 8-ball league/season and two
+// teams registered in season_teams. Per-test helpers add players and rack data.
+type hrFixture struct {
+	srv      *httptest.Server
+	sid      int64
+	leagueID int64
+	teamA    int64
+	teamB    int64
+}
+
+// hrTestSeed spins up a fresh test server, creates an 8-ball league and season,
+// two teams, and registers both teams in season_teams.
+func hrTestSeed(t *testing.T) hrFixture {
+	t.Helper()
+	srv := testServer(t)
+
+	resp, err := http.Post(srv.URL+"/api/leagues", "application/json",
+		strings.NewReader(`{"name":"HR League","game_format":"8ball"}`))
+	if err != nil {
+		t.Fatalf("hrTestSeed: POST leagues: %v", err)
+	}
+	var lg map[string]any
+	json.NewDecoder(resp.Body).Decode(&lg)
+	resp.Body.Close()
+	leagueID := int64(lg["id"].(float64))
+
+	resp2, err := http.Post(srv.URL+"/api/seasons", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"league_id":%d,"name":"HR Season"}`, leagueID)))
+	if err != nil {
+		t.Fatalf("hrTestSeed: POST seasons: %v", err)
+	}
+	var ss map[string]any
+	json.NewDecoder(resp2.Body).Decode(&ss)
+	resp2.Body.Close()
+	sid := int64(ss["id"].(float64))
+
+	rA, _ := db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,'Team A')`, leagueID)
+	rB, _ := db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,'Team B')`, leagueID)
+	teamA, _ := rA.LastInsertId()
+	teamB, _ := rB.LastInsertId()
+
+	if _, err := db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team A')`, sid, teamA); err != nil {
+		t.Fatalf("hrTestSeed: season_teams A: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team B')`, sid, teamB); err != nil {
+		t.Fatalf("hrTestSeed: season_teams B: %v", err)
+	}
+	return hrFixture{srv: srv, sid: sid, leagueID: leagueID, teamA: teamA, teamB: teamB}
+}
+
+// hrAddPlayer inserts a player and registers them in season_rosters.
+func hrAddPlayer(t *testing.T, f hrFixture, teamID int64, hc float64, adminHold bool) int64 {
+	t.Helper()
+	ah := 0
+	if adminHold {
+		ah = 1
+	}
+	r, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, player_number, handicap, admin_hold, active) VALUES ('Test','Player','00',?,?,1)`, hc, ah)
+	if err != nil {
+		t.Fatalf("hrAddPlayer: %v", err)
+	}
+	pid, _ := r.LastInsertId()
+	if _, err := db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, teamID, pid); err != nil {
+		t.Fatalf("hrAddPlayer: season_rosters: %v", err)
+	}
+	return pid
+}
+
+// hrInsertMatch inserts a completed, week_closed match and returns its ID.
+func hrInsertMatch(t *testing.T, f hrFixture, homeTeamID, awayTeamID int64) int64 {
+	t.Helper()
+	r, err := db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, match_date, week_number, completed, week_closed) VALUES (?,?,?,'2026-01-01',1,1,1)`,
+		f.sid, homeTeamID, awayTeamID)
+	if err != nil {
+		t.Fatalf("hrInsertMatch: %v", err)
+	}
+	id, _ := r.LastInsertId()
+	return id
+}
+
+// hrInsertRound inserts one round_results row. homeHC / awayHC may be nil (NULL snapshot).
+func hrInsertRound(t *testing.T, matchID, roundNum, homeID, awayID int64,
+	g1h, g1a, g2h, g2a, g3h, g3a int, homeHC, awayHC *float64) {
+	t.Helper()
+	_, err := db.DB.Exec(`
+		INSERT INTO round_results
+		  (match_id, round_number, home_player_id, away_player_id,
+		   game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		   home_handicap_used, away_handicap_used)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		matchID, roundNum, homeID, awayID,
+		g1h, g1a, g2h, g2a, g3h, g3a,
+		homeHC, awayHC)
+	if err != nil {
+		t.Fatalf("hrInsertRound: %v", err)
+	}
+}
+
+func hrGetRecs(t *testing.T, srv *httptest.Server, sid int64) []map[string]any {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/handicap-recommendations", srv.URL, sid))
+	if err != nil {
+		t.Fatalf("hrGetRecs: GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("hrGetRecs: want 200, got %d: %s", resp.StatusCode, body)
+	}
+	var data map[string]any
+	json.NewDecoder(resp.Body).Decode(&data)
+	recs, _ := data["recommendations"].([]any)
+	out := make([]map[string]any, len(recs))
+	for i, r := range recs {
+		out[i], _ = r.(map[string]any)
+	}
+	return out
+}
+
+func hrSetRule(t *testing.T, sid int64, key, value string) {
+	t.Helper()
+	_, err := db.DB.Exec(
+		`INSERT OR REPLACE INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`,
+		sid, key, key, value)
+	if err != nil {
+		t.Fatalf("hrSetRule: %v", err)
+	}
+}
+
+func ptr64(v float64) *float64 { return &v }
+
+// TestHandicapReview_HomePlayerUsesAwaySnapshot verifies that when the reviewed
+// player was HOME, the opponent HC baseline is away_handicap_used.
+func TestHandicapReview_HomePlayerUsesAwaySnapshot(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "1")
+	hrSetRule(t, f.sid, "handicap_current_game_window", "15")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	matchID := hrInsertMatch(t, f, f.teamA, f.teamB)
+	// home wins all 3 games 10 vs 5; away_handicap_used=3.0, home_handicap_used=2.0.
+	hrInsertRound(t, matchID, 1, homeID, awayID,
+		10, 5, 10, 5, 10, 5,
+		ptr64(2.0), ptr64(3.0))
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	var homeRec map[string]any
+	for _, r := range recs {
+		if int64(r["player_id"].(float64)) == homeID {
+			homeRec = r
+		}
+	}
+	if homeRec == nil {
+		t.Fatal("home player not found in recommendations")
+	}
+
+	windowHC, ok := homeRec["window_hc"].(float64)
+	if !ok {
+		t.Fatalf("home player window_hc is nil or not float64: %v", homeRec["window_hc"])
+	}
+	// per_rack = 3.0 + (10-5)/0.85; 3 racks => avg rounds to nearest 0.01
+	wantApprox := 3.0 + 5.0/0.85
+	want := math.Round(wantApprox*100) / 100
+	if math.Abs(windowHC-want) > 0.005 {
+		t.Errorf("home player window_hc: want ~%v (away_hc=3.0 baseline), got %v", want, windowHC)
+	}
+}
+
+// TestHandicapReview_AwayPlayerUsesHomeSnapshot verifies that when the reviewed
+// player was AWAY, the opponent HC baseline is home_handicap_used.
+func TestHandicapReview_AwayPlayerUsesHomeSnapshot(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "1")
+	hrSetRule(t, f.sid, "handicap_current_game_window", "15")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	matchID := hrInsertMatch(t, f, f.teamA, f.teamB)
+	// away wins all 3 games 10 vs 5; opponent for away player = home_handicap_used=2.0.
+	hrInsertRound(t, matchID, 1, homeID, awayID,
+		5, 10, 5, 10, 5, 10,
+		ptr64(2.0), ptr64(3.0))
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	var awayRec map[string]any
+	for _, r := range recs {
+		if int64(r["player_id"].(float64)) == awayID {
+			awayRec = r
+		}
+	}
+	if awayRec == nil {
+		t.Fatal("away player not found in recommendations")
+	}
+
+	windowHC, ok := awayRec["window_hc"].(float64)
+	if !ok {
+		t.Fatalf("away player window_hc is nil: %v", awayRec["window_hc"])
+	}
+	// per_rack = 2.0 + (10-5)/0.85
+	wantApprox := 2.0 + 5.0/0.85
+	want := math.Round(wantApprox*100) / 100
+	if math.Abs(windowHC-want) > 0.005 {
+		t.Errorf("away player window_hc: want ~%v (home_hc=2.0 baseline), got %v", want, windowHC)
+	}
+}
+
+// TestHandicapReview_NullSnapshotExcluded verifies that a rack with NULL
+// away_handicap_used is excluded from calculation and counted in missing_snapshot_racks.
+func TestHandicapReview_NullSnapshotExcluded(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	matchID := hrInsertMatch(t, f, f.teamA, f.teamB)
+	hrInsertRound(t, matchID, 1, homeID, awayID,
+		10, 5, 10, 5, 10, 5,
+		ptr64(2.0), nil) // NULL away snapshot
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	var homeRec map[string]any
+	for _, r := range recs {
+		if int64(r["player_id"].(float64)) == homeID {
+			homeRec = r
+		}
+	}
+	if homeRec == nil {
+		t.Fatal("home player not found in recommendations")
+	}
+
+	if int(homeRec["score_eligible_racks"].(float64)) == 0 {
+		t.Error("score_eligible_racks should be > 0")
+	}
+	if int(homeRec["missing_snapshot_racks"].(float64)) == 0 {
+		t.Error("missing_snapshot_racks should be > 0")
+	}
+	if int(homeRec["included_racks"].(float64)) != 0 {
+		t.Errorf("included_racks should be 0, got %v", homeRec["included_racks"])
+	}
+	if homeRec["reason"] != "no_data" {
+		t.Errorf("reason: want no_data, got %v", homeRec["reason"])
+	}
+}
+
+// TestHandicapReview_ExcludedRacksNotCountedTowardThreshold verifies that
+// NULL-snapshot racks do not count toward the eligibility threshold.
+func TestHandicapReview_ExcludedRacksNotCountedTowardThreshold(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "10")
+	hrSetRule(t, f.sid, "handicap_current_game_window", "15")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	// 2 matches with NULL snapshots (6 slots excluded) + 1 match with valid snapshots (3 slots).
+	for i := 0; i < 2; i++ {
+		mid := hrInsertMatch(t, f, f.teamA, f.teamB)
+		hrInsertRound(t, mid, 1, homeID, awayID,
+			10, 5, 10, 5, 10, 5, ptr64(2.0), nil)
+	}
+	midValid := hrInsertMatch(t, f, f.teamA, f.teamB)
+	hrInsertRound(t, midValid, 1, homeID, awayID,
+		10, 5, 10, 5, 10, 5, ptr64(2.0), ptr64(3.0))
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	var homeRec map[string]any
+	for _, r := range recs {
+		if int64(r["player_id"].(float64)) == homeID {
+			homeRec = r
+		}
+	}
+	if homeRec == nil {
+		t.Fatal("home player not found")
+	}
+
+	included := int(homeRec["included_racks"].(float64))
+	if included >= 10 {
+		t.Errorf("included_racks should be < 10 (NULL-snapshot racks excluded), got %d", included)
+	}
+	if homeRec["reason"] != "below_threshold" {
+		t.Errorf("reason: want below_threshold, got %v", homeRec["reason"])
+	}
+	if homeRec["recommended_hc"] != nil {
+		t.Errorf("recommended_hc must be nil for below_threshold player, got %v", homeRec["recommended_hc"])
+	}
+}
+
+// TestHandicapReview_AdminHoldShowsCalculationsNoRecommendation verifies that
+// an admin hold player with included racks still has lifetime_hc and window_hc
+// populated, but recommended_hc and change_amount are nil.
+func TestHandicapReview_AdminHoldShowsCalculationsNoRecommendation(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "1")
+	hrSetRule(t, f.sid, "handicap_current_game_window", "15")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, true) // admin_hold=true
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	matchID := hrInsertMatch(t, f, f.teamA, f.teamB)
+	hrInsertRound(t, matchID, 1, homeID, awayID,
+		10, 5, 10, 5, 10, 5, ptr64(2.0), ptr64(3.0))
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	var homeRec map[string]any
+	for _, r := range recs {
+		if int64(r["player_id"].(float64)) == homeID {
+			homeRec = r
+		}
+	}
+	if homeRec == nil {
+		t.Fatal("admin hold player not found in recommendations")
+	}
+
+	if homeRec["reason"] != "admin_hold" {
+		t.Errorf("reason: want admin_hold, got %v", homeRec["reason"])
+	}
+	if homeRec["lifetime_hc"] == nil {
+		t.Error("lifetime_hc should be non-nil for admin hold player with included racks")
+	}
+	if homeRec["window_hc"] == nil {
+		t.Error("window_hc should be non-nil for admin hold player with included racks")
+	}
+	if homeRec["recommended_hc"] != nil {
+		t.Errorf("recommended_hc must be nil for admin hold player, got %v", homeRec["recommended_hc"])
+	}
+	if homeRec["change_amount"] != nil {
+		t.Errorf("change_amount must be nil for admin hold player, got %v", homeRec["change_amount"])
+	}
+}
+
+// TestHandicapReview_BelowThresholdShowsProvisionalNoRecommendation verifies
+// that a below-threshold player has calculated values but no recommendation.
+func TestHandicapReview_BelowThresholdShowsProvisionalNoRecommendation(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "5")
+	hrSetRule(t, f.sid, "handicap_current_game_window", "15")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	matchID := hrInsertMatch(t, f, f.teamA, f.teamB)
+	// 3 included racks; threshold=5 => below_threshold.
+	hrInsertRound(t, matchID, 1, homeID, awayID,
+		10, 5, 10, 5, 10, 5, ptr64(2.0), ptr64(3.0))
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	var homeRec map[string]any
+	for _, r := range recs {
+		if int64(r["player_id"].(float64)) == homeID {
+			homeRec = r
+		}
+	}
+	if homeRec == nil {
+		t.Fatal("player not found in recommendations")
+	}
+
+	if homeRec["reason"] != "below_threshold" {
+		t.Errorf("reason: want below_threshold, got %v", homeRec["reason"])
+	}
+	if homeRec["lifetime_hc"] == nil {
+		t.Error("lifetime_hc should be non-nil for player with included racks")
+	}
+	if homeRec["window_hc"] == nil {
+		t.Error("window_hc should be non-nil for player with included racks")
+	}
+	if homeRec["recommended_hc"] != nil {
+		t.Errorf("recommended_hc must be nil for below_threshold player, got %v", homeRec["recommended_hc"])
+	}
+}
+
+// TestHandicapReview_InvalidRuleReturns500 verifies that a stored rule value of
+// "0" (invalid -- below minimum 1) causes the endpoint to return HTTP 500.
+func TestHandicapReview_InvalidRuleReturns500(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+
+	// Seed one closed week so the handler does not early-return with no_data.
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+	mid := hrInsertMatch(t, f, f.teamA, f.teamB)
+	hrInsertRound(t, mid, 1, homeID, awayID,
+		10, 5, 10, 5, 10, 5, ptr64(2.0), ptr64(3.0))
+
+	// "0" is below minimum of 1 -- invalid.
+	hrSetRule(t, f.sid, "handicap_current_game_window", "0")
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/handicap-recommendations", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("want 500 for invalid rule value, got %d", resp.StatusCode)
+	}
+}
+
+// TestHandicapReview_DuplicatePlayerRecordsNotCombined verifies that two separate
+// players.id rows are returned as independent entries with independent rack counts.
+func TestHandicapReview_DuplicatePlayerRecordsNotCombined(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "1")
+
+	p1 := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	p2 := hrAddPlayer(t, f, f.teamB, 2.0, false)
+
+	mid := hrInsertMatch(t, f, f.teamA, f.teamB)
+	hrInsertRound(t, mid, 1, p1, p2,
+		10, 5, 10, 5, 10, 5, ptr64(2.0), ptr64(2.0))
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	if len(recs) != 2 {
+		t.Errorf("want 2 separate player entries (no merging), got %d", len(recs))
+	}
+	ids := map[float64]bool{}
+	for _, r := range recs {
+		ids[r["player_id"].(float64)] = true
+	}
+	if len(ids) != 2 {
+		t.Errorf("want 2 distinct player_id values, got %d", len(ids))
+	}
+}
+
+// TestSaveRounds_SnapshotPreservedOnResave verifies that re-saving a scoresheet
+// with the same players preserves the original HC snapshots even after a player's
+// current handicap changes.
+func TestSaveRounds_SnapshotPreservedOnResave(t *testing.T) {
+	f := weekTestSeed(t)
+	// Disable roster gate so saveRounds reaches the snapshot logic (teams_managed=1 by default via API).
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	body := fmt.Sprintf(`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`, f.playerA, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	var origHomeHC sql.NullFloat64
+	db.DB.QueryRow(`SELECT home_handicap_used FROM round_results WHERE match_id=? AND round_number=1`, f.matchID).Scan(&origHomeHC)
+	if !origHomeHC.Valid {
+		t.Fatal("home_handicap_used should be set after first save")
+	}
+
+	// Change the player's current handicap.
+	db.DB.Exec(`UPDATE players SET handicap=9.99 WHERE id=?`, f.playerA)
+
+	// Re-save same round with same players.
+	resp2, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+
+	var resavedHomeHC sql.NullFloat64
+	db.DB.QueryRow(`SELECT home_handicap_used FROM round_results WHERE match_id=? AND round_number=1`, f.matchID).Scan(&resavedHomeHC)
+	if !resavedHomeHC.Valid {
+		t.Fatal("home_handicap_used should still be set after re-save")
+	}
+	if resavedHomeHC.Float64 != origHomeHC.Float64 {
+		t.Errorf("snapshot should be preserved on re-save with same player: orig=%v, resaved=%v",
+			origHomeHC.Float64, resavedHomeHC.Float64)
+	}
+}
+
+// TestSaveRounds_SubstitutionPreservesUnchangedSide verifies that when a player
+// is substituted on one side, the unchanged side's snapshot is preserved while
+// the new player receives a fresh snapshot from their current players.handicap.
+func TestSaveRounds_SubstitutionPreservesUnchangedSide(t *testing.T) {
+	f := weekTestSeed(t)
+	// Disable roster gate so saveRounds reaches the snapshot logic (teams_managed=1 by default via API).
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	rSub, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Sub','Player',?,1.5,1)`, f.teamB)
+	subID, _ := rSub.LastInsertId()
+
+	body1 := fmt.Sprintf(`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`, f.playerA, f.playerB)
+	resp, _ := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID), "application/json", strings.NewReader(body1))
+	resp.Body.Close()
+
+	var origHomeHC sql.NullFloat64
+	db.DB.QueryRow(`SELECT home_handicap_used FROM round_results WHERE match_id=? AND round_number=1`, f.matchID).Scan(&origHomeHC)
+
+	// Change home player handicap (should NOT affect preserved snapshot).
+	db.DB.Exec(`UPDATE players SET handicap=9.99 WHERE id=?`, f.playerA)
+
+	// Re-save: same home player, substitute on away side.
+	body2 := fmt.Sprintf(`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`, f.playerA, subID)
+	resp2, _ := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID), "application/json", strings.NewReader(body2))
+	resp2.Body.Close()
+
+	var newHomeHC, newAwayHC sql.NullFloat64
+	db.DB.QueryRow(`SELECT home_handicap_used, away_handicap_used FROM round_results WHERE match_id=? AND round_number=1`,
+		f.matchID).Scan(&newHomeHC, &newAwayHC)
+
+	if newHomeHC.Float64 != origHomeHC.Float64 {
+		t.Errorf("home snapshot should be preserved (same player): orig=%v, now=%v",
+			origHomeHC.Float64, newHomeHC.Float64)
+	}
+	if !newAwayHC.Valid || newAwayHC.Float64 != 1.5 {
+		t.Errorf("away snapshot should be sub player's current hc (1.5): got valid=%v value=%v",
+			newAwayHC.Valid, newAwayHC.Float64)
+	}
+}
+
+// --- Phase 3E: Corrections (PM Corrections 1, 2, and 3) ----------------------
+
+// TestSaveRounds_HomeSubstitutionPreservesAwaySnapshot is a regression test for
+// PM Correction 2: when the home player is substituted (new home player C replaces A),
+// the prior row is matched by away player identity, not by (round, home) key.
+// B's stored away_handicap_used must be preserved even though A is no longer home.
+func TestSaveRounds_HomeSubstitutionPreservesAwaySnapshot(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
+	db.DB.Exec(`UPDATE players SET handicap=2.0 WHERE id=?`, f.playerB)
+
+	// Initial save: A (home, HC=1.0) vs B (away, HC=2.0).
+	body1 := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}]}`,
+		f.playerA, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	// Add substitute home player C; change B's current HC so it differs from stored snapshot.
+	rC, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Home','Sub',?,3.5,1)`, f.teamA)
+	playerC, _ := rC.LastInsertId()
+	db.DB.Exec(`UPDATE players SET handicap=5.0 WHERE id=?`, f.playerB)
+
+	// Re-save: C (home, fresh HC=3.5) vs B (away, must preserve stored HC=2.0).
+	body2 := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}]}`,
+		playerC, f.playerB)
+	resp2, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+
+	var homeHCStored, awayHCStored float64
+	db.DB.QueryRow(
+		`SELECT home_handicap_used, away_handicap_used FROM round_results WHERE match_id=? AND round_number=1`,
+		f.matchID).Scan(&homeHCStored, &awayHCStored)
+
+	if awayHCStored != 2.0 {
+		t.Errorf("away_handicap_used: want 2.0 (B's preserved snapshot), got %g (current HC used instead)", awayHCStored)
+	}
+	if homeHCStored != 3.5 {
+		t.Errorf("home_handicap_used: want 3.5 (C's fresh HC), got %g", homeHCStored)
+	}
+}
+
+// TestSaveRounds_AmbiguousSubstitutionReturns422 is a regression test for PM Correction 2
+// (ambiguity rejection): when the home player is substituted and the unchanged away player
+// appears in more than one prior row of the same round, the server must reject the save
+// with 422 rather than silently replacing both snapshots with current values.
+func TestSaveRounds_AmbiguousSubstitutionReturns422(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	// Second and third home players on teamA (C and D).
+	rC, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Home2','Sub',?,1.0)`, f.teamA)
+	playerC, _ := rC.LastInsertId()
+	rD, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Home3','New',?,1.0)`, f.teamA)
+	playerD, _ := rD.LastInsertId()
+
+	// Insert two prior rows in round 1 with DIFFERENT home players but the SAME away player.
+	// The schema UNIQUE constraint is (match_id, round_number, home_player_id) so this is allowed.
+	// This creates the ambiguous state: playerA and playerC both faced playerB in round 1.
+	db.DB.Exec(`INSERT INTO round_results
+		(match_id, round_number, home_player_id, away_player_id,
+		 game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		 home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
+		VALUES (?,1,?,?,10,5,10,3,10,2,3.0,3.0,0,'')`,
+		f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`INSERT INTO round_results
+		(match_id, round_number, home_player_id, away_player_id,
+		 game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		 home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
+		VALUES (?,1,?,?,10,5,10,3,10,2,3.0,3.0,0,'')`,
+		f.matchID, playerC, f.playerB)
+
+	// Re-save: playerD (new home, not in any prior row) vs playerB (away).
+	// priorByRound[1] has two prior rows with awayPlayerID=playerB -> awayCount=2 -> expect 422.
+	body := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`,
+		playerD, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("ambiguous substitution: want 422, got %d", resp.StatusCode)
+	}
+}
+
+// TestSaveRounds_SamePlayerMultiplePairingsDistinctSnapshots verifies that when
+// the same player appears as home in multiple rounds with different prior snapshots,
+// each round preserves its own snapshot independently (pairing-level, not player-level).
+func TestSaveRounds_SamePlayerMultiplePairingsDistinctSnapshots(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	rY, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Away','R1',?,3.0,1)`, f.teamB)
+	playerY, _ := rY.LastInsertId()
+	rZ, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Away','R2',?,3.0,1)`, f.teamB)
+	playerZ, _ := rZ.LastInsertId()
+
+	// First save: playerA as home in round 1 only, HC=2.0; snapshot 2.0 stored.
+	db.DB.Exec(`UPDATE players SET handicap=2.0 WHERE id=?`, f.playerA)
+	body1 := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}]}`,
+		f.playerA, playerY)
+	resp, _ := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body1))
+	resp.Body.Close()
+
+	// Second save: playerA in round 1 (prior snapshot 2.0 preserved) and round 2
+	// (no prior row, so fresh HC=4.0 is stored). Both rounds present.
+	db.DB.Exec(`UPDATE players SET handicap=4.0 WHERE id=?`, f.playerA)
+	body2 := fmt.Sprintf(
+		`{"rounds":[`+
+			`{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5},`+
+			`{"round_number":2,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}`+
+			`]}`,
+		f.playerA, playerY, f.playerA, playerZ)
+	resp2, _ := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body2))
+	resp2.Body.Close()
+
+	var r1HC, r2HC float64
+	db.DB.QueryRow(`SELECT home_handicap_used FROM round_results WHERE match_id=? AND round_number=1 AND home_player_id=?`, f.matchID, f.playerA).Scan(&r1HC)
+	db.DB.QueryRow(`SELECT home_handicap_used FROM round_results WHERE match_id=? AND round_number=2 AND home_player_id=?`, f.matchID, f.playerA).Scan(&r2HC)
+	if r1HC != 2.0 {
+		t.Fatalf("after second save: round 1 home_handicap_used want 2.0 (preserved), got %g", r1HC)
+	}
+	if r2HC != 4.0 {
+		t.Fatalf("after second save: round 2 home_handicap_used want 4.0 (fresh), got %g", r2HC)
+	}
+
+	// Third save: change A's HC to 1.0; re-save same body. Both rounds must preserve
+	// their distinct snapshots (2.0 for round 1, 4.0 for round 2) via pairing-level matching.
+	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
+	resp3, _ := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body2))
+	resp3.Body.Close()
+
+	var r1HCAfter, r2HCAfter float64
+	db.DB.QueryRow(`SELECT home_handicap_used FROM round_results WHERE match_id=? AND round_number=1 AND home_player_id=?`, f.matchID, f.playerA).Scan(&r1HCAfter)
+	db.DB.QueryRow(`SELECT home_handicap_used FROM round_results WHERE match_id=? AND round_number=2 AND home_player_id=?`, f.matchID, f.playerA).Scan(&r2HCAfter)
+	if r1HCAfter != 2.0 {
+		t.Errorf("after re-save: round 1 home_handicap_used want 2.0, got %g", r1HCAfter)
+	}
+	if r2HCAfter != 4.0 {
+		t.Errorf("after re-save: round 2 home_handicap_used want 4.0, got %g", r2HCAfter)
+	}
+}
+
+// --- Phase 3E: Corrections (PM Correction 1 regression) ----------------------
+
+// TestSaveRounds_EffectiveHCUsedForValidation is a regression test for PM Correction 1:
+// saveRounds must resolve effective handicaps before ValidateRounds so that round
+// winners and sets reflect the preserved snapshot, not the current players.handicap.
+//
+// A round winner requires 2 of 3 pairing wins, so we submit 2 pairings in round 1.
+// Game scores are chosen so that home wins with preserved HC (spot to home) but
+// loses when current HC is used instead (spot flips to away after the HC change).
+func TestSaveRounds_EffectiveHCUsedForValidation(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	// Add a second home/away pair for round 1 so a round winner can be determined.
+	rA2, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Home','Two',?,1.0,1)`, f.teamA)
+	playerA2, _ := rA2.LastInsertId()
+	rB2, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Away','Two',?,2.0,1)`, f.teamB)
+	playerB2, _ := rB2.LastInsertId()
+
+	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
+	db.DB.Exec(`UPDATE players SET handicap=2.0 WHERE id=?`, f.playerB)
+
+	// Games chosen so: with HC 1.0(home) vs 2.0(away), spot=3 to home.
+	// adjH=25+3=28, adjA=24 -> home wins pairing.
+	// After changing home HC to 3.0: spot=3 to away (away<home).
+	// adjH=25, adjA=24+3=27 -> away wins pairing (ValidateRounds uses wrong HC without fix).
+	body := fmt.Sprintf(
+		`{"rounds":[`+
+			`{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":7,"game2_home":10,"game2_away":7,"game3_home":5,"game3_away":10},`+
+			`{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":7,"game2_home":10,"game2_away":7,"game3_home":5,"game3_away":10}`+
+			`]}`,
+		f.playerA, f.playerB, playerA2, playerB2)
+
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	// After first save: home wins 2 pairings -> RoundWinners[1]="home" -> sets_won=1.
+	var swInit int
+	db.DB.QueryRow(`SELECT sets_won FROM match_results WHERE match_id=? AND player_id=?`, f.matchID, f.playerA).Scan(&swInit)
+	if swInit != 1 {
+		t.Fatalf("initial save: sets_won want 1, got %d", swInit)
+	}
+
+	// Change both home players' HCs. Current HC (3.0 > 2.0) would flip spot to away,
+	// making away win both pairings and giving RoundWinners[1]="away" (sets_won=0).
+	db.DB.Exec(`UPDATE players SET handicap=3.0 WHERE id=?`, f.playerA)
+	db.DB.Exec(`UPDATE players SET handicap=3.0 WHERE id=?`, playerA2)
+
+	resp2, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+
+	// Effective HC must use preserved snapshot (1.0 vs 2.0): home wins -> sets_won=1.
+	var swResaved int
+	db.DB.QueryRow(`SELECT sets_won FROM match_results WHERE match_id=? AND player_id=?`, f.matchID, f.playerA).Scan(&swResaved)
+	if swResaved != 1 {
+		t.Errorf("re-save: sets_won want 1 (effective HC preserved, home wins), got %d (current HC used instead)", swResaved)
+	}
+}
+
+// --- Phase 3E: Final Corrections (PM Correction - rule helpers and close-week query) ---------
+
+// TestSaveRounds_InvalidMultiplierReturns500 is a regression test for the rule-helper
+// error-return correction: when season_rules contains an unparseable handicap_multiplier,
+// txSeasonRoundConfig must return an error and saveRounds must respond 500 rather than
+// silently defaulting.
+func TestSaveRounds_InvalidMultiplierReturns500(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value)
+		VALUES (?, 'handicap_multiplier', 'Multiplier', 'not-a-number')`, f.sid)
+
+	body := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}]}`,
+		f.playerA, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("invalid multiplier: want 500, got %d", resp.StatusCode)
+	}
+}
+
+// TestValidateWeek_RoundQueryFailureProducesWeekInternalError is a regression test for
+// the close-week round-results query correction: when the round_results table is unavailable,
+// ValidateWeek must emit WEEK_INTERNAL_ERROR with the match_id stamped rather than
+// silently skipping the match.
+func TestValidateWeek_RoundQueryFailureProducesWeekInternalError(t *testing.T) {
+	f := weekTestSeed(t)
+
+	// Drop round_results so the per-match SELECT fails for every match in the week.
+	db.DB.Exec(`DROP TABLE round_results`)
+
+	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
+
+	var found bool
+	for _, msg := range msgs {
+		if msg["code"] == "WEEK_INTERNAL_ERROR" {
+			found = true
+			if msg["match_id"] == nil {
+				t.Error("WEEK_INTERNAL_ERROR must carry a match_id")
+			}
+			break
+		}
+	}
+	if !found {
+		codes := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			if c, ok := m["code"].(string); ok {
+				codes = append(codes, c)
+			}
+		}
+		t.Errorf("expected WEEK_INTERNAL_ERROR, got codes: %v", codes)
+	}
+}
+
+// TestSaveRounds_NaNMultiplierReturns500 verifies that a stored NaN value for
+// handicap_multiplier is rejected (strconv.ParseFloat accepts NaN without error
+// but it is not a finite positive number) and saveRounds returns HTTP 500.
+func TestSaveRounds_NaNMultiplierReturns500(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value)
+		VALUES (?, 'handicap_multiplier', 'Multiplier', 'NaN')`, f.sid)
+
+	body := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}]}`,
+		f.playerA, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("NaN multiplier: want 500, got %d", resp.StatusCode)
+	}
+}
+
+// TestSaveRounds_InfMultiplierReturns500 verifies that a stored +Inf value for
+// handicap_multiplier is rejected (strconv.ParseFloat accepts +Inf without error
+// but it is not a finite positive number) and saveRounds returns HTTP 500.
+func TestSaveRounds_InfMultiplierReturns500(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value)
+		VALUES (?, 'handicap_multiplier', 'Multiplier', '+Inf')`, f.sid)
+
+	body := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}]}`,
+		f.playerA, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("+Inf multiplier: want 500, got %d", resp.StatusCode)
+	}
+}
+
+// TestSaveRounds_NegativeMinBallHCReturns500 verifies that a negative integer
+// stored for min_ball_handicap is rejected and saveRounds returns HTTP 500.
+// strconv.Atoi accepts "-1" without error; the explicit < 0 guard catches it.
+func TestSaveRounds_NegativeMinBallHCReturns500(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value)
+		VALUES (?, 'min_ball_handicap', 'MinBall', '-1')`, f.sid)
+
+	body := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}]}`,
+		f.playerA, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("negative min_ball_handicap: want 500, got %d", resp.StatusCode)
+	}
+}
+
+// TestSaveRounds_InvalidConfigPreservesData verifies that a round save rejected
+// by an invalid rule leaves existing round_results and match_results unchanged.
+// Content is compared field-by-field so a delete-and-reinsert-with-different-values
+// bug cannot hide behind a matching row count.
+func TestSaveRounds_InvalidConfigPreservesData(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+
+	// Seed an existing round_results row (snapshots deliberately NULL to verify NULL is preserved).
+	db.DB.Exec(`
+		INSERT INTO round_results
+		  (match_id, round_number, home_player_id, away_player_id,
+		   game1_home, game1_away, game2_home, game2_away, game3_home, game3_away)
+		VALUES (?,1,?,?,10,5,10,5,10,5)`,
+		f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
+
+	// Capture round_results content before the rejected request.
+	type rrSnapshot struct {
+		homePlayerID, awayPlayerID    int64
+		g1h, g1a, g2h, g2a, g3h, g3a int
+		homeHC, awayHC                sql.NullFloat64
+	}
+	var rrBefore rrSnapshot
+	db.DB.QueryRow(`
+		SELECT home_player_id, away_player_id,
+		       game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		       home_handicap_used, away_handicap_used
+		FROM round_results WHERE match_id=?`, f.matchID).Scan(
+		&rrBefore.homePlayerID, &rrBefore.awayPlayerID,
+		&rrBefore.g1h, &rrBefore.g1a, &rrBefore.g2h, &rrBefore.g2a,
+		&rrBefore.g3h, &rrBefore.g3a,
+		&rrBefore.homeHC, &rrBefore.awayHC)
+
+	// Capture match_results content before the rejected request.
+	type mrSnapshot struct {
+		playerID            int64
+		gamesWon, gamesLost int
+		diff                float64
+		setsWon, setsLost   int
+	}
+	var mrBefore mrSnapshot
+	db.DB.QueryRow(`
+		SELECT player_id, games_won, games_lost, diff,
+		       COALESCE(sets_won,0), COALESCE(sets_lost,0)
+		FROM match_results WHERE match_id=?`, f.matchID).Scan(
+		&mrBefore.playerID, &mrBefore.gamesWon, &mrBefore.gamesLost, &mrBefore.diff,
+		&mrBefore.setsWon, &mrBefore.setsLost)
+
+	// Store NaN as the multiplier to force config rejection before any writes.
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value)
+		VALUES (?, 'handicap_multiplier', 'Multiplier', 'NaN')`, f.sid)
+
+	// Attempt a save with inverted scores -- must be rejected; existing data must survive.
+	body := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":5,"game1_away":10,"game2_home":5,"game2_away":10,"game3_home":5,"game3_away":10}]}`,
+		f.playerA, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("want 500 for invalid config, got %d", resp.StatusCode)
+	}
+
+	// Verify round_results row content is identical -- not merely the same count.
+	var rrAfter rrSnapshot
+	db.DB.QueryRow(`
+		SELECT home_player_id, away_player_id,
+		       game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		       home_handicap_used, away_handicap_used
+		FROM round_results WHERE match_id=?`, f.matchID).Scan(
+		&rrAfter.homePlayerID, &rrAfter.awayPlayerID,
+		&rrAfter.g1h, &rrAfter.g1a, &rrAfter.g2h, &rrAfter.g2a,
+		&rrAfter.g3h, &rrAfter.g3a,
+		&rrAfter.homeHC, &rrAfter.awayHC)
+	if rrAfter != rrBefore {
+		t.Errorf("round_results row changed after rejected save:\n  before: %+v\n  after:  %+v", rrBefore, rrAfter)
+	}
+
+	// Verify match_results row content is identical.
+	var mrAfter mrSnapshot
+	db.DB.QueryRow(`
+		SELECT player_id, games_won, games_lost, diff,
+		       COALESCE(sets_won,0), COALESCE(sets_lost,0)
+		FROM match_results WHERE match_id=?`, f.matchID).Scan(
+		&mrAfter.playerID, &mrAfter.gamesWon, &mrAfter.gamesLost, &mrAfter.diff,
+		&mrAfter.setsWon, &mrAfter.setsLost)
+	if mrAfter != mrBefore {
+		t.Errorf("match_results row changed after rejected save:\n  before: %+v\n  after:  %+v", mrBefore, mrAfter)
+	}
+}
+
+// TestSaveRounds_ValidNonDefaultConfigSavesNormally verifies that explicitly stored
+// valid non-default handicap_multiplier and min_ball_handicap values do not block
+// a round save. min_ball_handicap=2 suppresses spots below 2 to 0 (threshold semantics);
+// equal-handicap players produce spot=0, so no suppression occurs and the save proceeds.
+func TestSaveRounds_ValidNonDefaultConfigSavesNormally(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value)
+		VALUES (?, 'handicap_multiplier', 'Multiplier', '3.0')`, f.sid)
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value)
+		VALUES (?, 'min_ball_handicap', 'MinBall', '2')`, f.sid)
+
+	body := fmt.Sprintf(
+		`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,`+
+			`"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":5,"game3_home":10,"game3_away":5}]}`,
+		f.playerA, f.playerB)
+	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Errorf("valid non-default config: want 200, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+// TestHandicapReview_CrossLeague8BallParticipates verifies that a player's racks
+// from a second 8-ball league contribute to their lifetime rack count in the
+// Handicap Review endpoint.
+func TestHandicapReview_CrossLeague8BallParticipates(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "1")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	// Main season: one closed match (3 racks).
+	mid1 := hrInsertMatch(t, f, f.teamA, f.teamB)
+	hrInsertRound(t, mid1, 1, homeID, awayID, 10, 5, 10, 5, 10, 5, ptr64(2.0), ptr64(3.0))
+
+	// Second 8-ball league and season -- same player appears as home (3 more racks).
+	var league2ID, season2ID, teamC, teamD, opp2ID, match2ID int64
+	res, _ := db.DB.Exec(`INSERT INTO leagues (name, game_format, day_of_week) VALUES ('League2','8ball','Tuesday')`)
+	league2ID, _ = res.LastInsertId()
+	res, _ = db.DB.Exec(`INSERT INTO seasons (league_id, name, schedule_type, num_weeks, active) VALUES (?,'S2','single_rr',8,0)`, league2ID)
+	season2ID, _ = res.LastInsertId()
+	res, _ = db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,'TeamC')`, league2ID)
+	teamC, _ = res.LastInsertId()
+	res, _ = db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,'TeamD')`, league2ID)
+	teamD, _ = res.LastInsertId()
+	res, _ = db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Opp','Two',?,3.0,1)`, teamD)
+	opp2ID, _ = res.LastInsertId()
+	res, _ = db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, match_date, week_number, completed, week_closed) VALUES (?,?,?,'2026-02-01',1,1,1)`, season2ID, teamC, teamD)
+	match2ID, _ = res.LastInsertId()
+	db.DB.Exec(`INSERT INTO round_results (match_id, round_number, home_player_id, away_player_id, game1_home, game1_away, game2_home, game2_away, game3_home, game3_away, home_handicap_used, away_handicap_used) VALUES (?,1,?,?,10,5,10,5,10,5,2.0,3.0)`,
+		match2ID, homeID, opp2ID)
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	var homeRec map[string]any
+	for _, r := range recs {
+		if int64(r["player_id"].(float64)) == homeID {
+			homeRec = r
+		}
+	}
+	if homeRec == nil {
+		t.Fatal("player not found in recommendations")
+	}
+	// 3 racks from season1 + 3 racks from season2 = 6 total lifetime racks.
+	if got := int(homeRec["lifetime_racks"].(float64)); got != 6 {
+		t.Errorf("cross-league 8-ball: want lifetime_racks=6, got %d", got)
+	}
+	_ = awayID
+}
+
+// TestHandicapReview_Non8BallRacksExcluded verifies that a player's racks from
+// a non-8-ball league do not contribute to their lifetime rack count.
+func TestHandicapReview_Non8BallRacksExcluded(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "1")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	// 8-ball season: one closed match (3 racks).
+	mid1 := hrInsertMatch(t, f, f.teamA, f.teamB)
+	hrInsertRound(t, mid1, 1, homeID, awayID, 10, 5, 10, 5, 10, 5, ptr64(2.0), ptr64(3.0))
+
+	// 9-ball league and season -- same player; these racks must NOT be counted.
+	var league9ID, season9ID, teamE, teamF, opp9ID, match9ID int64
+	res9, _ := db.DB.Exec(`INSERT INTO leagues (name, game_format, day_of_week) VALUES ('NineBall','9ball','Wednesday')`)
+	league9ID, _ = res9.LastInsertId()
+	res9, _ = db.DB.Exec(`INSERT INTO seasons (league_id, name, schedule_type, num_weeks, active) VALUES (?,'S9','single_rr',8,0)`, league9ID)
+	season9ID, _ = res9.LastInsertId()
+	res9, _ = db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,'TeamE')`, league9ID)
+	teamE, _ = res9.LastInsertId()
+	res9, _ = db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,'TeamF')`, league9ID)
+	teamF, _ = res9.LastInsertId()
+	res9, _ = db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Opp','Nine',?,3.0,1)`, teamF)
+	opp9ID, _ = res9.LastInsertId()
+	res9, _ = db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, match_date, week_number, completed, week_closed) VALUES (?,?,?,'2026-03-01',1,1,1)`, season9ID, teamE, teamF)
+	match9ID, _ = res9.LastInsertId()
+	db.DB.Exec(`INSERT INTO round_results (match_id, round_number, home_player_id, away_player_id, game1_home, game1_away, game2_home, game2_away, game3_home, game3_away, home_handicap_used, away_handicap_used) VALUES (?,1,?,?,10,5,10,5,10,5,2.0,3.0)`,
+		match9ID, homeID, opp9ID)
+
+	recs := hrGetRecs(t, f.srv, f.sid)
+	var homeRec map[string]any
+	for _, r := range recs {
+		if int64(r["player_id"].(float64)) == homeID {
+			homeRec = r
+		}
+	}
+	if homeRec == nil {
+		t.Fatal("player not found in recommendations")
+	}
+	// Only the 3 racks from the 8-ball season count; 9-ball racks excluded by game_format filter.
+	if got := int(homeRec["lifetime_racks"].(float64)); got != 3 {
+		t.Errorf("non-8ball excluded: want lifetime_racks=3, got %d (9-ball racks leaked)", got)
+	}
+	_, _ = awayID, season9ID
+}
+
+// TestHandicapReview_WeekReopeningSlideWindow verifies that reopening a closed match
+// removes its racks from the calculation and shrinks the window accordingly.
+func TestHandicapReview_WeekReopeningSlideWindow(t *testing.T) {
+	f := hrTestSeed(t)
+	hrSetRule(t, f.sid, "handicap_update_method", "game_diff_average")
+	hrSetRule(t, f.sid, "handicap_min_games_for_recommendation", "1")
+	hrSetRule(t, f.sid, "handicap_current_game_window", "4")
+
+	homeID := hrAddPlayer(t, f, f.teamA, 2.0, false)
+	awayID := hrAddPlayer(t, f, f.teamB, 3.0, false)
+
+	// Week 1 (older): 3 racks.
+	res, _ := db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, match_date, week_number, completed, week_closed) VALUES (?,?,?,'2026-01-01',1,1,1)`, f.sid, f.teamA, f.teamB)
+	mid1, _ := res.LastInsertId()
+	db.DB.Exec(`INSERT INTO round_results (match_id, round_number, home_player_id, away_player_id, game1_home, game1_away, game2_home, game2_away, game3_home, game3_away, home_handicap_used, away_handicap_used) VALUES (?,1,?,?,10,5,10,5,10,5,2.0,3.0)`,
+		mid1, homeID, awayID)
+
+	// Week 2 (more recent): 3 racks.
+	res, _ = db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, match_date, week_number, completed, week_closed) VALUES (?,?,?,'2026-02-01',2,1,1)`, f.sid, f.teamA, f.teamB)
+	mid2, _ := res.LastInsertId()
+	db.DB.Exec(`INSERT INTO round_results (match_id, round_number, home_player_id, away_player_id, game1_home, game1_away, game2_home, game2_away, game3_home, game3_away, home_handicap_used, away_handicap_used) VALUES (?,1,?,?,10,5,10,5,10,5,2.0,3.0)`,
+		mid2, homeID, awayID)
+
+	// Both closed: 6 total racks, window=4 -> window takes 4 most-recent racks.
+	recs1 := hrGetRecs(t, f.srv, f.sid)
+	var rec1 map[string]any
+	for _, r := range recs1 {
+		if int64(r["player_id"].(float64)) == homeID {
+			rec1 = r
+		}
+	}
+	if rec1 == nil {
+		t.Fatal("player not found before reopen")
+	}
+	if got := int(rec1["lifetime_racks"].(float64)); got != 6 {
+		t.Errorf("before reopen: want lifetime_racks=6, got %d", got)
+	}
+	if got := int(rec1["window_racks"].(float64)); got != 4 {
+		t.Errorf("before reopen: want window_racks=4 (window=4, total=6), got %d", got)
+	}
+
+	// Reopen the more-recent match (week 2).
+	db.DB.Exec(`UPDATE matches SET week_closed=0 WHERE id=?`, mid2)
+
+	// After reopen: only week 1's 3 racks remain; window_racks capped at available.
+	recs2 := hrGetRecs(t, f.srv, f.sid)
+	var rec2 map[string]any
+	for _, r := range recs2 {
+		if int64(r["player_id"].(float64)) == homeID {
+			rec2 = r
+		}
+	}
+	if rec2 == nil {
+		t.Fatal("player not found after reopen")
+	}
+	if got := int(rec2["lifetime_racks"].(float64)); got != 3 {
+		t.Errorf("after reopen: want lifetime_racks=3 (week2 removed), got %d", got)
+	}
+	if got := int(rec2["window_racks"].(float64)); got != 3 {
+		t.Errorf("after reopen: want window_racks=3 (fewer than window=4), got %d", got)
+	}
+}
+
+// TestCloseWeek_AdvanceResultHandicapShape verifies that the Close Week response's
+// advance_result.handicap uses PlayerHandicapRec fields (current_handicap,
+// recommended_handicap, matches_played) and not HandicapReviewRec fields.
+func TestCloseWeek_AdvanceResultHandicapShape(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
+	setHandicapMethod(t, f.sid, "game_diff_average")
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	ar, _ := result["advance_result"].(map[string]any)
+	if ar == nil {
+		t.Fatal("want advance_result in close response")
+	}
+	hc, _ := ar["handicap"].(map[string]any)
+	if hc == nil {
+		t.Fatal("want advance_result.handicap in close response")
+	}
+	recs, _ := hc["recommendations"].([]any)
+	if len(recs) == 0 {
+		t.Skip("no recommendations available -- cannot verify shape")
+	}
+	rec, _ := recs[0].(map[string]any)
+
+	// Must have PlayerHandicapRec fields.
+	if _, ok := rec["current_handicap"]; !ok {
+		t.Error("close week advance_result.handicap rec missing current_handicap (PlayerHandicapRec field)")
+	}
+	if _, ok := rec["recommended_handicap"]; !ok {
+		t.Error("close week advance_result.handicap rec missing recommended_handicap (PlayerHandicapRec field)")
+	}
+	if _, ok := rec["matches_played"]; !ok {
+		t.Error("close week advance_result.handicap rec missing matches_played (PlayerHandicapRec field)")
+	}
+	// Must NOT have HandicapReviewRec-only fields.
+	if _, ok := rec["assigned_hc"]; ok {
+		t.Error("close week advance_result.handicap must not contain assigned_hc (HandicapReviewRec field leaked)")
+	}
+	if _, ok := rec["window_hc"]; ok {
+		t.Error("close week advance_result.handicap must not contain window_hc (HandicapReviewRec field leaked)")
+	}
+}
+
+// TestHandicapReview_AdvancePreviewShapeUnchanged verifies that the advance-preview
+// response uses PlayerHandicapRec fields and is not contaminated by HandicapReviewRec fields.
+func TestHandicapReview_AdvancePreviewShapeUnchanged(t *testing.T) {
+	f := weekTestSeed(t)
+
+	db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'A')`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'B')`, f.sid, f.teamB)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, f.playerB)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=1 WHERE id=?`, f.sid)
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`,
+		f.sid, "handicap_update_method", "Method", "game_diff_average")
+
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil)
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks/1/advance-preview", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var preview map[string]any
+	json.NewDecoder(resp.Body).Decode(&preview)
+
+	hc, _ := preview["handicap"].(map[string]any)
+	if hc == nil {
+		t.Fatal("advance-preview: missing 'handicap' field")
+	}
+	recs, _ := hc["recommendations"].([]any)
+	if len(recs) == 0 {
+		return // no data is acceptable
+	}
+
+	rec, _ := recs[0].(map[string]any)
+	if _, ok := rec["current_handicap"]; !ok {
+		t.Error("advance-preview rec missing current_handicap (PlayerHandicapRec field)")
+	}
+	if _, ok := rec["recommended_handicap"]; !ok {
+		t.Error("advance-preview rec missing recommended_handicap (PlayerHandicapRec field)")
+	}
+	if _, ok := rec["matches_played"]; !ok {
+		t.Error("advance-preview rec missing matches_played (PlayerHandicapRec field)")
+	}
+	if _, ok := rec["assigned_hc"]; ok {
+		t.Error("advance-preview rec must not contain assigned_hc (HandicapReviewRec field)")
+	}
+	if _, ok := rec["window_hc"]; ok {
+		t.Error("advance-preview rec must not contain window_hc (HandicapReviewRec field)")
 	}
 }

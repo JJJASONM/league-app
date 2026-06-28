@@ -901,6 +901,47 @@ button; no edit controls.
 - `web/index.html` -- Handicap nav item and `#section-handicap` div
 - `web/app.js` -- `loadHandicapReview`, `renderHandicapReviewTable`
 
+## Phase 3E -- Handicap Snapshot Preservation in saveRounds (implemented 2026-06-27)
+
+### Goal
+
+Prevent re-saving a scoresheet from silently overwriting historical handicap
+snapshots (`home_handicap_used`, `away_handicap_used`) when a player's current
+handicap has changed since the original save. These columns feed the
+opponent-normalized Handicap Review calculation; corrupting them would
+invalidate historical rack samples.
+
+### Behavior
+
+`saveRounds` reads prior snapshot rows inside the active write transaction,
+**before** the DELETE. On re-insert, each side's snapshot is preserved or
+refreshed:
+
+| Scenario | home_handicap_used | away_handicap_used |
+|----------|-------------------|--------------------|
+| Same player on same side | Preserved from prior row | Preserved from prior row |
+| Player substituted | Fresh from `players.handicap` | Preserved (unchanged side) |
+| Both substituted | Fresh from `players.handicap` | Fresh from `players.handicap` |
+| First save (no prior row) | Fresh from `players.handicap` | Fresh from `players.handicap` |
+| Prior snapshot is NULL (legacy) | Fresh baseline at re-save | Fresh baseline at re-save |
+
+The snapshot query uses the active transaction (`tx.Query`) so it reads the
+pre-DELETE state. Errors from the query propagate as HTTP 500; no partial
+writes occur.
+
+### No schema change
+
+`home_handicap_used` and `away_handicap_used` were added via additive
+migration in an earlier phase. No new columns are needed.
+
+### Files changed
+
+- `handlers/api.go` -- `saveRounds`: reads prior snapshots into
+  `map[int]priorSnap` before `DELETE`; computes `homeHCToStore` / `awayHCToStore`
+  per-round on re-insert
+- `handlers/api_test.go` -- `TestSaveRounds_SnapshotPreservedOnResave`,
+  `TestSaveRounds_SubstitutionPreservesUnchangedSide`
+
 ## Close Week Validation (full target -- future phases)
 
 The backend validates the week's score data before official calculations are

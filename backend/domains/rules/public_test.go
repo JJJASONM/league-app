@@ -2,6 +2,17 @@ package rules
 
 import "testing"
 
+func TestHandicapWindowRulesPresent(t *testing.T) {
+	_, ok1 := Find("handicap_current_game_window")
+	_, ok2 := Find("handicap_min_games_for_recommendation")
+	if !ok1 {
+		t.Error("handicap_current_game_window not found in registry")
+	}
+	if !ok2 {
+		t.Error("handicap_min_games_for_recommendation not found in registry")
+	}
+}
+
 func TestDefinitionsReturnsCopy(t *testing.T) {
 	first := Definitions()
 	first[0].Label = "changed"
@@ -32,6 +43,14 @@ func TestValidateValue(t *testing.T) {
 		{name: "valid choice", key: "handicap_rounding", value: "nearest"},
 		{name: "invalid choice", key: "handicap_rounding", value: "random", wantErr: true},
 		{name: "legacy custom rule", key: "rule_123", value: "any text"},
+		// handicap_current_game_window
+		{name: "game_window valid", key: "handicap_current_game_window", value: "15"},
+		{name: "game_window zero", key: "handicap_current_game_window", value: "0", wantErr: true},
+		{name: "game_window fractional", key: "handicap_current_game_window", value: "7.5", wantErr: true},
+		// handicap_min_games_for_recommendation
+		{name: "min_games valid", key: "handicap_min_games_for_recommendation", value: "15"},
+		{name: "min_games zero", key: "handicap_min_games_for_recommendation", value: "0", wantErr: true},
+		{name: "min_games fractional", key: "handicap_min_games_for_recommendation", value: "7.5", wantErr: true},
 	}
 
 	for _, test := range tests {
