@@ -1,6 +1,7 @@
 package handlers_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -11,10 +12,26 @@ import (
 	"strings"
 	"testing"
 
+	"errors"
+
+	"league_app/backend/domainerr"
+	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/rules"
+	"league_app/backend/storage/sqlite"
 	"league_app/db"
 	"league_app/handlers"
+	"league_app/models"
 )
+
+// stubHandicapSvc is a test double for handlers.HandicapRecommender.
+// Set fn to control what Recommendations returns.
+type stubHandicapSvc struct {
+	fn func(ctx context.Context, seasonID int64) (models.HandicapReviewResponse, error)
+}
+
+func (s *stubHandicapSvc) Recommendations(ctx context.Context, seasonID int64) (models.HandicapReviewResponse, error) {
+	return s.fn(ctx, seasonID)
+}
 
 // testServer initializes a fresh SQLite database in a temp directory and
 // returns a running test HTTP server with all routes registered.
@@ -28,10 +45,180 @@ func testServer(t *testing.T) *httptest.Server {
 	// Close the DB before the temp dir is removed (required on Windows).
 	t.Cleanup(func() { db.DB.Close() })
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir)
+	hcStore := sqlite.NewHandicapStore(db.DB)
+	hcSvc := handicaps.NewService(hcStore)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc}
+	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// --- GET /api/seasons/{id}/handicap-recommendations (handler error mapping) ---
+
+func TestGetHandicapRecommendations_NotFound404(t *testing.T) {
+	dir := t.TempDir()
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	t.Cleanup(func() { db.DB.Close() })
+
+	stub := &stubHandicapSvc{fn: func(_ context.Context, _ int64) (models.HandicapReviewResponse, error) {
+		return models.HandicapReviewResponse{}, domainerr.New("HC_SEASON_NOT_FOUND", domainerr.NotFound, "season not found")
+	}}
+	mux := http.NewServeMux()
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/api/seasons/999/handicap-recommendations")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestGetHandicapRecommendations_InternalError500(t *testing.T) {
+	dir := t.TempDir()
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	t.Cleanup(func() { db.DB.Close() })
+
+	stub := &stubHandicapSvc{fn: func(_ context.Context, _ int64) (models.HandicapReviewResponse, error) {
+		return models.HandicapReviewResponse{}, domainerr.Wrap("HC_DATA_ERROR", domainerr.Internal, "internal error", fmt.Errorf("db offline"))
+	}}
+	mux := http.NewServeMux()
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/api/seasons/1/handicap-recommendations")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestGetHandicapRecommendations_Success200(t *testing.T) {
+	dir := t.TempDir()
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	t.Cleanup(func() { db.DB.Close() })
+
+	want := models.HandicapReviewResponse{
+		SeasonID:        7,
+		Method:          "manual_review",
+		Status:          "no_auto_apply",
+		Message:         "No handicap changes are applied automatically.",
+		WeeksClosed:     0,
+		Recommendations: []models.HandicapReviewRec{},
+	}
+	stub := &stubHandicapSvc{fn: func(_ context.Context, _ int64) (models.HandicapReviewResponse, error) {
+		return want, nil
+	}}
+	mux := http.NewServeMux()
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/api/seasons/7/handicap-recommendations")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("want 200, got %d", resp.StatusCode)
+	}
+	var got models.HandicapReviewResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.SeasonID != want.SeasonID || got.Status != want.Status || got.Method != want.Method {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// TestGetHandicapRecommendations_NonDomainError500NoLeak asserts that a plain
+// (non-domain) error returned by the service maps to 500 with a fixed safe body
+// and that the original cause string never appears in the response.
+func TestGetHandicapRecommendations_NonDomainError500NoLeak(t *testing.T) {
+	dir := t.TempDir()
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	t.Cleanup(func() { db.DB.Close() })
+
+	stub := &stubHandicapSvc{fn: func(_ context.Context, _ int64) (models.HandicapReviewResponse, error) {
+		return models.HandicapReviewResponse{}, errors.New("secret database path /var/db/prod.db")
+	}}
+	mux := http.NewServeMux()
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/api/seasons/1/handicap-recommendations")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("want 500, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "internal error") {
+		t.Errorf("want body to contain 'internal error', got: %s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "secret database path") {
+		t.Errorf("want cause NOT in body, but found it: %s", bodyStr)
+	}
+}
+
+// --- Registration nil-dependency tests ----------------------------------------
+
+func TestRegister_NilHandicapSvcPanics(t *testing.T) {
+	dir := t.TempDir()
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	t.Cleanup(func() { db.DB.Close() })
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("want panic when HandicapSvc is nil")
+		}
+	}()
+	mux := http.NewServeMux()
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: nil})
+}
+
+// TestRegister_TypedNilHandicapSvcPanics asserts that a typed nil (a nil concrete
+// pointer stored inside the HandicapRecommender interface) is also rejected.
+// A typed nil passes the == nil check but panics on the first method call.
+func TestRegister_TypedNilHandicapSvcPanics(t *testing.T) {
+	dir := t.TempDir()
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	t.Cleanup(func() { db.DB.Close() })
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("want panic when HandicapSvc is a typed nil")
+		}
+	}()
+	mux := http.NewServeMux()
+	var svc *stubHandicapSvc // typed nil: interface is non-nil but concrete pointer is nil
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: svc})
 }
 
 // seedSeason creates one league and one season, returning the season ID.

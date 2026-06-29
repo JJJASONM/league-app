@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"time"
 
+	"league_app/backend/domains/handicaps"
+	"league_app/backend/storage/sqlite"
 	"league_app/db"
 	"league_app/handlers"
 )
@@ -84,8 +86,13 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	// Wire domain services
+	hcStore := sqlite.NewHandicapStore(db.DB)
+	hcSvc := handicaps.NewService(hcStore)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc}
+
 	// API routes
-	handlers.Register(mux, *dataDir)
+	handlers.Register(mux, *dataDir, deps)
 
 	// Static files (SPA)
 	mux.Handle("/", http.FileServer(http.FS(webRoot)))

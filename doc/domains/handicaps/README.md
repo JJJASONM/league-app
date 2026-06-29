@@ -240,3 +240,82 @@ NULL-snapshot racks are excluded from both the calculation and the threshold
 count. Counting them toward the threshold would give false confidence: a player
 could appear eligible but have no calculable value if all their racks lacked
 opponent snapshots.
+
+## Data Access Phase A
+
+### Architecture
+
+```
+HTTP handler (handlers/api.go)
+  |-- HandicapRecommender interface (handlers/deps.go)
+        |-- *handicaps.Service (backend/domains/handicaps/service.go)
+              |-- handicaps.Store interface (backend/domains/handicaps/store.go)
+                    |-- *sqlite.HandicapStore (backend/storage/sqlite/handicap_store.go)
+                          |-- *sql.DB (db.DB)
+```
+
+All SQL lives in the adapter. The service has no SQL and does not import
+`database/sql`. The handler has no domain logic and does not import `db`.
+
+### Error flow
+
+```
+adapter error     -> fmt.Errorf wrap (no domainerr)
+service           -> translates to *domainerr.Err (CodeDataError, Internal)
+                    or returns *domainerr.Err (CodeSeasonNotFound, NotFound)
+                    or returns *domainerr.Err (CodeInvalidRule, Internal) for bad rules
+handler           -> domainerr.IsCategory -> 404 or 500
+                    domainerr.Err.Error() is safe for HTTP response bodies
+```
+
+`domainerr.Err.Error()` returns only `Message`, never `Cause`, so infrastructure
+details cannot leak through an unguarded `err.Error()` call in the handler.
+`Unwrap()` exposes `Cause` for logging and `errors.As` chain traversal.
+
+### Rule interpretation (service-owned)
+
+| Rule key | Absent/blank | Invalid/non-positive | Valid |
+|----------|-------------|----------------------|-------|
+| `handicap_update_method` | `"manual_review"` (default) | n/a (stored as string) | used as-is |
+| `handicap_current_game_window` | 15 (default) | `CodeInvalidRule` error | parsed int |
+| `handicap_min_games_for_recommendation` | 15 (default) | `CodeInvalidRule` error | parsed int |
+| `max_individual_handicap` | 4.5 (silent default) | 4.5 (silent default) | parsed float |
+
+Unknown `handicap_update_method` values fall through to the `game_diff_average`
+path. This preserves the prior handler behavior.
+
+### Transaction contract
+
+`RunTx` is called exactly once per `Recommendations` invocation. All five Store
+methods inside `compute` execute on the transaction-scoped Store, sharing a
+consistent read snapshot. The adapter owns `BeginTx`, `Commit`, and `Rollback`.
+Panics inside the callback trigger rollback before re-propagation.
+
+When the Store is already in a transaction (`inTx=true`), `RunTx` calls `fn`
+directly without nesting.
+
+### Test coverage
+
+| Layer | File | Notes |
+|-------|------|-------|
+| domainerr | `service_test.go` | `Error()` omits Cause |
+| service (unit) | `service_test.go` | stub Store; all method-routing and rule-parsing paths |
+| adapter (integration) | `handicap_store_test.go` | real SQLite via `db.Init(tempDir)` |
+| handler (stub-based) | `handlers/api_test.go` | 404/500/200 error-mapping via `stubHandicapSvc` |
+| handler (integration) | `handlers/api_test.go` | existing `TestHandicapRecs_*` and `TestHandicapReview_*` tests now run through the real service+adapter |
+
+### 2026-06-28 - Data Access Phase A: extract service and adapter
+
+**Status:** `accepted`
+
+The `getHandicapRecommendations` handler previously contained 250+ lines of SQL
+and business logic. Phase A extracted that into a three-layer stack:
+
+- `domainerr` -- shared domain error type; `Error()` is safe for HTTP bodies
+- `handicaps.Service` -- orchestrates reads, owns rule interpretation and rack accumulation
+- `sqlite.HandicapStore` -- owns all SQL; returns plain `fmt.Errorf` wraps; no domainerr import
+
+The handler is now a ~20-line thin delegator. The two extracted private functions
+(`seasonHandicapWindowConfig`, `computeOpponentNormalizedRecs`) were deleted from
+`handlers/api.go`. `seasonHandicapUpdateMethod` and `seasonMaxIndividualHC` were
+retained for the `buildAdvanceResult`/close-week path.

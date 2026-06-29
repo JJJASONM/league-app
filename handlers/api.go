@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"league_app/backend/domains/handicaps"
+	"reflect"
+
+	"league_app/backend/domainerr"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
@@ -24,7 +26,15 @@ import (
 )
 
 // Register mounts all API routes onto mux.
-func Register(mux *http.ServeMux, dataDir string) {
+func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
+	if deps.HandicapSvc == nil {
+		panic("handlers.Register: deps.HandicapSvc must not be nil")
+	}
+	// Reject a typed-nil: an interface holding a nil concrete pointer is not nil
+	// by == comparison but will panic on the first method call.
+	if v := reflect.ValueOf(deps.HandicapSvc); v.Kind() == reflect.Ptr && v.IsNil() {
+		panic("handlers.Register: deps.HandicapSvc must not be a typed nil")
+	}
 	// Leagues
 	mux.HandleFunc("GET /api/leagues", listLeagues)
 	mux.HandleFunc("POST /api/leagues", createLeague)
@@ -106,7 +116,10 @@ func Register(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen", reopenWeekHandler)
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", getWeekAcknowledgments)
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/advance-preview", getAdvancePreview)
-	mux.HandleFunc("GET /api/seasons/{id}/handicap-recommendations", getHandicapRecommendations)
+	hcSvc := deps.HandicapSvc
+	mux.HandleFunc("GET /api/seasons/{id}/handicap-recommendations", func(w http.ResponseWriter, r *http.Request) {
+		getHandicapRecommendations(w, r, hcSvc)
+	})
 
 	// Standings & stats
 	mux.HandleFunc("GET /api/standings", getStandings)
@@ -2230,398 +2243,40 @@ func getAdvancePreview(w http.ResponseWriter, r *http.Request) {
 
 // --- Handicap Review ---------------------------------------------------------
 
-// seasonHandicapWindowConfig returns the current-window size and eligibility
-// threshold for the opponent-normalized handicap calculation.
-// Missing or blank stored values default to 15. A stored non-integer, zero, or
-// negative value is an error; the caller propagates it as HTTP 500 so the invalid
-// configuration can be corrected via the Rules tab.
-func seasonHandicapWindowConfig(seasonID int64) (window, threshold int, err error) {
-	const defaultVal = 15
-
-	rows, err := db.DB.Query(`
-		SELECT rule_key, rule_value FROM season_rules
-		WHERE season_id=? AND rule_key IN
-		('handicap_current_game_window','handicap_min_games_for_recommendation')`,
-		seasonID)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer rows.Close()
-
-	window = defaultVal
-	threshold = defaultVal
-
-	for rows.Next() {
-		var key, val string
-		if err := rows.Scan(&key, &val); err != nil {
-			return 0, 0, err
-		}
-		if val == "" {
-			continue // absent/blank = use default, not an error
-		}
-		f, parseErr := strconv.ParseFloat(val, 64)
-		if parseErr != nil || f != float64(int64(f)) {
-			return 0, 0, fmt.Errorf("rule %s: %q is not a valid integer", key, val)
-		}
-		n := int(f)
-		if n <= 0 {
-			return 0, 0, fmt.Errorf("rule %s: value %d must be >= 1", key, n)
-		}
-		switch key {
-		case "handicap_current_game_window":
-			window = n
-		case "handicap_min_games_for_recommendation":
-			threshold = n
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, 0, err
-	}
-	return window, threshold, nil
-}
-
-// computeOpponentNormalizedRecs returns per-player handicap recommendations for the
-// Handicap Review screen using the opponent-normalized rack formula.
-//
-// Review population: season_teams + season_rosters (season-specific membership).
-// Team name: season_teams.season_name (season snapshot, not the permanent team name).
-//
-// Rack data: all eligible 8-ball game racks for each player ID, cross-league and
-// cross-season. Racks are eligible when their match has completed=1 AND week_closed=1
-// and the league game_format is '8ball'. Within a round_results row, game slots are
-// iterated in DESC order (game3, game2, game1) so the most-recent racks sort first.
-//
-// Opponent snapshot direction: when the reviewed player is HOME, the opponent HC
-// baseline is away_handicap_used. When AWAY, the baseline is home_handicap_used.
-// A rack is excluded (counted in missing_snapshot_racks) when the opponent snapshot
-// is NULL; excluded racks do not count toward the eligibility threshold.
-//
-// No writes are performed anywhere.
-func computeOpponentNormalizedRecs(seasonID int64, window, threshold int, maxHC float64) ([]models.HandicapReviewRec, error) {
-	// 1. Roster: players registered for this season via season_teams + season_rosters.
-	type rosterEntry struct {
-		PlayerID   int64
-		PlayerName string
-		TeamName   string  // season_teams.season_name
-		AssignedHC float64 // players.handicap at query time
-		AdminHold  bool
-	}
-
-	rosterRows, err := db.DB.Query(`
-		SELECT sr.player_id,
-		       p.first_name || ' ' || p.last_name,
-		       st.season_name,
-		       p.handicap,
-		       p.admin_hold
-		FROM season_rosters sr
-		JOIN players p     ON p.id        = sr.player_id
-		JOIN season_teams st ON st.season_id = sr.season_id AND st.team_id = sr.team_id
-		WHERE sr.season_id = ?
-		ORDER BY st.season_name, p.last_name, p.first_name`,
-		seasonID)
-	if err != nil {
-		return nil, err
-	}
-
-	var roster []rosterEntry
-	rosterSet := make(map[int64]bool)
-	for rosterRows.Next() {
-		var e rosterEntry
-		var adminHold int
-		if err := rosterRows.Scan(&e.PlayerID, &e.PlayerName, &e.TeamName, &e.AssignedHC, &adminHold); err != nil {
-			rosterRows.Close()
-			return nil, err
-		}
-		e.AdminHold = adminHold != 0
-		roster = append(roster, e)
-		rosterSet[e.PlayerID] = true
-	}
-	if err := rosterRows.Err(); err != nil {
-		return nil, err
-	}
-	rosterRows.Close()
-
-	if len(roster) == 0 {
-		return []models.HandicapReviewRec{}, nil
-	}
-
-	// 2. Bulk rack query: one query for all rostered player IDs.
-	// Bounded by roster size (typically 9-18 players for a 3-6 team season).
-	playerIDs := make([]int64, len(roster))
-	for i, e := range roster {
-		playerIDs[i] = e.PlayerID
-	}
-	ph := strings.Repeat("?,", len(playerIDs))
-	ph = ph[:len(ph)-1]
-
-	args := make([]any, len(playerIDs)*2)
-	for i, pid := range playerIDs {
-		args[i] = pid
-		args[len(playerIDs)+i] = pid
-	}
-
-	// ORDER BY ensures most-recent-first so window slicing in ComputeImpliedHandicap
-	// takes the correct racks; game slots within a row are iterated 3,2,1 (DESC).
-	rackRows, err := db.DB.Query(fmt.Sprintf(`
-		SELECT rr.home_player_id, rr.away_player_id,
-		       rr.game1_home, rr.game1_away,
-		       rr.game2_home, rr.game2_away,
-		       rr.game3_home, rr.game3_away,
-		       rr.home_handicap_used, rr.away_handicap_used
-		FROM round_results rr
-		JOIN matches m  ON m.id  = rr.match_id
-		JOIN seasons  s ON s.id  = m.season_id
-		JOIN leagues  l ON l.id  = s.league_id
-		WHERE (rr.home_player_id IN (%s) OR rr.away_player_id IN (%s))
-		  AND m.completed   = 1
-		  AND m.week_closed = 1
-		  AND l.game_format = '8ball'
-		ORDER BY m.match_date DESC, m.id DESC, rr.round_number DESC`,
-		ph, ph), args...)
-	if err != nil {
-		return nil, err
-	}
-
-	type rackAccum struct {
-		scoreEligible   int
-		missingSnapshot int
-		samples         []handicaps.RackSample
-	}
-	accum := make(map[int64]*rackAccum, len(roster))
-	for _, e := range roster {
-		accum[e.PlayerID] = &rackAccum{}
-	}
-
-	for rackRows.Next() {
-		var (
-			homePlayerID, awayPlayerID              int64
-			g1h, g1a, g2h, g2a, g3h, g3a           int
-			homeHCUsed, awayHCUsed                  sql.NullFloat64
-		)
-		if err := rackRows.Scan(
-			&homePlayerID, &awayPlayerID,
-			&g1h, &g1a, &g2h, &g2a, &g3h, &g3a,
-			&homeHCUsed, &awayHCUsed,
-		); err != nil {
-			rackRows.Close()
-			return nil, err
-		}
-
-		// Game slots iterated in DESC order (game3, game2, game1) to maintain
-		// most-recent-first ordering within a row.
-		type slot struct{ player, opp int }
-		homeSlots := []slot{{g3h, g3a}, {g2h, g2a}, {g1h, g1a}}
-		awaySlots := []slot{{g3a, g3h}, {g2a, g2h}, {g1a, g1h}}
-
-		processSlots := func(pid int64, slots []slot, opponentHC sql.NullFloat64) {
-			acc, ok := accum[pid]
-			if !ok {
-				return
-			}
-			for _, s := range slots {
-				// Eligibility: exactly one player scores 10 (wins), the other 0-7.
-				eligible := (s.player == 10 && s.opp >= 0 && s.opp <= 7) ||
-					(s.opp == 10 && s.player >= 0 && s.player <= 7)
-				if !eligible {
-					continue
-				}
-				acc.scoreEligible++
-				if !opponentHC.Valid {
-					acc.missingSnapshot++
-					continue
-				}
-				acc.samples = append(acc.samples, handicaps.RackSample{
-					OpponentHC: opponentHC.Float64,
-					RackDiff:   float64(s.player - s.opp),
-				})
-			}
-		}
-
-		// When the reviewed player is HOME, opponent HC = away_handicap_used; vice versa.
-		if rosterSet[homePlayerID] {
-			processSlots(homePlayerID, homeSlots, awayHCUsed)
-		}
-		if rosterSet[awayPlayerID] {
-			processSlots(awayPlayerID, awaySlots, homeHCUsed)
-		}
-	}
-	if err := rackRows.Err(); err != nil {
-		return nil, err
-	}
-	rackRows.Close()
-
-	// 3. Build recommendations.
-	recs := make([]models.HandicapReviewRec, 0, len(roster))
-	for _, e := range roster {
-		acc := accum[e.PlayerID]
-		included := acc.scoreEligible - acc.missingSnapshot
-		result := handicaps.ComputeImpliedHandicap(acc.samples, window)
-
-		rec := models.HandicapReviewRec{
-			PlayerID:             e.PlayerID,
-			PlayerName:           e.PlayerName,
-			TeamName:             e.TeamName,
-			AdminHold:            e.AdminHold,
-			AssignedHC:           e.AssignedHC,
-			ScoreEligibleRacks:   acc.scoreEligible,
-			MissingSnapshotRacks: acc.missingSnapshot,
-			IncludedRacks:        included,
-			WindowSize:           window,
-			EligibilityThreshold: threshold,
-			LifetimeRacks:        result.LifetimeRacks,
-			WindowRacks:          result.WindowRacks,
-		}
-
-		if result.LifetimeRacks > 0 {
-			lhc := result.LifetimeImplied
-			rec.LifetimeHC = &lhc
-			whc := result.WindowImplied
-			rec.WindowHC = &whc
-		}
-
-		// Reason priority: no_data > admin_hold > below_threshold > capped > no_change > "".
-		switch {
-		case included == 0:
-			rec.Reason = "no_data"
-		case e.AdminHold:
-			rec.Reason = "admin_hold"
-		case result.WindowRacks < threshold:
-			rec.Reason = "below_threshold"
-		default:
-			recommended := result.WindowImplied
-			capped := false
-			if recommended > maxHC {
-				recommended = math.Round(maxHC*100) / 100
-				capped = true
-			} else if recommended < -maxHC {
-				recommended = math.Round(-maxHC*100) / 100
-				capped = true
-			}
-			rec.RecommendedHC = &recommended
-			change := math.Round((recommended-e.AssignedHC)*100) / 100
-			rec.ChangeAmount = &change
-			switch {
-			case capped:
-				rec.Reason = "capped"
-			case recommended == math.Round(e.AssignedHC*100)/100:
-				rec.Reason = "no_change"
-			}
-		}
-
-		recs = append(recs, rec)
-	}
-	return recs, nil
-}
-
 // getHandicapRecommendations handles GET /api/seasons/{id}/handicap-recommendations.
-// Returns season-wide read-only handicap recommendations based on all closed weeks.
-// No writes are performed to players, handicap_history, or any other table.
-// Recommendations recompute live; reopening a week automatically removes its data
-// from the next response because reopened matches have week_closed=0.
-func getHandicapRecommendations(w http.ResponseWriter, r *http.Request) {
+// Delegates to the handicaps.Service; translates domainerr.Category to HTTP status.
+// No DB access in this handler; all logic lives in the service and adapter.
+//
+// Error mapping:
+//   - domainerr.NotFound     -> 404 with the safe domain Message
+//   - domainerr.InvalidInput -> 400 with the safe domain Message
+//   - domainerr.Internal     -> 500 with the safe domain Message
+//   - any non-domain error   -> 500 with fixed text "internal error" (no cause leak)
+func getHandicapRecommendations(w http.ResponseWriter, r *http.Request, svc HandicapRecommender) {
 	seasonID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-
-	var exists int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM seasons WHERE id=?`, seasonID).Scan(&exists); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if exists == 0 {
-		jsonError(w, "season not found", http.StatusNotFound)
-		return
-	}
-
-	method, err := seasonHandicapUpdateMethod(seasonID)
+	resp, err := svc.Recommendations(r.Context(), seasonID)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	emptyResponse := func(status, message string, weeksClosed int) {
-		jsonOK(w, models.HandicapReviewResponse{
-			SeasonID:        seasonID,
-			Method:          method,
-			Status:          status,
-			Message:         message,
-			WeeksClosed:     weeksClosed,
-			Recommendations: []models.HandicapReviewRec{},
-		})
-	}
-
-	switch method {
-	case "manual_review":
-		emptyResponse("no_auto_apply",
-			"No handicap changes are applied automatically. Update player handicaps manually via the Players tab.",
-			0)
-		return
-	case "kicker_average_preview":
-		emptyResponse("unsupported",
-			"kicker_average_preview is not yet implemented. No changes are applied automatically.",
-			0)
-		return
-	}
-
-	// game_diff_average path.
-	var weeksClosed int
-	if err := db.DB.QueryRow(
-		`SELECT COUNT(DISTINCT week_number) FROM matches WHERE season_id=? AND week_closed=1`,
-		seasonID).Scan(&weeksClosed); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if weeksClosed == 0 {
-		emptyResponse("no_data",
-			"No closed weeks available. Close a week to generate handicap recommendations.",
-			0)
-		return
-	}
-
-	window, threshold, err := seasonHandicapWindowConfig(seasonID)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	maxHC, err := seasonMaxIndividualHC(seasonID)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	recs, err := computeOpponentNormalizedRecs(seasonID, window, threshold, maxHC)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	changed := 0
-	for _, rec := range recs {
-		if rec.RecommendedHC != nil && rec.Reason != "no_change" {
-			changed++
+		var de *domainerr.Err
+		if errors.As(err, &de) {
+			switch de.Category {
+			case domainerr.NotFound:
+				jsonError(w, de.Message, http.StatusNotFound)
+			case domainerr.InvalidInput:
+				jsonError(w, de.Message, http.StatusBadRequest)
+			default:
+				jsonError(w, de.Message, http.StatusInternalServerError)
+			}
+		} else {
+			// Non-domain error: never expose the cause to the client.
+			jsonError(w, "internal error", http.StatusInternalServerError)
 		}
+		return
 	}
-	var msg string
-	switch {
-	case changed == 0:
-		msg = "No handicap changes recommended. Review complete."
-	case changed == 1:
-		msg = "1 player has a recommended handicap change (not yet applied)."
-	default:
-		msg = fmt.Sprintf("%d players have recommended handicap changes (not yet applied).", changed)
-	}
-
-	jsonOK(w, models.HandicapReviewResponse{
-		SeasonID:        seasonID,
-		Method:          method,
-		Status:          "preview",
-		Message:         msg,
-		WeeksClosed:     weeksClosed,
-		Recommendations: recs,
-	})
+	jsonOK(w, resp)
 }
 
 // ─── Standings ────────────────────────────────────────────────────────────────
