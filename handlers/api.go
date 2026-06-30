@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	"league_app/backend/domainerr"
+	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
@@ -416,6 +417,15 @@ func deletePlayer(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
+		return
+	}
+	var historyCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM handicap_history WHERE player_id = ?`, id).Scan(&historyCount); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if historyCount > 0 {
+		jsonError(w, "This player has handicap history records and cannot be deleted. Deactivate the player instead.", 409)
 		return
 	}
 	if _, err := db.DB.Exec(`DELETE FROM players WHERE id=?`, id); err != nil {
@@ -2277,6 +2287,146 @@ func getHandicapRecommendations(w http.ResponseWriter, r *http.Request, svc Hand
 		return
 	}
 	jsonOK(w, resp)
+}
+
+// --- Handicap Apply ----------------------------------------------------------
+
+// applyEntryDTO is the handler-local JSON shape for one entry in an apply request.
+// It uses pointer types so missing fields can be detected as nil.
+// Never exported; conversion to handicaps.ApplyEntry happens in postHandicapApply.
+type applyEntryDTO struct {
+	PlayerID              *int64   `json:"player_id"`
+	ExpectedAssignedHC    *float64 `json:"expected_assigned_hc"`
+	ExpectedRecommendedHC *float64 `json:"expected_recommended_hc"`
+	RecToken              *string  `json:"rec_token"`
+}
+
+// applyRequestDTO is the handler-local JSON shape for the apply request body.
+type applyRequestDTO struct {
+	ApplyRequestID *string         `json:"apply_request_id"`
+	Entries        []applyEntryDTO `json:"entries"`
+}
+
+// isFiniteFloat mirrors isFiniteHC for handler-side validation of decoded floats.
+func isFiniteFloat(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+// postHandicapApply handles POST /api/seasons/{id}/handicap-apply.
+// This handler is NOT registered in Register() during Phase B1.
+// It will be registered in Phase B2 once route-level auth is in place.
+//
+// Error mapping:
+//   - domainerr.InvalidInput  -> 400
+//   - domainerr.NotFound      -> 404
+//   - domainerr.Conflict      -> 409
+//   - domainerr.Unprocessable -> 422
+//   - *ApplyConflictErr       -> 409
+//   - *ApplyRejectionErr      -> 422
+//   - domainerr.Internal      -> 500
+func postHandicapApply(w http.ResponseWriter, r *http.Request, svc HandicapApplier) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+
+	var dto applyRequestDTO
+	if err := decode(r, &dto); err != nil {
+		jsonError(w, "invalid body", 400)
+		return
+	}
+
+	// Validate required fields at the handler boundary.
+	if dto.ApplyRequestID == nil {
+		jsonError(w, "apply_request_id is required", 400)
+		return
+	}
+	if dto.Entries == nil {
+		jsonError(w, "entries is required", 400)
+		return
+	}
+
+	entries := make([]handicaps.ApplyEntry, 0, len(dto.Entries))
+	for i, e := range dto.Entries {
+		if e.PlayerID == nil {
+			jsonError(w, fmt.Sprintf("entry[%d]: player_id is required", i), 400)
+			return
+		}
+		if e.ExpectedAssignedHC == nil {
+			jsonError(w, fmt.Sprintf("entry[%d]: expected_assigned_hc is required", i), 400)
+			return
+		}
+		if !isFiniteFloat(*e.ExpectedAssignedHC) {
+			jsonError(w, fmt.Sprintf("entry[%d]: expected_assigned_hc must be finite", i), 400)
+			return
+		}
+		if e.ExpectedRecommendedHC == nil {
+			jsonError(w, fmt.Sprintf("entry[%d]: expected_recommended_hc is required", i), 400)
+			return
+		}
+		if !isFiniteFloat(*e.ExpectedRecommendedHC) {
+			jsonError(w, fmt.Sprintf("entry[%d]: expected_recommended_hc must be finite", i), 400)
+			return
+		}
+		if e.RecToken == nil {
+			jsonError(w, fmt.Sprintf("entry[%d]: rec_token is required", i), 400)
+			return
+		}
+		entries = append(entries, handicaps.ApplyEntry{
+			PlayerID:              *e.PlayerID,
+			ExpectedAssignedHC:    *e.ExpectedAssignedHC,
+			ExpectedRecommendedHC: *e.ExpectedRecommendedHC,
+			RecToken:              *e.RecToken,
+			// AppliedByUserID: nil in B1; populated from auth context in B2
+		})
+	}
+
+	req := handicaps.ApplyRequest{
+		ApplyRequestID: *dto.ApplyRequestID,
+		Entries:        entries,
+	}
+
+	result, err := svc.Apply(r.Context(), seasonID, req)
+	if err != nil {
+		var conflictErr *handicaps.ApplyConflictErr
+		var rejectionErr *handicaps.ApplyRejectionErr
+		var de *domainerr.Err
+
+		switch {
+		case errors.As(err, &conflictErr):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":     "apply conflicts must be resolved before retrying",
+				"conflicts": conflictErr.Conflicts,
+			})
+		case errors.As(err, &rejectionErr):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":      "one or more players are not eligible for apply",
+				"rejections": rejectionErr.Rejections,
+			})
+		case errors.As(err, &de):
+			switch de.Category {
+			case domainerr.NotFound:
+				jsonError(w, de.Message, http.StatusNotFound)
+			case domainerr.InvalidInput:
+				jsonError(w, de.Message, http.StatusBadRequest)
+			case domainerr.Conflict:
+				jsonError(w, de.Message, http.StatusConflict)
+			case domainerr.Unprocessable:
+				jsonError(w, de.Message, http.StatusUnprocessableEntity)
+			default:
+				jsonError(w, de.Message, http.StatusInternalServerError)
+			}
+		default:
+			jsonError(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	jsonOK(w, result)
 }
 
 // ─── Standings ────────────────────────────────────────────────────────────────

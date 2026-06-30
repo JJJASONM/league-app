@@ -10,8 +10,10 @@ type Category int
 
 const (
 	NotFound     Category = iota
-	InvalidInput          // reserved for future phases; unused in Phase A
-	Internal
+	InvalidInput          // 400
+	Conflict              // 409
+	Unprocessable         // 422
+	Internal              // 500
 )
 
 // Err is a domain error. Error() returns only the safe Message field so that

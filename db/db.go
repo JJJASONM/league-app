@@ -322,6 +322,23 @@ CREATE INDEX IF NOT EXISTS idx_season_rosters_pid ON season_rosters(player_id);
 		// Close Week gate: set to 1 when the match's week has been officially closed.
 		// Standings filter on week_closed=1 so only official results count.
 		`ALTER TABLE matches ADD COLUMN week_closed INTEGER NOT NULL DEFAULT 0`,
+		// Phase B: Apply endpoint audit columns on handicap_history.
+		// All errors ignored — fresh DBs have these columns from the CREATE TABLE schema.
+		`ALTER TABLE handicap_history ADD COLUMN apply_request_id     TEXT`,
+		`ALTER TABLE handicap_history ADD COLUMN request_hash         TEXT`,
+		`ALTER TABLE handicap_history ADD COLUMN player_name_snapshot TEXT`,
+		`ALTER TABLE handicap_history ADD COLUMN season_id            INTEGER REFERENCES seasons(id)`,
+		`ALTER TABLE handicap_history ADD COLUMN method               TEXT`,
+		`ALTER TABLE handicap_history ADD COLUMN window_size          INTEGER`,
+		`ALTER TABLE handicap_history ADD COLUMN window_racks         INTEGER`,
+		`ALTER TABLE handicap_history ADD COLUMN lifetime_racks       INTEGER`,
+		`ALTER TABLE handicap_history ADD COLUMN rec_token            TEXT`,
+		`ALTER TABLE handicap_history ADD COLUMN applied_by_user_id   INTEGER`,
+		// Idempotency index: one history row per (apply_request_id, player_id).
+		// WHERE clause excludes legacy rows where apply_request_id IS NULL.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hc_history_apply_idempotent
+		 ON handicap_history(apply_request_id, player_id)
+		 WHERE apply_request_id IS NOT NULL`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs

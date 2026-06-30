@@ -144,7 +144,10 @@ func (s *Service) compute(ctx context.Context, tx Store, seasonID int64) (models
 		return models.HandicapReviewResponse{}, domainerr.Wrap(CodeDataError, domainerr.Internal, "internal error", err)
 	}
 
-	recs := s.buildRecs(roster, rosterSet, racks, window, threshold, maxHC)
+	recs, err := s.buildRecs(roster, rosterSet, racks, seasonID, window, threshold, maxHC)
+	if err != nil {
+		return models.HandicapReviewResponse{}, err
+	}
 
 	changed := 0
 	for _, rec := range recs {
@@ -202,15 +205,14 @@ func (s *Service) interpretWindowConfig(rules HandicapRuleRow) (window, threshol
 	return window, threshold, nil
 }
 
-// interpretMaxHC parses max_individual_handicap. Invalid or absent values silently
-// default to 4.5. This matches the current handler behavior (seasonMaxIndividualHC
-// also silently defaults on parse failure).
+// interpretMaxHC parses max_individual_handicap. Invalid, absent, or non-finite
+// values silently default to 4.5 (same as seasonMaxIndividualHC in handlers).
 func (s *Service) interpretMaxHC(rules HandicapRuleRow) float64 {
 	if rules.MaxHC == nil || *rules.MaxHC == "" {
 		return 4.5
 	}
 	f, err := strconv.ParseFloat(*rules.MaxHC, 64)
-	if err != nil || f <= 0 {
+	if err != nil || !isFiniteHC(f) || f <= 0 {
 		return 4.5
 	}
 	return f
@@ -219,13 +221,16 @@ func (s *Service) interpretMaxHC(rules HandicapRuleRow) float64 {
 // buildRecs accumulates rack samples and constructs per-player HandicapReviewRec entries.
 // Rack slot ordering (game3, game2, game1 within each row) preserves most-recent-first
 // ordering established by the EligibleRacks query.
+// A rec token is computed for each actionable player and stored in rec.RecToken.
+// Returns an error if token computation fails (non-finite sample data).
 func (s *Service) buildRecs(
 	roster []RosterEntry,
 	rosterSet map[int64]bool,
 	racks []RackRow,
+	seasonID int64,
 	window, threshold int,
 	maxHC float64,
-) []models.HandicapReviewRec {
+) ([]models.HandicapReviewRec, error) {
 	type rackAccum struct {
 		scoreEligible   int
 		missingSnapshot int
@@ -331,7 +336,37 @@ func (s *Service) buildRecs(
 			}
 		}
 
+		// Compute rec token for actionable players only (eligible for Apply).
+		if rec.Reason == "" || rec.Reason == "capped" {
+			allSamples := make([]tokenSample, len(acc.samples))
+			for i, s := range acc.samples {
+				allSamples[i] = tokenSample{OppHC: s.OpponentHC, RackDiff: s.RackDiff}
+			}
+			// Normalize to 0.01 precision before hashing: float noise in the stored
+			// handicap (e.g. 2.4999999 vs 2.50) must not produce different tokens.
+			assignedHCNorm    := math.Round(e.AssignedHC*100) / 100
+			recommendedHCNorm := math.Round(*rec.RecommendedHC*100) / 100
+			tok, tokErr := computeRecToken(recTokenInput{
+				Version:       1,
+				SeasonID:      seasonID,
+				PlayerID:      e.PlayerID,
+				AssignedHC:    assignedHCNorm,
+				Method:        "game_diff_average",
+				WindowSize:    window,
+				Threshold:     threshold,
+				MaxHC:         maxHC,
+				AllSamples:    allSamples,
+				LifetimeRacks: result.LifetimeRacks,
+				WindowRacks:   result.WindowRacks,
+				RecommendedHC: recommendedHCNorm,
+			})
+			if tokErr != nil {
+				return nil, domainerr.Wrap(CodeDataError, domainerr.Internal, "failed to compute rec token", tokErr)
+			}
+			rec.RecToken = tok
+		}
+
 		recs = append(recs, rec)
 	}
-	return recs
+	return recs, nil
 }

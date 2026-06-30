@@ -342,6 +342,11 @@ type HandicapReviewRec struct {
 
 	// Reason: "" | "no_data" | "admin_hold" | "below_threshold" | "capped" | "no_change"
 	Reason string `json:"reason"`
+
+	// RecToken is an opaque versioned hash committing to the full recommendation
+	// inputs. Populated only for actionable players (RecommendedHC != nil).
+	// Required by the Apply endpoint to detect stale recommendations.
+	RecToken string `json:"rec_token,omitempty"`
 }
 
 // HandicapReviewResponse is the response for GET /api/seasons/{id}/handicap-recommendations.

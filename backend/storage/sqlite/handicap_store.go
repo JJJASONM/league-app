@@ -14,9 +14,11 @@ import (
 
 // querier is satisfied by both *sql.DB and *sql.Tx, allowing HandicapStore
 // to share query methods across transactional and non-transactional contexts.
+// ExecContext is required by the Phase B write methods on the tx-scoped store.
 type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // HandicapStore implements handicaps.Store against a SQLite database.

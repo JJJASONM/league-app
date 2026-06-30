@@ -14,8 +14,10 @@ import (
 // ============================================================================
 
 // stubStore implements handicaps.Store using in-memory data.
-// RunTx calls fn(s) directly so the same stub serves as both root and tx store.
+// RunTx and RunWriteTx both call fn(s) directly so the same stub serves as
+// both root and tx-scoped store.
 type stubStore struct {
+	// Read-side fields
 	seasonExists    bool
 	seasonExistsErr error
 	closedWeeks     int
@@ -26,9 +28,20 @@ type stubStore struct {
 	rosterErr       error
 	racks           []handicaps.RackRow
 	racksErr        error
+
+	// Write-side fields (Phase B)
+	priorHistory       []handicaps.AppliedHistory
+	priorHistoryErr    error
+	updateHCUpdated    bool
+	updateHCErr        error
+	insertHistoryErr   error
+	insertedHistoryRows []handicaps.HandicapHistoryRow
 }
 
 func (s *stubStore) RunTx(_ context.Context, fn func(handicaps.Store) error) error {
+	return fn(s)
+}
+func (s *stubStore) RunWriteTx(_ context.Context, fn func(handicaps.Store) error) error {
 	return fn(s)
 }
 func (s *stubStore) SeasonExists(_ context.Context, _ int64) (bool, error) {
@@ -46,18 +59,35 @@ func (s *stubStore) SeasonRoster(_ context.Context, _ int64) ([]handicaps.Roster
 func (s *stubStore) EligibleRacks(_ context.Context, _ []int64) ([]handicaps.RackRow, error) {
 	return s.racks, s.racksErr
 }
+func (s *stubStore) AppliedChangesByRequestID(_ context.Context, _ string) ([]handicaps.AppliedHistory, error) {
+	if s.priorHistory == nil {
+		return []handicaps.AppliedHistory{}, s.priorHistoryErr
+	}
+	return s.priorHistory, s.priorHistoryErr
+}
+func (s *stubStore) UpdatePlayerHandicap(_ context.Context, _ int64, _, _ float64) (bool, error) {
+	return s.updateHCUpdated, s.updateHCErr
+}
+func (s *stubStore) InsertHandicapHistory(_ context.Context, row handicaps.HandicapHistoryRow) error {
+	s.insertedHistoryRows = append(s.insertedHistoryRows, row)
+	return s.insertHistoryErr
+}
 
 // runTxTrackingStore counts RunTx calls and panics on direct data-method calls.
 // This proves that Recommendations calls RunTx exactly once and that all reads
 // go through the tx-scoped Store passed to the callback, not the root Store.
+// Phase B write methods panic so Recommendations tests can detect unexpected writes.
 type runTxTrackingStore struct {
-	inner    *stubStore
-	runTxN   int
+	inner  *stubStore
+	runTxN int
 }
 
 func (s *runTxTrackingStore) RunTx(_ context.Context, fn func(handicaps.Store) error) error {
 	s.runTxN++
 	return fn(s.inner)
+}
+func (s *runTxTrackingStore) RunWriteTx(_ context.Context, _ func(handicaps.Store) error) error {
+	panic("RunWriteTx called on Recommendations-only tracking store")
 }
 func (s *runTxTrackingStore) SeasonExists(_ context.Context, _ int64) (bool, error) {
 	panic("SeasonExists called directly on root store")
@@ -73,6 +103,15 @@ func (s *runTxTrackingStore) SeasonRoster(_ context.Context, _ int64) ([]handica
 }
 func (s *runTxTrackingStore) EligibleRacks(_ context.Context, _ []int64) ([]handicaps.RackRow, error) {
 	panic("EligibleRacks called directly on root store")
+}
+func (s *runTxTrackingStore) AppliedChangesByRequestID(_ context.Context, _ string) ([]handicaps.AppliedHistory, error) {
+	panic("AppliedChangesByRequestID called on Recommendations-only tracking store")
+}
+func (s *runTxTrackingStore) UpdatePlayerHandicap(_ context.Context, _ int64, _, _ float64) (bool, error) {
+	panic("UpdatePlayerHandicap called on Recommendations-only tracking store")
+}
+func (s *runTxTrackingStore) InsertHandicapHistory(_ context.Context, _ handicaps.HandicapHistoryRow) error {
+	panic("InsertHandicapHistory called on Recommendations-only tracking store")
 }
 
 func ptr(s string) *string { return &s }

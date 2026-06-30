@@ -89,7 +89,10 @@ func main() {
 	// Wire domain services
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc}
+	deps := handlers.Dependencies{
+		HandicapSvc:     hcSvc,
+		HandicapApplier: hcSvc,
+	}
 
 	// API routes
 	handlers.Register(mux, *dataDir, deps)
