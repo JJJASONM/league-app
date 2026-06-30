@@ -67,6 +67,27 @@ function Backup-StagingDatabase {
     return $backup
 }
 
+function Resolve-LeagueAdminToken {
+    # Precedence: current session -> User environment -> Machine environment.
+    # A value already present in the session (explicitly set by the caller for
+    # this run) wins over the persisted registry values.
+    if ($env:LEAGUE_ADMIN_TOKEN) {
+        return $env:LEAGUE_ADMIN_TOKEN
+    }
+
+    $userToken = [System.Environment]::GetEnvironmentVariable('LEAGUE_ADMIN_TOKEN', 'User')
+    if ($userToken) {
+        return $userToken
+    }
+
+    $machineToken = [System.Environment]::GetEnvironmentVariable('LEAGUE_ADMIN_TOKEN', 'Machine')
+    if ($machineToken) {
+        return $machineToken
+    }
+
+    return $null
+}
+
 function Start-StagingApp {
     param(
         [string]$StagingRoot,
@@ -76,6 +97,18 @@ function Start-StagingApp {
     $executable = Join-Path $StagingRoot 'app\league_app.exe'
     if (-not (Test-Path -LiteralPath $executable)) {
         throw "Staging executable not found: $executable"
+    }
+
+    # Start-Process inherits the current session's environment block. The
+    # session may lack LEAGUE_ADMIN_TOKEN even when it is set at the User or
+    # Machine level (e.g. set after the session started, or by a different
+    # process), so resolve it explicitly and inject it into the session before
+    # launching the child. Never invent a value.
+    $token = Resolve-LeagueAdminToken
+    if ($token) {
+        $env:LEAGUE_ADMIN_TOKEN = $token
+    } else {
+        Write-Warning 'LEAGUE_ADMIN_TOKEN not found in session, User, or Machine environment — Apply route will not mount.'
     }
 
     $data = Join-Path $StagingRoot 'data'
