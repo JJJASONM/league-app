@@ -5,14 +5,22 @@
 **Owner:** `matches`
 **Status:** `draft`
 **Current version:** `0.2`
-**Last reviewed:** `2026-06-08`
+**Last reviewed:** `2026-06-29`
 
-The Matches domain owns match participation, result entry, finalization,
-reopening, corrections, and match-level workflow status.
+The Matches domain owns match participation, result entry, official week-close
+effects, reopening, corrections, and match-level workflow status.
 
 ## Scoresheet Entry UI (Current State)
 
-The current scoresheet is a **frontend-calculated** entry screen. Handicap application and pairing outcomes are computed in the browser using `web/app.js`. Backend stores raw round data only. All calculations described below are draft/frontend-only until a backend Close Week validation pass is implemented.
+The current scoresheet is a browser-driven entry screen with backend-authoritative
+save validation and Close Week workflow. The frontend still renders live pairing
+math for operator feedback, but official standings and player stats come from
+backend-controlled closed-week data.
+
+Backend stores raw `round_results`, derives `match_results` on save, and gates
+official downstream views with `week_closed=1`. Handicap Review and Handicap
+Apply belong to the `handicaps` domain, though this domain preserves the
+handicap snapshots they depend on.
 
 ### Numeric score inputs
 
@@ -83,15 +91,16 @@ Backend validation is now authoritative for 8-ball scoresheet round submissions.
 validator runs inside `saveRounds` before any DB write. It uses `backend/validation`
 for structured result types.
 
-**Frontend validation** (`web/app.js`) remains helper UX only -- it normalises inputs
-and shows live pairing outcomes, but does not duplicate the backend validator.
+**Frontend validation** (`web/app.js`) remains helper UX only. It normalizes
+inputs and shows live pairing outcomes, but it is not authoritative.
 
 ### Behavior
 
 - **Errors -> HTTP 422** with `{"messages": [...]}` body (see `validation.Result`). No rows are written.
-- **Warnings -> save proceeds.** Warnings are computed and available for future Close Week
-  use but are not currently returned to the frontend.
-- Warning acknowledgment and Close Week finalization remain future work.
+- **Warnings -> save proceeds.** Warnings are computed and later surfaced through
+  Close Week review flows.
+- Warning acknowledgment and Close Week finalization are implemented in later
+  phases documented below.
 
 ### Validation codes
 

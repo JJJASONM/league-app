@@ -5,11 +5,12 @@
 **Owner:** `handicaps`
 **Status:** `draft`
 **Current version:** `0.1`
-**Last reviewed:** `2026-06-27`
+**Last reviewed:** `2026-06-29`
 
 The Handicaps domain owns the opponent-normalized rack formula, the read-only
-Handicap Review endpoint, and the pure-Go calculation package. It does not
-own rule definitions (see `rules` domain) or score storage (see `matches` domain).
+Handicap Review endpoint, the pure-Go calculation package, and the backend-only
+Apply workflow foundation. It does not own rule definitions (see `rules`
+domain) or score storage (see `matches` domain).
 
 ## Public Interface
 
@@ -17,7 +18,13 @@ own rule definitions (see `rules` domain) or score storage (see `matches` domain
 backend/domains/handicaps/public.go
 ```
 
-No DB access in this package. Pure calculation only.
+The domain currently has two public shapes:
+
+- `backend/domains/handicaps/public.go` for pure formula code
+- `backend/domains/handicaps/service.go` plus `store.go` for service/store behavior
+
+The pure calculation package has no DB access. The service layer owns business
+rules and depends on a domain-owned Store interface.
 
 ## Opponent-Normalized Rack Formula (Phase 3E)
 
@@ -207,6 +214,124 @@ are `null` only when `included_racks == 0`.
 
 Empty recommendations are never returned to mask errors.
 
+## Handicap Apply Workflow (Phase B1 foundation)
+
+### Status
+
+`draft`
+
+The backend Apply foundation exists, but the HTTP route is intentionally not
+registered yet. There is no frontend Apply UI in this phase.
+
+### Implemented pieces
+
+- `backend/domains/handicaps/apply.go`
+  Domain-owned apply request/result types, conflicts, rejections, and service logic.
+- `backend/domains/handicaps/token.go`
+  Recommendation token and request-hash helpers for stale-data and replay checks.
+- `backend/storage/sqlite/handicap_apply_store.go`
+  SQLite write adapter support, idempotency lookups, history writes, and write transactions.
+- `handlers/api.go`
+  Unregistered `postHandicapApply` handler shape.
+- `handlers/deps.go`
+  `HandicapApplier` dependency contract.
+
+### Route status
+
+Planned route:
+
+```text
+POST /api/seasons/{id}/handicap-apply
+```
+
+The handler exists, but `handlers.Register` does not register it yet. That is
+intentional until the auth gate is added.
+
+### Apply gate
+
+Apply is supported only when `handicap_update_method` is exactly
+`game_diff_average`.
+
+These method values reject Apply:
+
+- `manual_review`
+- `kicker_average_preview`
+- unknown method values
+
+Read-only review behavior is unchanged. Unknown methods still follow the
+existing read-side fallback behavior there for compatibility.
+
+### Eligibility
+
+Actionable recommendation reasons:
+
+- `""`
+- `capped`
+
+Non-actionable reasons:
+
+- `admin_hold`
+- `below_threshold`
+- `no_data`
+- `no_change`
+- any other non-eligible status
+
+Apply is atomic. Any conflict or rejection prevents all writes.
+
+### Stale-data protection
+
+Each actionable recommendation carries an opaque `rec_token`. The token is built
+from the recommendation inputs, including assigned handicap, rules, and all
+included rack samples in deterministic order.
+
+Apply recomputes live recommendations inside the write transaction and compares:
+
+- token equality
+- expected assigned handicap at 0.01 precision
+- expected recommended handicap at 0.01 precision
+
+Conflict codes include:
+
+- `token_mismatch`
+- `assigned_hc_changed`
+- `recommended_hc_changed`
+- `not_in_roster`
+- `concurrent_write`
+- `idempotency_key_reused`
+
+### Idempotency
+
+Requests carry a client-generated UUID v4 `apply_request_id`. The backend
+computes a semantic `request_hash` and uses prior `handicap_history` rows to
+support exact replay and detect key reuse.
+
+Replay outcomes:
+
+- no prior rows -> normal apply path
+- same request ID + same semantic request -> replayed success
+- same request ID + different semantic request -> conflict
+- inconsistent stored rows for a request ID -> internal error
+
+### History provenance
+
+Phase B1 expands `handicap_history` so applied changes can store:
+
+- apply request ID
+- request hash
+- player name snapshot
+- season ID
+- method
+- window and lifetime sample counts
+- recommendation token
+- optional applied-by user ID for later auth integration
+
+### Write-transaction contract
+
+The SQLite adapter uses a dedicated connection plus `BEGIN IMMEDIATE` for Apply
+writes. Busy contention is mapped to a domain-neutral `ErrConcurrentWrite`.
+This lets the service return a user-facing conflict instead of waiting on a
+write lock indefinitely.
+
 ## Snapshot Preservation (Phase 3E)
 
 See `doc/domains/matches/README.md` Phase 3E for the `saveRounds` snapshot
@@ -319,3 +444,77 @@ The handler is now a ~20-line thin delegator. The two extracted private function
 (`seasonHandicapWindowConfig`, `computeOpponentNormalizedRecs`) were deleted from
 `handlers/api.go`. `seasonHandicapUpdateMethod` and `seasonMaxIndividualHC` were
 retained for the `buildAdvanceResult`/close-week path.
+
+### 2026-06-29 - Phase B1 keeps Apply backend-only
+
+**Status:** `accepted`
+
+The Apply workflow is intentionally being staged. Backend service, write
+transaction handling, idempotency, and history schema land before route
+registration and before any UI is exposed. This keeps the write path testable
+without prematurely enabling browser-driven handicap changes.
+
+<!--
+## Phase B — Handicap Apply (B1: backend only, route unregistered)
+
+**Status:** B1 implemented; route registration and auth deferred to B2.
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `backend/domains/handicaps/apply.go` | `Service.Apply`, all Apply types, error types |
+| `backend/domains/handicaps/token.go` | `computeRecToken`, `computeRequestHash`, `isFiniteHC` |
+| `backend/storage/sqlite/handicap_apply_store.go` | `RunWriteTx`, `UpdatePlayerHandicap`, `InsertHandicapHistory`, `AppliedChangesByRequestID` |
+
+### Apply request lifecycle
+
+1. Handler decodes `applyRequestDTO`, validates pointer fields, converts to `handicaps.ApplyRequest`.
+2. Service validates `ApplyRequestID` (UUID v4), checks for duplicate `PlayerID`, checks all HC values are finite.
+3. Service computes `requestHash` = SHA-256(canonical JSON sorted by PlayerID).
+4. `RunWriteTx` acquires `BEGIN IMMEDIATE`; sets `busy_timeout=0` before attempting; restores original timeout on all exit paths.
+5. Replay check via `AppliedChangesByRequestID`: five-case algorithm handles fresh, idempotent, corrupt, and key-reused scenarios.
+6. `compute` is called inside the write transaction to get live recommendations.
+7. Method gate: only `game_diff_average` proceeds; all other methods → 422 Unprocessable.
+8. Per-entry validation (all-or-nothing): not_in_roster → admin_hold → ineligible reason → nil RecommendedHC → token_mismatch → assigned_hc_changed → recommended_hc_changed.
+9. Rejections collected first; if any rejections, return `ApplyRejectionErr` (422).
+10. Conflicts collected; if any conflicts, return `ApplyConflictErr` (409).
+11. Write phase: `UpdatePlayerHandicap` (cents-precision conditional), `InsertHandicapHistory` (all 15 columns).
+
+### Rec token
+
+`computeRecToken` produces a versioned SHA-256 hash over all included racks (not just
+the window slice), configuration, and the final recommended HC. Non-finite float inputs
+are rejected before marshalling to prevent two distinct invalid inputs from producing
+the same `sha256("")` hash. Token is populated only for actionable players (Reason == "" or "capped").
+
+### busy_timeout restoration (LIFO defer order)
+
+```
+defer 1: conn.Close()         — runs LAST
+defer 2: restore busy_timeout — runs SECOND-TO-LAST (conn still valid)
+set PRAGMA busy_timeout = 0
+BEGIN IMMEDIATE               — may return ErrConcurrentWrite
+defer 3: COMMIT/ROLLBACK      — runs FIRST
+fn(txStore)
+```
+
+### Schema changes (handicap_history)
+
+Ten new columns added via additive migrations (errors ignored; fresh DBs already have them):
+`apply_request_id`, `request_hash`, `player_name_snapshot`, `season_id`, `method`,
+`window_size`, `window_racks`, `lifetime_racks`, `rec_token`, `applied_by_user_id`.
+
+Idempotency index: `CREATE UNIQUE INDEX IF NOT EXISTS idx_hc_history_apply_idempotent ON handicap_history(apply_request_id, player_id) WHERE apply_request_id IS NOT NULL`.
+
+### Player delete guard
+
+`DELETE /api/players/{id}` now returns 409 if any `handicap_history` row exists for the
+player. Deactivate the player instead (`players.active = 0`).
+
+### Deferred items (B2 and B3)
+
+- **Route registration:** `POST /api/seasons/{id}/handicap-apply` not yet wired in `Register()`.
+- **Auth:** `AppliedByUserID *int64` is always nil in B1; populated from auth context in B2.
+- **Frontend Apply UI:** B3 scope.
+-->

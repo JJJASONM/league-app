@@ -1,82 +1,122 @@
-# Pool League Manager — Quick Start
+# Pool League Manager - Quick Start
 
 ## Prerequisites
 
-Install Go 1.22+: https://go.dev/dl/
+Install Go 1.22 or newer:
 
-That's the only dependency. The app uses a pure-Go SQLite driver (no C compiler needed).
+[https://go.dev/dl/](https://go.dev/dl/)
+
+That is the only required dependency. The app uses a pure-Go SQLite driver, so
+no C compiler is needed.
 
 ## Build
 
-**Windows:**
+Windows:
+
+```powershell
+.\build.bat
 ```
-build.bat
-```
+
 Produces `league_app.exe`.
 
-**macOS / Linux:**
+macOS / Linux:
+
+```bash
+chmod +x build.sh
+./build.sh
 ```
-chmod +x build.sh && ./build.sh
-```
+
 Produces `./league_app`.
 
-**Cross-compile for all platforms at once (from Windows):**
+Cross-compile from Windows:
+
+```powershell
+.\build_all.bat
 ```
-build_all.bat
-```
-Produces binaries in `dist/` for Windows, macOS Intel, and macOS Apple Silicon.
+
+Produces binaries in `dist/`.
 
 ## Run
 
-Double-click `league_app.exe` (Windows) or `./league_app` (macOS).  
-The browser opens automatically to **http://localhost:8080**.
+Direct run:
 
-The database (`league.db`) is created next to the executable in a `data/` folder.
+```powershell
+go run . -seed
+go run .
+```
+
+Binary run:
+
+```powershell
+.\league_app.exe
+```
+
+The browser opens automatically at [http://localhost:8080](http://localhost:8080).
+The database is created in a `data/` folder next to the executable.
 
 ### Options
 
+```powershell
+league_app.exe --port 9090
+league_app.exe --data C:\MyLeagueData
+league_app.exe --reset-db
 ```
-league_app.exe --port 9090            # use a different port
-league_app.exe --data C:\MyLeagueData # custom data directory
+
+## Scoresheet Fixtures
+
+Opt-in fictional fixture data is available for scoresheet, Close Week, and
+handicap testing.
+
+```powershell
+go run . -seed-scoresheet-fixtures
+go run . -seed-scoresheet-fixtures -fixture-week 2
+go run . -seed-scoresheet-fixtures -fixture-weeks 3
+go run . -seed-scoresheet-fixtures -fixture-weeks all
 ```
+
+Behavior:
+
+- no week flag -> week 1 only
+- `-fixture-week N` -> week N only
+- `-fixture-weeks N` -> weeks 1 through N
+- `-fixture-weeks all` -> all available fixture weeks
 
 ## Current Workflow
 
-1. **Seasons** → Create a season, set it as Active
-2. **Teams** → Add your teams
-3. **Players** → Add players, assign to teams, set skill levels (1–9)
-4. **Seasons → Generate Schedule** → Pick the season & first match date → Generate
-5. **Match Entry** → Select season & match, enter games won/lost per player, Save
-6. **Standings** → Live team standings
-7. **Player Stats** → Individual win rates
+1. `Seasons` -> create a season and manage setup
+2. `Teams` -> register season teams, rosters, captains, and draft names
+3. `Seasons -> Generate Schedule` -> create matches for the season
+4. `Match Entry` -> enter scoresheets and save round data
+5. `Schedule -> Review & Close` -> validate a week and make results official
+6. `Standings` -> official team standings from closed weeks only
+7. `Player Stats` -> official individual stats from closed weeks only
+8. `Handicap` -> read-only season handicap review recommendations
 
-This workflow describes the application implemented today. The approved target
-adds rule snapshots, explicit season teams and rosters, schedule preview and
-pushback, match finalization, week close/reopen, season close, audit history,
-and future users and roles. See `doc/architecture-decisions.md`.
+This reflects the implemented workflow today. Future phases still include auth,
+broader audit/history, and the eventual handicap apply UI.
 
-## Sharing with others
+## Sharing
 
-Run `build_all.bat` once to get platform binaries. Give each person:
-- `league_app_windows.exe` **or** `league_app_macos_*` (the right one for their OS)
-- Nothing else needed — the database travels with the app in `data/league.db`
+Run `build_all.bat` once to get platform binaries. Give each user:
 
-To share data: copy the `data/` folder alongside the binary.  
-To back up: click **Backup DB** in the sidebar — saves a timestamped copy to `data/`.
+- the correct binary for their OS
+- the matching `data/` folder if they need the same database
+
+To back up: use the `Backup DB` action in the app. It writes a timestamped copy
+to the data directory.
 
 ## Project Structure
 
-```
+```text
 league_app/
-├── main.go            # Entry point, server, browser launch
-├── go.mod
-├── db/db.go           # SQLite init, migrations, backup
-├── models/models.go   # Data structs
-├── logic/
-│   ├── handicap.go    # Handicap formula (swappable)
-│   ├── scoring.go     # Win/loss/tie + standings calc
-│   └── scheduling.go  # Round-robin generator
-├── handlers/api.go    # All REST endpoints
-├── web/index.html     # Embedded SPA (Bootstrap 5)
-└── doc/               # Schema and target workflow documentation
+|-- main.go
+|-- go.mod
+|-- db/
+|-- handlers/
+|-- backend/domains/
+|-- backend/storage/sqlite/
+|-- models/
+|-- logic/
+|-- web/
+`-- doc/
 ```
