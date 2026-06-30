@@ -4,8 +4,8 @@
 
 **Owner:** `handicaps`
 **Status:** `draft`
-**Current version:** `0.1`
-**Last reviewed:** `2026-06-29`
+**Current version:** `0.2`
+**Last reviewed:** `2026-06-30`
 
 The Handicaps domain owns the opponent-normalized rack formula, the read-only
 Handicap Review endpoint, the pure-Go calculation package, and the backend-only
@@ -454,6 +454,45 @@ directly without nesting.
 | adapter (integration) | `handicap_store_test.go` | real SQLite via `db.Init(tempDir)` |
 | handler (stub-based) | `handlers/api_test.go` | 404/500/200 error-mapping via `stubHandicapSvc` |
 | handler (integration) | `handlers/api_test.go` | existing `TestHandicapRecs_*` and `TestHandicapReview_*` tests now run through the real service+adapter |
+
+### 2026-06-30 - Phase B3 frontend Apply workflow
+
+**Status:** `accepted`
+
+The Handicap Review tab is no longer read-only. An authorized admin can select
+actionable recommendations and submit them via the Apply endpoint behind the B2
+bearer token.
+
+**New frontend files:**
+
+| File | Role |
+|------|------|
+| `web/domains/handicaps/handicap-api-service.js` | Pure helpers (`isSelectableRec`, `buildApplyEntries`, `makeApplyRequestId`, `describeConflict`, `describeRejection`) and API calls (`fetchRecommendations`, `applyHandicaps`) |
+| `web/domains/handicaps/handicap-review-component.js` | `<handicap-review>` custom element — owns table render, checkbox state, token session memory, apply bar, token-entry modal, confirmation modal, error display, post-apply reload |
+| `web/domains/handicaps/handicaps-domain.js` | Entry point — imports component (registers custom element) |
+
+**Token handling:** Session memory only (`#adminToken` private field on the custom
+element). Never written to localStorage, sessionStorage, cookies, or URL params.
+Cleared on 401/403 or page reload. Admin is prompted once per page session.
+
+**Selectability rule:** A row is selectable when `rec_token` is truthy and
+`change_amount != null && change_amount !== 0`. `no_change` rows are excluded.
+
+**Apply flow:** select rows → Apply bar shows count → click Apply Changes →
+token-entry modal (first time) → confirmation modal with exact change list →
+Apply N Changes → POST handicap-apply → reload on success.
+
+**Error handling:** 401/403 clears token and re-prompts; 409 shows per-player
+conflict details with Reload affordance; 422 shows per-player rejection details
+with Reload affordance; 404 shows route-unavailable message; 500 shows safe
+error with no optimistic UI changes.
+
+**Shell changes:** `app.js` delegates Handicap tab season changes to
+`_onHandicapSeasonChange()` which calls `widget.loadSeason(sid)` on the custom
+element. `loadHandicapReview` and `renderHandicapReviewTable` are removed.
+
+**UUID generation:** `crypto.randomUUID()` with Math.random() fallback for
+non-secure contexts (`http://league-staging.local`).
 
 ### 2026-06-28 - Data Access Phase A: extract service and adapter
 

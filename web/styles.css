@@ -112,6 +112,9 @@
     .team-card--selected { box-shadow: 0 0 0 2px #0d6efd !important; }
     .team-card--selected .team-card-header { background: #e8f0fe; }
 
+    /* ── Handicap Apply ──────────────────────────────────────────── */
+    .hc-cb-col { width: 36px; padding-left: .5rem !important; padding-right: .5rem !important; }
+
     /* ── Scoresheet table ─────────────────────────────────────────── */
     /* ── Scoresheet layout ──────────────────────────────── */
     .ss-sheet { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #000;
