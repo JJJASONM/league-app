@@ -214,14 +214,14 @@ are `null` only when `included_racks == 0`.
 
 Empty recommendations are never returned to mask errors.
 
-## Handicap Apply Workflow (Phase B1 foundation)
+## Handicap Apply Workflow (Phase B1 backend + B2 auth)
 
 ### Status
 
 `draft`
 
-The backend Apply foundation exists, but the HTTP route is intentionally not
-registered yet. There is no frontend Apply UI in this phase.
+The backend Apply workflow is implemented and the HTTP route is registered with
+bearer-token authorization. There is no frontend Apply UI yet (Phase B3 scope).
 
 ### Implemented pieces
 
@@ -232,20 +232,46 @@ registered yet. There is no frontend Apply UI in this phase.
 - `backend/storage/sqlite/handicap_apply_store.go`
   SQLite write adapter support, idempotency lookups, history writes, and write transactions.
 - `handlers/api.go`
-  Unregistered `postHandicapApply` handler shape.
+  `postHandicapApply` handler body; `requireAdminToken` auth wrapper; conditional
+  route registration in `Register()`.
 - `handlers/deps.go`
-  `HandicapApplier` dependency contract.
+  `HandicapApplier` dependency contract; `AdminToken string` field.
 
-### Route status
-
-Planned route:
+### Route
 
 ```text
 POST /api/seasons/{id}/handicap-apply
 ```
 
-The handler exists, but `handlers.Register` does not register it yet. That is
-intentional until the auth gate is added.
+Registered in `handlers.Register()` only when `LEAGUE_ADMIN_TOKEN` is non-empty.
+When the env var is absent the route is not mounted and the server logs:
+
+```
+Apply route: NOT MOUNTED - LEAGUE_ADMIN_TOKEN not set
+```
+
+When the env var is present the route is mounted and the server logs:
+
+```
+Apply route: MOUNTED
+```
+
+### Authorization (B2)
+
+The route requires a static bearer token configured via the `LEAGUE_ADMIN_TOKEN`
+environment variable at server startup. The token is passed through
+`handlers.Dependencies.AdminToken` and enforced by `requireAdminToken`.
+
+| Condition | Status | Response body | Extra header |
+|-----------|--------|---------------|--------------|
+| No `Authorization` header | 401 | `{"error":"authentication required"}` | `WWW-Authenticate: Bearer realm="league-admin"` |
+| Wrong token | 403 | `{"error":"forbidden"}` | — |
+| Correct `Bearer <token>` | handler proceeds | existing 200/400/404/409/422/500 | — |
+
+`AppliedByUserID` is `nil` in B2. There is no users table yet. The column exists
+in `handicap_history` (added in B1 additive migrations) to avoid a future
+schema change when the users/auth domain is introduced. Token rotation requires
+a server restart (update env var and restart).
 
 ### Apply gate
 
@@ -444,6 +470,16 @@ The handler is now a ~20-line thin delegator. The two extracted private function
 (`seasonHandicapWindowConfig`, `computeOpponentNormalizedRecs`) were deleted from
 `handlers/api.go`. `seasonHandicapUpdateMethod` and `seasonMaxIndividualHC` were
 retained for the `buildAdvanceResult`/close-week path.
+
+### 2026-06-30 - Phase B2 registers Apply route behind static bearer token
+
+**Status:** `accepted`
+
+No users table exists yet, so full relational identity is deferred. A static
+`LEAGUE_ADMIN_TOKEN` environment variable provides real backend authorization
+without introducing session infrastructure ahead of the users domain. The route
+is conditionally mounted — absent env var means absent route, not a panic.
+`AppliedByUserID` stays `nil`; the column is ready for Phase C user linkage.
 
 ### 2026-06-29 - Phase B1 keeps Apply backend-only
 

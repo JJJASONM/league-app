@@ -92,6 +92,7 @@ func main() {
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
+		AdminToken:      os.Getenv("LEAGUE_ADMIN_TOKEN"),
 	}
 
 	// API routes

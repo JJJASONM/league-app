@@ -36,6 +36,16 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	if v := reflect.ValueOf(deps.HandicapSvc); v.Kind() == reflect.Ptr && v.IsNil() {
 		panic("handlers.Register: deps.HandicapSvc must not be a typed nil")
 	}
+	// Guard HandicapApplier only when the Apply route will be mounted.
+	// When AdminToken is empty the route is not registered, so a nil applier is fine.
+	if deps.AdminToken != "" {
+		if deps.HandicapApplier == nil {
+			panic("handlers.Register: deps.HandicapApplier must not be nil when LEAGUE_ADMIN_TOKEN is set")
+		}
+		if v := reflect.ValueOf(deps.HandicapApplier); v.Kind() == reflect.Ptr && v.IsNil() {
+			panic("handlers.Register: deps.HandicapApplier must not be a typed nil when LEAGUE_ADMIN_TOKEN is set")
+		}
+	}
 	// Leagues
 	mux.HandleFunc("GET /api/leagues", listLeagues)
 	mux.HandleFunc("POST /api/leagues", createLeague)
@@ -122,6 +132,20 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		getHandicapRecommendations(w, r, hcSvc)
 	})
 
+	// Apply route — only mounted when LEAGUE_ADMIN_TOKEN is configured.
+	// AppliedByUserID is nil in B2; wired to a resolved users.id in the future auth phase.
+	if deps.AdminToken != "" {
+		applier := deps.HandicapApplier
+		mux.HandleFunc("POST /api/seasons/{id}/handicap-apply",
+			requireAdminToken(deps.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+				postHandicapApply(w, r, applier)
+			}),
+		)
+		log.Println("Apply route: MOUNTED")
+	} else {
+		log.Println("Apply route: NOT MOUNTED - LEAGUE_ADMIN_TOKEN not set")
+	}
+
 	// Standings & stats
 	mux.HandleFunc("GET /api/standings", getStandings)
 	mux.HandleFunc("GET /api/player-stats", getPlayerStats)
@@ -186,6 +210,25 @@ func qparamInt(r *http.Request, key string) (int64, bool) {
 }
 
 func decode(r *http.Request, v any) error { return json.NewDecoder(r.Body).Decode(v) }
+
+// requireAdminToken wraps a handler, enforcing bearer-token authorization.
+// Responds 401 when no Authorization header is present (RFC 7235: includes
+// WWW-Authenticate header), 403 when the token is present but does not match.
+func requireAdminToken(token string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="league-admin"`)
+			jsonError(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if auth != "Bearer "+token {
+			jsonError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
 
 // ─── Leagues ─────────────────────────────────────────────────────────────────
 

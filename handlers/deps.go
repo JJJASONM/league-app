@@ -14,8 +14,7 @@ type HandicapRecommender interface {
 }
 
 // HandicapApplier is the subset of handicaps.Service used by the write handler.
-// The route is not yet registered (Phase B2); the field is wired in main.go
-// so the schema migration runs without requiring a route change.
+// The route is registered in Register() when deps.AdminToken is non-empty.
 type HandicapApplier interface {
 	Apply(ctx context.Context, seasonID int64, req handicaps.ApplyRequest) (handicaps.ApplyResult, error)
 }
@@ -25,4 +24,9 @@ type HandicapApplier interface {
 type Dependencies struct {
 	HandicapSvc     HandicapRecommender
 	HandicapApplier HandicapApplier
+	// AdminToken is the bearer token required to call the Apply route.
+	// When empty the Apply route is not mounted. Read from LEAGUE_ADMIN_TOKEN at startup.
+	// AppliedByUserID stays nil in B2; it will be wired to a resolved users.id
+	// in the future users/auth phase when a users table exists.
+	AdminToken string
 }
