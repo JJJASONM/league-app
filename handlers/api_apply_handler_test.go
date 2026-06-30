@@ -25,10 +25,29 @@ func (s *stubApplier) Apply(_ context.Context, _ int64, _ handicaps.ApplyRequest
 	return s.result, s.err
 }
 
+// capturingApplier records the last ApplyRequest passed to Apply for inspection.
+type capturingApplier struct {
+	lastReq *handicaps.ApplyRequest
+	result  handicaps.ApplyResult
+	err     error
+}
+
+func (c *capturingApplier) Apply(_ context.Context, _ int64, req handicaps.ApplyRequest) (handicaps.ApplyResult, error) {
+	c.lastReq = &req
+	return c.result, c.err
+}
+
 // doApply posts the given JSON body to the handler and returns the response.
 func doApply(t *testing.T, svc HandicapApplier, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	return doApplyWithContext(t, context.Background(), svc, body)
+}
+
+// doApplyWithContext posts the given body with a pre-set context (for auth injection tests).
+func doApplyWithContext(t *testing.T, ctx context.Context, svc HandicapApplier, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/seasons/1/handicap-apply", strings.NewReader(body))
+	req = req.WithContext(ctx)
 	req.SetPathValue("id", "1")
 	w := httptest.NewRecorder()
 	postHandicapApply(w, req, svc)
@@ -228,5 +247,45 @@ func TestPostHandicapApply_Success_Replayed_Returns200(t *testing.T) {
 	}
 	if !result.Replayed {
 		t.Error("want replayed=true in response")
+	}
+}
+
+// ─── Handler injection: AppliedByUserID from auth context ──────────────────
+
+const oneEntryBody = `{"apply_request_id":"550e8400-e29b-41d4-a716-446655440000","entries":[{"player_id":1,"expected_assigned_hc":1.0,"expected_recommended_hc":2.0,"rec_token":"tok"}]}`
+
+// TestPostHandicapApply_PersonalKeyContext_SetsAppliedByUserID verifies that
+// when requireApplyAuth has placed a user ID in the context (personal key path),
+// postHandicapApply propagates it to every ApplyEntry sent to the service.
+func TestPostHandicapApply_PersonalKeyContext_SetsAppliedByUserID(t *testing.T) {
+	svc := &capturingApplier{}
+	ctx := context.WithValue(context.Background(), applyUserIDKey{}, int64(42))
+	doApplyWithContext(t, ctx, svc, oneEntryBody)
+	if svc.lastReq == nil {
+		t.Fatal("want Apply to be called, was not")
+	}
+	for i, e := range svc.lastReq.Entries {
+		if e.AppliedByUserID == nil {
+			t.Errorf("entry[%d]: want AppliedByUserID=42, got nil", i)
+		} else if *e.AppliedByUserID != 42 {
+			t.Errorf("entry[%d]: want AppliedByUserID=42, got %d", i, *e.AppliedByUserID)
+		}
+	}
+}
+
+// TestPostHandicapApply_StaticTokenContext_NilAppliedByUserID verifies that
+// when no user ID is in the context (static LEAGUE_ADMIN_TOKEN fallback path),
+// every ApplyEntry has AppliedByUserID = nil.
+func TestPostHandicapApply_StaticTokenContext_NilAppliedByUserID(t *testing.T) {
+	svc := &capturingApplier{}
+	// Plain background context: no user ID (simulates static-token fallback path).
+	doApplyWithContext(t, context.Background(), svc, oneEntryBody)
+	if svc.lastReq == nil {
+		t.Fatal("want Apply to be called, was not")
+	}
+	for i, e := range svc.lastReq.Entries {
+		if e.AppliedByUserID != nil {
+			t.Errorf("entry[%d]: want AppliedByUserID=nil, got %d", i, *e.AppliedByUserID)
+		}
 	}
 }

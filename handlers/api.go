@@ -2,6 +2,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -133,17 +134,33 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	})
 
 	// Apply route — only mounted when LEAGUE_ADMIN_TOKEN is configured.
-	// AppliedByUserID is nil in B2; wired to a resolved users.id in the future auth phase.
+	// Dual-tier auth: personal API key (ApplyAuth) checked first; AdminToken is the fallback.
 	if deps.AdminToken != "" {
 		applier := deps.HandicapApplier
 		mux.HandleFunc("POST /api/seasons/{id}/handicap-apply",
-			requireAdminToken(deps.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+			requireApplyAuth(deps.AdminToken, deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
 				postHandicapApply(w, r, applier)
 			}),
 		)
 		log.Println("Apply route: MOUNTED")
 	} else {
 		log.Println("Apply route: NOT MOUNTED - LEAGUE_ADMIN_TOKEN not set")
+	}
+
+	// User management — gated by the static admin token.
+	// Only registered when the Apply route is mounted (AdminToken is non-empty).
+	if deps.AdminToken != "" && deps.ApplyAuth != nil {
+		auth := deps.ApplyAuth
+		mux.HandleFunc("POST /api/users",
+			requireAdminToken(deps.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+				postUser(w, r, auth)
+			}),
+		)
+		mux.HandleFunc("GET /api/users",
+			requireAdminToken(deps.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+				listUsers(w, r, auth)
+			}),
+		)
 	}
 
 	// Standings & stats
@@ -228,6 +245,60 @@ func requireAdminToken(token string, next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// requireApplyAuth is dual-tier middleware for the Apply route.
+// Tier 1: bearer token matched against a personal API key via resolver → sets user ID in context.
+// Tier 2: bearer token matched against the static adminToken → allows with nil user ID (logs deprecation).
+// Returns 401 when no Authorization header is present, 403 when neither tier matches.
+func requireApplyAuth(adminToken string, resolver ApplyAuthResolver, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="league-admin"`)
+			jsonError(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if !strings.HasPrefix(auth, "Bearer ") {
+			jsonError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		token := strings.TrimPrefix(auth, "Bearer ")
+
+		// Tier 1: personal API key lookup.
+		if resolver != nil {
+			user, err := resolver.ResolveApplyUserByAPIKey(r.Context(), token)
+			if err != nil {
+				log.Printf("apply auth: key resolution error: %v", err)
+				jsonError(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			if user != nil {
+				ctx := context.WithValue(r.Context(), applyUserIDKey{}, user.ID)
+				next(w, r.WithContext(ctx))
+				return
+			}
+		}
+
+		// Tier 2: static admin token fallback.
+		if token == adminToken {
+			log.Println("apply auth: LEAGUE_ADMIN_TOKEN used — deprecated, create a personal API key")
+			next(w, r)
+			return
+		}
+
+		jsonError(w, "forbidden", http.StatusForbidden)
+	}
+}
+
+// applyUserIDFromContext returns the user ID stored by requireApplyAuth, or nil
+// when the request was authenticated via the static admin token fallback.
+func applyUserIDFromContext(ctx context.Context) *int64 {
+	v, _ := ctx.Value(applyUserIDKey{}).(int64)
+	if v == 0 {
+		return nil
+	}
+	return &v
 }
 
 // ─── Leagues ─────────────────────────────────────────────────────────────────
@@ -2421,7 +2492,7 @@ func postHandicapApply(w http.ResponseWriter, r *http.Request, svc HandicapAppli
 			ExpectedAssignedHC:    *e.ExpectedAssignedHC,
 			ExpectedRecommendedHC: *e.ExpectedRecommendedHC,
 			RecToken:              *e.RecToken,
-			// AppliedByUserID: nil in B1; populated from auth context in B2
+			AppliedByUserID:       applyUserIDFromContext(r.Context()),
 		})
 	}
 
@@ -2470,6 +2541,51 @@ func postHandicapApply(w http.ResponseWriter, r *http.Request, svc HandicapAppli
 		return
 	}
 	jsonOK(w, result)
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+
+// postUser handles POST /api/users. Creates a new user and returns the
+// one-time cleartext API key. Gated by requireAdminToken.
+func postUser(w http.ResponseWriter, r *http.Request, auth ApplyAuthResolver) {
+	var body struct {
+		Username string `json:"username"`
+	}
+	if err := decode(r, &body); err != nil {
+		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(body.Username) == "" {
+		jsonError(w, "username is required", http.StatusBadRequest)
+		return
+	}
+
+	user, key, err := auth.CreateApplyUser(r.Context(), body.Username)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			jsonError(w, "username already exists", http.StatusConflict)
+			return
+		}
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(models.CreateUserResponse{User: user, APIKey: key})
+}
+
+// listUsers handles GET /api/users. Returns all users without API key hashes.
+// Gated by requireAdminToken.
+func listUsers(w http.ResponseWriter, r *http.Request, auth ApplyAuthResolver) {
+	users, err := auth.ListApplyUsers(r.Context())
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if users == nil {
+		users = []models.User{}
+	}
+	jsonOK(w, users)
 }
 
 // ─── Standings ────────────────────────────────────────────────────────────────

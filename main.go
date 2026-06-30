@@ -93,6 +93,7 @@ func main() {
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
 		AdminToken:      os.Getenv("LEAGUE_ADMIN_TOKEN"),
+		ApplyAuth:       sqlite.NewApplyAuthStore(db.DB),
 	}
 
 	// API routes

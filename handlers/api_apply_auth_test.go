@@ -1,4 +1,4 @@
-// Auth-layer tests for the requireAdminToken wrapper and Apply route mounting.
+// Auth-layer tests for requireAdminToken, requireApplyAuth, and Apply route mounting.
 // Uses package handlers (internal) to access unexported helpers and Register().
 package handlers
 
@@ -18,6 +18,28 @@ type noopRecommender struct{}
 
 func (n *noopRecommender) Recommendations(_ context.Context, _ int64) (models.HandicapReviewResponse, error) {
 	return models.HandicapReviewResponse{}, nil
+}
+
+// stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.
+// ResolveKey maps a cleartext key to a user; zero-value returns nil (no match).
+type stubApplyAuth struct {
+	resolveKey  string      // cleartext key that resolves successfully
+	resolveUser *models.User
+}
+
+func (s *stubApplyAuth) ResolveApplyUserByAPIKey(_ context.Context, key string) (*models.User, error) {
+	if s.resolveKey != "" && key == s.resolveKey {
+		return s.resolveUser, nil
+	}
+	return nil, nil
+}
+
+func (s *stubApplyAuth) CreateApplyUser(_ context.Context, username string) (models.User, string, error) {
+	return models.User{ID: 1, Username: username, Role: "admin", Active: true}, "fake-key-64chars-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", nil
+}
+
+func (s *stubApplyAuth) ListApplyUsers(_ context.Context) ([]models.User, error) {
+	return nil, nil
 }
 
 // ─── requireAdminToken unit tests ─────────────────────────────────────────────
@@ -114,6 +136,114 @@ func TestRequireAdminToken_WrongToken_BodyContainsError(t *testing.T) {
 	wrapped(w, req)
 	if !strings.Contains(w.Body.String(), "forbidden") {
 		t.Errorf("want 'forbidden' in body, got: %s", w.Body.String())
+	}
+}
+
+// ─── requireApplyAuth unit tests ──────────────────────────────────────────────
+
+func TestRequireApplyAuth_NoHeader_Returns401(t *testing.T) {
+	wrapped := requireApplyAuth("secret", nil, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	w := httptest.NewRecorder()
+	wrapped(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
+func TestRequireApplyAuth_PersonalKey_SetsUserIDInContext(t *testing.T) {
+	user := &models.User{ID: 42, Username: "alice", Role: "admin", Active: true}
+	resolver := &stubApplyAuth{resolveKey: "mykey", resolveUser: user}
+
+	var gotID *int64
+	wrapped := requireApplyAuth("admin-token", resolver, func(w http.ResponseWriter, r *http.Request) {
+		gotID = applyUserIDFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Authorization", "Bearer mykey")
+	w := httptest.NewRecorder()
+	wrapped(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", w.Code)
+	}
+	if gotID == nil || *gotID != 42 {
+		t.Errorf("want user ID 42 in context, got %v", gotID)
+	}
+}
+
+func TestRequireApplyAuth_StaticToken_NilUserIDInContext(t *testing.T) {
+	resolver := &stubApplyAuth{} // no matching key
+
+	var gotID *int64
+	wrapped := requireApplyAuth("admin-token", resolver, func(w http.ResponseWriter, r *http.Request) {
+		gotID = applyUserIDFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	wrapped(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", w.Code)
+	}
+	if gotID != nil {
+		t.Errorf("want nil user ID for static-token path, got %v", gotID)
+	}
+}
+
+func TestRequireApplyAuth_WrongToken_Returns403(t *testing.T) {
+	resolver := &stubApplyAuth{} // no matching key
+
+	wrapped := requireApplyAuth("admin-token", resolver, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	w := httptest.NewRecorder()
+	wrapped(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", w.Code)
+	}
+}
+
+func TestRequireApplyAuth_NilResolver_StaticTokenAllowed(t *testing.T) {
+	wrapped := requireApplyAuth("admin-token", nil, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	wrapped(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200 with nil resolver + correct static token, got %d", w.Code)
+	}
+}
+
+// TestRequireApplyAuth_InactiveKey_Returns403 verifies that a key belonging to
+// an inactive user is rejected. The store filters inactive users at the SQL
+// level and returns nil, so the middleware falls through to the static-token
+// check; when that also fails, 403 is returned.
+func TestRequireApplyAuth_InactiveKey_Returns403(t *testing.T) {
+	// stubApplyAuth with empty resolveKey always returns nil (simulates inactive/missing user).
+	resolver := &stubApplyAuth{}
+
+	wrapped := requireApplyAuth("admin-token", resolver, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Authorization", "Bearer inactive-user-key")
+	w := httptest.NewRecorder()
+	wrapped(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("want 403 for inactive user key, got %d", w.Code)
 	}
 }
 

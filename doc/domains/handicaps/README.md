@@ -455,6 +455,41 @@ directly without nesting.
 | handler (stub-based) | `handlers/api_test.go` | 404/500/200 error-mapping via `stubHandicapSvc` |
 | handler (integration) | `handlers/api_test.go` | existing `TestHandicapRecs_*` and `TestHandicapReview_*` tests now run through the real service+adapter |
 
+### 2026-06-30 - Phase C1: personal API-key authorization and Apply attribution
+
+**Status:** `accepted`
+
+The static `LEAGUE_ADMIN_TOKEN` bearer token is retained as a fallback but personal
+API keys are now the primary authorization path for Apply. A minimal `users` table
+holds SHA-256-hashed API keys; the cleartext key is returned once at create time.
+
+**Authorization flow:**
+
+1. No `Authorization` header → 401 (`WWW-Authenticate` set)
+2. `Bearer <token>` matches `sha256(token)` in `users.api_key_hash` where `active=1` → allow; `HandicapHistory.applied_by_user_id` = resolved `users.id`
+3. `Bearer <token>` matches `LEAGUE_ADMIN_TOKEN` env var → allow; `applied_by_user_id` = NULL; deprecation warning logged
+4. Neither → 403
+
+**New backend files:**
+
+| File | Role |
+|------|------|
+| `backend/storage/sqlite/apply_auth_store.go` | `ApplyAuthStore`: resolve by SHA-256 hash, create with key generation, list without hash |
+| `backend/storage/sqlite/apply_auth_store_test.go` | 11 store tests covering resolve, inactive exclusion, create, list, hash non-exposure |
+| `handlers/api_apply_c1_test.go` | Integration tests: user endpoint auth, attribution DB wiring, idempotency replay |
+| `doc/domains/users/README.md` | C1 section: schema, flow, deferred items |
+
+**New routes** (gated by `AdminToken` + `ApplyAuth` both set):
+
+- `POST /api/users` — gated by static admin token; returns one-time cleartext key
+- `GET /api/users` — gated by static admin token; never exposes hash
+
+**Middleware:** `requireApplyAuth` replaces `requireAdminToken` on the Apply route.
+`applyUserIDFromContext` reads the resolved user ID from the request context.
+`postHandicapApply` injects `AppliedByUserID` on every `ApplyEntry`.
+
+**Deferred:** player↔user link, deactivation endpoint, FK enforcement on `applied_by_user_id`. See `doc/domains/users/README.md`.
+
 ### 2026-06-30 - Phase B3 frontend Apply workflow
 
 **Status:** `accepted`

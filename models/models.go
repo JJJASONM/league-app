@@ -443,3 +443,21 @@ type SaveTeamLineupRequest struct {
 	WeekNumber int     `json:"week_number"`
 	PlayerIDs  []int64 `json:"player_ids"` // ordered: slot 1, 2, 3
 }
+
+// User is an application user with an API key for authenticated operations.
+// APIKeyHash is intentionally excluded from JSON to prevent accidental exposure.
+// The cleartext key is returned once at create time (via CreateUserResponse) and never stored.
+type User struct {
+	ID        int64  `json:"id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	Active    bool   `json:"active"`
+	CreatedAt string `json:"created_at"`
+}
+
+// CreateUserResponse is the one-time response body for POST /api/users.
+// APIKey is the cleartext key — show once, not re-retrievable.
+type CreateUserResponse struct {
+	User   User   `json:"user"`
+	APIKey string `json:"api_key"`
+}

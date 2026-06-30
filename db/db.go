@@ -293,6 +293,20 @@ CREATE INDEX IF NOT EXISTS idx_lineup_team_week   ON lineup_plans(team_id, week_
 CREATE INDEX IF NOT EXISTS idx_season_teams_sid   ON season_teams(season_id);
 CREATE INDEX IF NOT EXISTS idx_season_rosters_sid ON season_rosters(season_id);
 CREATE INDEX IF NOT EXISTS idx_season_rosters_pid ON season_rosters(player_id);
+
+-- Application users: minimal identity for Apply attribution.
+-- player_id is intentionally omitted in C1 — optional link deferred to USERS-Q001.
+-- api_key_hash stores SHA-256(cleartext_key) as 64-char lowercase hex.
+-- The cleartext key is returned once at create time and never stored.
+CREATE TABLE IF NOT EXISTS users (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    username     TEXT    NOT NULL UNIQUE,
+    api_key_hash TEXT    NOT NULL UNIQUE,
+    role         TEXT    NOT NULL DEFAULT 'admin',
+    active       INTEGER NOT NULL DEFAULT 1,
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash);
 `
 	if _, err := DB.Exec(schema); err != nil {
 		return err
