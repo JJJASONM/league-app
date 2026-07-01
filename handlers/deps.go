@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"league_app/backend/domains/handicaps"
+	"league_app/backend/domains/matches"
+	"league_app/backend/validation"
 	"league_app/models"
 )
 
@@ -36,6 +38,16 @@ type ApplyAuthResolver interface {
 // other packages that use string keys.
 type applyUserIDKey struct{}
 
+// WeekManager is the subset of matches.WeekService used by the week-workflow handlers.
+// Accepting an interface allows stub injection in tests.
+type WeekManager interface {
+	ListWeeks(ctx context.Context, seasonID int64) ([]models.WeekSummary, error)
+	ValidateWeek(ctx context.Context, seasonID, weekNum int64, cfg matches.RoundConfig) (validation.Result, error)
+	CloseWeek(ctx context.Context, req matches.CloseWeekRequest) (matches.CloseWeekResult, error)
+	ReopenWeek(ctx context.Context, seasonID, weekNum int64) error
+	ListAcknowledgments(ctx context.Context, seasonID, weekNum int64) ([]models.CloseAck, error)
+}
+
 // Dependencies holds domain services injected into handlers at startup.
 // Add new service fields here as additional domains are migrated.
 type Dependencies struct {
@@ -48,4 +60,7 @@ type Dependencies struct {
 	// ApplyAuth resolves personal API keys for Apply attribution.
 	// When nil, only the AdminToken static fallback is used.
 	ApplyAuth ApplyAuthResolver
+	// WeekMgr handles the week-workflow: list, validate, close, reopen, ack-history.
+	// When nil, week routes are not registered.
+	WeekMgr WeekManager
 }

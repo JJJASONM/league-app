@@ -1026,6 +1026,72 @@ a count badge and expandable history section when `ack_count > 0`. The Review
 & Close modal shows a prior history notice when re-closing a reopened week.
 No actor identity or audit module is required at this level.
 
+## Phase B1 — Matches/Close Week Extraction (implemented 2026-06-30)
+
+### Goal
+
+Extract the week-workflow backend (list weeks, validate, close, reopen,
+acknowledgment history) into a purpose-built service/store layer without
+changing routes, JSON shapes, or browser behavior.
+
+### New files
+
+| File | Role |
+|------|------|
+| `backend/domains/matches/store.go` | `WeekStore` interface + `AckEntry` type |
+| `backend/domains/matches/service.go` | `WeekService`, `CloseWeekRequest`, `CloseWeekResult`, `WeekCloseErr` |
+| `backend/domains/matches/service_test.go` | Unit tests with stub store |
+| `backend/storage/sqlite/week_store.go` | SQLite implementation of `WeekStore` |
+| `backend/storage/sqlite/week_store_test.go` | DB integration tests (~15 tests) |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `handlers/deps.go` | `WeekManager` interface + `WeekMgr WeekManager` field on `Dependencies` |
+| `handlers/api.go` | Five week handlers thinned to delegate; routes conditional on `WeekMgr != nil` |
+| `handlers/api_test.go` | `testServer()` wires `WeekService` into deps |
+| `handlers/api_apply_c1_test.go` | `testServerWithApplyAuth()` wires `WeekService` into deps |
+| `main.go` | `sqlite.NewWeekStore` → `matches.NewWeekService` → `deps.WeekMgr` |
+
+### Architecture
+
+```
+closeWeekHandler (handler)
+  → deps.WeekMgr.CloseWeek (WeekManager interface)
+      → matches.WeekService.CloseWeek (service: ack-completeness, policy)
+          → ValidateWeek(s.db, ...) (package-level, temporary *sql.DB debt)
+          → weekStore.CloseWeek (WeekStore interface)
+              → sqlite.WeekStore.CloseWeek (TX: upsert league_weeks, update matches, insert acks)
+```
+
+### Temporary debt accepted in B1
+
+- `WeekService` holds `*sql.DB` to call the package-level `ValidateWeek(dbConn, ...)`.
+  B4 will move validation into a `WeekStore` method and remove the DB field.
+- `seasonRoundConfig` stays in `handlers/api.go` (handler calls it and passes the
+  result to the service via `CloseWeekRequest.Cfg`).
+- `buildAdvanceResult`, `getAdvancePreview`, and all handicap preview helpers stay in
+  `handlers/api.go` (B2 will extract these).
+- `saveRounds` stays in `handlers/api.go` (B3 — most complex due to HC snapshot TX).
+
+### Route registration
+
+Week routes are conditionally registered when `deps.WeekMgr != nil`. In production
+(`main.go`) `WeekMgr` is always set. Tests that don't exercise week routes (e.g. Apply
+auth tests) may omit it; those test servers simply won't have week endpoints. All
+existing week integration tests go through `testServer()` which wires `WeekMgr`.
+
+The `advance-preview` route is always registered (it still uses `db.DB` directly via
+`buildAdvanceResult`, deferred to B2).
+
+### Not in B1
+
+- `buildAdvanceResult`, `computeGameDiffAverageRecs`, standings, stats (B2)
+- `saveRounds` HC snapshot TX logic (B3)
+- `ValidateWeek` signature change from `*sql.DB` to a store interface (B4)
+- Route/shape changes, new endpoints
+
 ## Decision History
 
 ### 2026-06-08 - Make week close authoritative
