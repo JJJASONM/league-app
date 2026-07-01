@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.2`
-**Last reviewed:** `2026-06-29`
+**Current version:** `0.3`
+**Last reviewed:** `2026-07-01`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -1173,6 +1173,112 @@ interface pattern and avoids an import cycle between `matches` and `handicaps`.
 - `ValidateWeek` signature change (B4)
 - Standings or stats extraction
 - Route/shape changes
+
+## Phase B3 — Round Save/Read, Standings, and Stats Extraction (implemented 2026-07-01)
+
+### Goal
+
+Extract `saveRounds`, `getRounds`, `getStandings`, `getPlayerStats`, `submitResults`,
+and `clearResults` from `handlers/api.go` into a dedicated `RoundService` and
+`RoundStore` domain boundary. No route paths or JSON shapes changed; browser
+behavior is unchanged.
+
+### New files
+
+| File | Role |
+|------|------|
+| `backend/domains/matches/round_store.go` | `RoundStore` interface + domain types |
+| `backend/domains/matches/round_service.go` | `RoundService` + `computePairingResult` |
+| `backend/domains/matches/round_service_test.go` | Unit tests with stub store (17 tests) |
+| `backend/storage/sqlite/round_store.go` | SQLite implementation of `RoundStore` |
+| `backend/storage/sqlite/round_store_test.go` | DB integration tests (13 tests) |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `handlers/deps.go` | `RoundManager` interface + `RoundMgr RoundManager` field on `Dependencies` |
+| `handlers/api.go` | Six handlers thinned to delegate; routes conditional on `RoundMgr != nil`; removed `computePairingResult`, `txSeasonMultiplier`, `txSeasonRoundConfig`, `matchWeekClosed` (~450 lines removed) |
+| `handlers/api_test.go` | `testServer()` wires `RoundService` into deps |
+| `handlers/api_apply_c1_test.go` | `testServerWithApplyAuth()` wires `RoundService` into deps |
+| `main.go` | `sqlite.NewRoundStore` → `matches.NewRoundService` → `deps.RoundMgr` |
+| `doc/domains/matches/README.md` | This section |
+
+### Architecture
+
+```
+saveRounds handler
+  → deps.RoundMgr.SaveRounds (RoundManager interface)
+      → matches.RoundService.SaveRounds
+          → store.IsWeekClosed         (pre-TX guard → 409 if closed)
+          → store.RunTx(fn)
+              → store.LoadMatchContext  (season, home/away team IDs)
+              → store.SeasonRoundConfig (handicap_multiplier + min_ball_handicap)
+              → store.LoadPlayerHandicap (per unique player)
+              → store.LoadPriorSnapshots (HC snapshot preservation)
+              → matches.ValidateRounds  (→ RoundValidationError on error)
+              → store.DeleteRoundResults / InsertRoundResult × N
+              → store.DeleteMatchResults / InsertMatchResult × M
+              → store.MarkMatchCompleted (if any game scored)
+```
+
+### Key design decisions (Q-B3-1/2/3)
+
+**Q-B3-1 (include submitResults/clearResults):** Both included in B3 scope.
+`SubmitResults` and `ClearResults` are thin TX operations wrapped by the store.
+`SubmitMatchResults` on the store calls `DeleteMatchResults` + `InsertMatchResult` × N
++ `MarkMatchCompleted` inside its own `RunTx`.
+
+**Q-B3-2 (config inside service):** `RoundService.SaveRounds` calls
+`store.SeasonRoundConfig` inside `RunTx` — no `Cfg` passed from the handler.
+This keeps the handler thin and ensures the config read is part of the same
+transaction as the writes.
+
+**Q-B3-3 (active-season fallback in handler):** `getStandings` resolves
+`season_id` from `league_id` via an active-season lookup in the handler, then
+passes the resolved ID to `mgr.GetStandings`. The service never sees a nil season ID.
+
+### HC snapshot preservation
+
+The `LoadPriorSnapshots` store method reads prior `round_results` rows inside the
+active transaction (before `DeleteRoundResults`). `SaveRounds` builds a
+`priorByRound` map and applies the same snapshot preservation logic as the old
+handler:
+
+| Scenario | home_handicap_used | away_handicap_used |
+|----------|-------------------|--------------------|
+| Same player on same side | Preserved from prior row | Preserved from prior row |
+| Home substituted, away same | Fresh from `players.handicap` | Preserved |
+| Both substituted | Fresh | Fresh |
+| First save | Fresh | Fresh |
+| Prior snapshot NULL (legacy) | Fresh at re-save | Fresh at re-save |
+
+### Error types
+
+| Error | HTTP mapping |
+|-------|-------------|
+| `*matches.RoundValidationError` | 422 with `{"messages": [...]}` |
+| `domainerr.Conflict` | 409 |
+| `domainerr.Unprocessable` | 422 with plain `{"error": "..."}` |
+| Other errors | 500 |
+
+### Temporary debt accepted in B3
+
+- `seasonMultiplier` and `seasonRoundConfig` remain in `handlers/api.go` for
+  `validateWeekHandler` and `closeWeekHandler` (B4 will move these to
+  `WeekStore.SeasonRoundConfig`).
+- `WeekService.db *sql.DB` is retained (B4 debt from B1/B2).
+- The `seasons.RosterEligible` cross-domain pre-TX guard stays in the handler,
+  called before `mgr.SaveRounds`. It checks `teams_managed=1` seasons only;
+  legacy seasons bypass the check automatically.
+- `GetRounds` falls back to `logic.Multiplier` (2.55) when `LoadMatchContext`
+  or `SeasonRoundConfig` fails, matching the old handler's silent error handling.
+
+### Not in B3
+
+- `ValidateWeek` signature change from `*sql.DB` to store interface (B4)
+- `seasonRoundConfig` / `seasonMultiplier` removal from `handlers/api.go` (B4)
+- Route or JSON shape changes
 
 ## Decision History
 

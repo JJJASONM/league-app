@@ -37,12 +37,15 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 	authStore := sqlite.NewApplyAuthStore(db.DB)
 	weekStore := sqlite.NewWeekStore(db.DB)
 	weekSvc := matches.NewWeekService(weekStore, db.DB, hcSvc)
+	roundStore := sqlite.NewRoundStore(db.DB)
+	roundSvc := matches.NewRoundService(roundStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
 		AdminToken:      c1AdminToken,
 		ApplyAuth:       authStore,
 		WeekMgr:         weekSvc,
+		RoundMgr:        roundSvc,
 	}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)

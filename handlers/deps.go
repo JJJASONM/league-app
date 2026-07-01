@@ -50,6 +50,17 @@ type WeekManager interface {
 	AdvancePreview(ctx context.Context, seasonID, weekNum int64) (models.AdvancePreview, error)
 }
 
+// RoundManager is the subset of matches.RoundService used by the round/standings/stats handlers.
+// Accepting an interface allows stub injection in tests.
+type RoundManager interface {
+	SaveRounds(ctx context.Context, input matches.SaveRoundsInput) error
+	GetRounds(ctx context.Context, matchID int64) ([]models.RoundResult, error)
+	GetStandings(ctx context.Context, seasonID int64) ([]models.Standing, error)
+	GetPlayerStats(ctx context.Context, req matches.PlayerStatsRequest) ([]models.PlayerStat, error)
+	SubmitResults(ctx context.Context, matchID int64, results []models.MatchResult) error
+	ClearResults(ctx context.Context, matchID int64) error
+}
+
 // Dependencies holds domain services injected into handlers at startup.
 // Add new service fields here as additional domains are migrated.
 type Dependencies struct {
@@ -65,4 +76,7 @@ type Dependencies struct {
 	// WeekMgr handles the week-workflow: list, validate, close, reopen, ack-history.
 	// When nil, week routes are not registered.
 	WeekMgr WeekManager
+	// RoundMgr handles scoresheet save/read, standings, and player stats.
+	// When nil, round/standings/stats routes are not registered.
+	RoundMgr RoundManager
 }

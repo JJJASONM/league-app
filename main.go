@@ -92,12 +92,15 @@ func main() {
 	hcSvc := handicaps.NewService(hcStore)
 	weekStore := sqlite.NewWeekStore(db.DB)
 	weekSvc := matches.NewWeekService(weekStore, db.DB, hcSvc)
+	roundStore := sqlite.NewRoundStore(db.DB)
+	roundSvc := matches.NewRoundService(roundStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
 		AdminToken:      os.Getenv("LEAGUE_ADMIN_TOKEN"),
 		ApplyAuth:       sqlite.NewApplyAuthStore(db.DB),
 		WeekMgr:         weekSvc,
+		RoundMgr:        roundSvc,
 	}
 
 	// API routes

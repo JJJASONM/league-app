@@ -108,10 +108,6 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	mux.HandleFunc("POST /api/matches/generate", generateSchedule)
 	mux.HandleFunc("GET /api/matches/{id}", getMatch)
 	mux.HandleFunc("PATCH /api/matches/{id}/assign", assignMatchTeams)
-	mux.HandleFunc("POST /api/matches/{id}/results", submitResults)
-	mux.HandleFunc("DELETE /api/matches/{id}/results", clearResults)
-	mux.HandleFunc("GET /api/matches/{id}/rounds", getRounds)
-	mux.HandleFunc("POST /api/matches/{id}/rounds", saveRounds)
 
 	// Lineup plans — pre-game slot assignments per team/week
 	mux.HandleFunc("GET /api/lineup-plans", listLineupPlans)
@@ -180,9 +176,28 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		)
 	}
 
-	// Standings & stats
-	mux.HandleFunc("GET /api/standings", getStandings)
-	mux.HandleFunc("GET /api/player-stats", getPlayerStats)
+	// Round results, standings, and stats — gated on RoundMgr.
+	if deps.RoundMgr != nil {
+		roundMgr := deps.RoundMgr
+		mux.HandleFunc("POST /api/matches/{id}/results", func(w http.ResponseWriter, r *http.Request) {
+			submitResults(w, r, roundMgr)
+		})
+		mux.HandleFunc("DELETE /api/matches/{id}/results", func(w http.ResponseWriter, r *http.Request) {
+			clearResults(w, r, roundMgr)
+		})
+		mux.HandleFunc("GET /api/matches/{id}/rounds", func(w http.ResponseWriter, r *http.Request) {
+			getRounds(w, r, roundMgr)
+		})
+		mux.HandleFunc("POST /api/matches/{id}/rounds", func(w http.ResponseWriter, r *http.Request) {
+			saveRounds(w, r, roundMgr)
+		})
+		mux.HandleFunc("GET /api/standings", func(w http.ResponseWriter, r *http.Request) {
+			getStandings(w, r, roundMgr)
+		})
+		mux.HandleFunc("GET /api/player-stats", func(w http.ResponseWriter, r *http.Request) {
+			getPlayerStats(w, r, roundMgr)
+		})
+	}
 
 	// Backup
 	mux.HandleFunc("POST /api/backup", func(w http.ResponseWriter, r *http.Request) {
@@ -1553,14 +1568,10 @@ func getMatch(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, models.MatchDetail{Match: m, Results: results})
 }
 
-func submitResults(w http.ResponseWriter, r *http.Request) {
+func submitResults(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
-		return
-	}
-	if matchWeekClosed(id) {
-		jsonError(w, "week is closed; reopen before editing scores", http.StatusConflict)
 		return
 	}
 	var req models.SubmitResultsRequest
@@ -1568,45 +1579,33 @@ func submitResults(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	tx, err := db.DB.Begin()
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer tx.Rollback()
-	tx.Exec(`DELETE FROM match_results WHERE match_id=?`, id)
-	for _, res := range req.Results {
-		_, err := tx.Exec(`
-			INSERT INTO match_results
-			  (match_id, player_id, team_id, sets_won, sets_lost, games_won, games_lost, diff)
-			VALUES (?,?,?,?,?,?,?,?)`,
-			id, res.PlayerID, res.TeamID,
-			res.SetsWon, res.SetsLost, res.GamesWon, res.GamesLost, res.Diff)
-		if err != nil {
-			jsonError(w, err.Error(), 500)
+	if err := mgr.SubmitResults(r.Context(), id, req.Results); err != nil {
+		var de *domainerr.Err
+		if errors.As(err, &de) && de.Category == domainerr.Conflict {
+			jsonError(w, de.Message, http.StatusConflict)
 			return
 		}
-	}
-	tx.Exec(`UPDATE matches SET completed=1 WHERE id=?`, id)
-	if err := tx.Commit(); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "saved"})
 }
 
-func clearResults(w http.ResponseWriter, r *http.Request) {
+func clearResults(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	if matchWeekClosed(id) {
-		jsonError(w, "week is closed; reopen before editing scores", http.StatusConflict)
+	if err := mgr.ClearResults(r.Context(), id); err != nil {
+		var de *domainerr.Err
+		if errors.As(err, &de) && de.Category == domainerr.Conflict {
+			jsonError(w, de.Message, http.StatusConflict)
+			return
+		}
+		jsonError(w, err.Error(), 500)
 		return
 	}
-	db.DB.Exec(`DELETE FROM match_results WHERE match_id=?`, id)
-	db.DB.Exec(`UPDATE matches SET completed=0 WHERE id=?`, id)
 	jsonOK(w, map[string]string{"status": "cleared"})
 }
 
@@ -2011,83 +2010,33 @@ func listUsers(w http.ResponseWriter, r *http.Request, auth ApplyAuthResolver) {
 
 // ─── Standings ────────────────────────────────────────────────────────────────
 
-func getStandings(w http.ResponseWriter, r *http.Request) {
-	seasonID := qparam(r, "season_id")
-	if seasonID == "" {
-		leagueID, ok := qparamInt(r, "league_id")
-		if !ok {
+func getStandings(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
+	sid, ok := qparamInt(r, "season_id")
+	if !ok {
+		leagueID, lok := qparamInt(r, "league_id")
+		if !lok {
 			jsonOK(w, []models.Standing{})
 			return
 		}
-		var id int64
 		if err := db.DB.QueryRow(
 			`SELECT id FROM seasons WHERE league_id=? AND active=1 LIMIT 1`, leagueID,
-		).Scan(&id); err != nil {
+		).Scan(&sid); err != nil {
 			jsonOK(w, []models.Standing{})
 			return
 		}
-		seasonID = fmt.Sprintf("%d", id)
 	}
-	rows, err := db.DB.Query(`
-		SELECT t.id, t.name FROM teams t
-		JOIN seasons s ON s.league_id = t.league_id
-		WHERE s.id=? ORDER BY t.name`, seasonID)
+	standings, err := mgr.GetStandings(r.Context(), sid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
-	}
-	var teams []models.Team
-	for rows.Next() {
-		var t models.Team
-		rows.Scan(&t.ID, &t.Name)
-		teams = append(teams, t)
-	}
-	rows.Close()
-
-	matchRows, err := db.DB.Query(`
-		SELECT id, season_id, home_team_id, away_team_id, match_date, week_number, completed, created_at
-		FROM matches WHERE season_id=? AND completed=1 AND week_closed=1`, seasonID)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	var matches []models.Match
-	for matchRows.Next() {
-		var m models.Match
-		var completed int
-		matchRows.Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.AwayTeamID,
-			&m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt)
-		m.Completed = completed == 1
-		matches = append(matches, m)
-	}
-	matchRows.Close()
-
-	resultMap := make(map[int64][]models.MatchResult)
-	for _, m := range matches {
-		resRows, err := db.DB.Query(`
-			SELECT id, match_id, player_id, team_id, sets_won, sets_lost,
-			       games_won, games_lost, diff, created_at
-			FROM match_results WHERE match_id=?`, m.ID)
-		if err != nil {
-			continue
-		}
-		for resRows.Next() {
-			var res models.MatchResult
-			resRows.Scan(&res.ID, &res.MatchID, &res.PlayerID, &res.TeamID,
-				&res.SetsWon, &res.SetsLost, &res.GamesWon, &res.GamesLost, &res.Diff, &res.CreatedAt)
-			resultMap[m.ID] = append(resultMap[m.ID], res)
-		}
-		resRows.Close()
-	}
-	standings := logic.ComputeStandings(matches, resultMap, teams)
-	if standings == nil {
-		standings = []models.Standing{}
 	}
 	jsonOK(w, standings)
 }
 
 // seasonMultiplier returns the handicap_multiplier rule value for a season,
 // defaulting to logic.Multiplier (2.55) if the rule is absent or invalid.
+// B4 debt: used by validateWeekHandler and closeWeekHandler; stays until WeekService
+// owns its own config reads.
 func seasonMultiplier(seasonID int64) float64 {
 	var val string
 	db.DB.QueryRow(
@@ -2104,8 +2053,7 @@ func seasonMultiplier(seasonID int64) float64 {
 }
 
 // seasonRoundConfig builds a RoundConfig from the season's handicap_multiplier and
-// min_ball_handicap rules. Used by saveRounds, validateWeekHandler, and closeWeekHandler
-// so they all apply identical rule resolution.
+// min_ball_handicap rules. B4 debt: used by validateWeekHandler and closeWeekHandler.
 func seasonRoundConfig(seasonID int64) matches.RoundConfig {
 	mult := seasonMultiplier(seasonID)
 	var minBallStr string
@@ -2116,177 +2064,26 @@ func seasonRoundConfig(seasonID int64) matches.RoundConfig {
 	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}
 }
 
-// txSeasonMultiplier reads handicap_multiplier through the given transaction.
-// sql.ErrNoRows returns the documented default. Any other query/scan error, or an
-// unparseable or non-positive stored value, returns an error.
-func txSeasonMultiplier(tx *sql.Tx, seasonID int64) (float64, error) {
-	var val string
-	err := tx.QueryRow(
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_multiplier'`,
-		seasonID).Scan(&val)
-	if errors.Is(err, sql.ErrNoRows) {
-		return logic.Multiplier, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("season %d: handicap_multiplier query: %w", seasonID, err)
-	}
-	f, parseErr := strconv.ParseFloat(val, 64)
-	if parseErr != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
-		return 0, fmt.Errorf("season %d: handicap_multiplier %q is not a positive finite number", seasonID, val)
-	}
-	return f, nil
-}
-
-// txSeasonRoundConfig builds a RoundConfig through the given transaction.
-// sql.ErrNoRows on either rule key returns the documented default. Any other query/scan
-// error, or an unparseable stored value, returns an error.
-func txSeasonRoundConfig(tx *sql.Tx, seasonID int64) (matches.RoundConfig, error) {
-	mult, err := txSeasonMultiplier(tx, seasonID)
-	if err != nil {
-		return matches.RoundConfig{}, err
-	}
-	var minBallStr string
-	err = tx.QueryRow(
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
-		seasonID).Scan(&minBallStr)
-	if errors.Is(err, sql.ErrNoRows) {
-		return matches.RoundConfig{Multiplier: mult, MinBallHC: 0}, nil
-	}
-	if err != nil {
-		return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap query: %w", seasonID, err)
-	}
-	minBallHC, parseErr := strconv.Atoi(minBallStr)
-	if parseErr != nil {
-		return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap %q is not an integer", seasonID, minBallStr)
-	}
-	if minBallHC < 0 {
-		return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap %d must be >= 0", seasonID, minBallHC)
-	}
-	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}, nil
-}
-
-// matchWeekClosed returns true when the match's week has been officially closed.
-func matchWeekClosed(matchID int64) bool {
-	var wc int
-	db.DB.QueryRow(`SELECT week_closed FROM matches WHERE id=?`, matchID).Scan(&wc)
-	return wc == 1
-}
-
 // ─── 8-Ball Round Results ─────────────────────────────────────────────────────
 
-// computePairingResult fills the derived/computed fields on a RoundResult.
-// multiplier is the season's handicap_multiplier (default logic.Multiplier = 2.55).
-// If a handicap snapshot is stored on the row, that is preferred over current
-// player handicap so historical scoresheets are stable.
-func computePairingResult(rr *models.RoundResult, multiplier float64) {
-	homeRaw := rr.Game1Home + rr.Game2Home + rr.Game3Home
-	awayRaw := rr.Game1Away + rr.Game2Away + rr.Game3Away
-
-	// Use stored snapshot when available; otherwise fall back to current player HC.
-	if rr.HandicapPtsUsed != nil && rr.HandicapToUsed != nil {
-		// Snapshot present — use it directly, no recomputation needed.
-		rr.HandicapPts = *rr.HandicapPtsUsed
-		rr.HandicapTo = *rr.HandicapToUsed
-	} else {
-		homeHC := rr.HomeHandicap
-		if rr.HomeHandicapUsed != nil {
-			homeHC = *rr.HomeHandicapUsed
-		}
-		awayHC := rr.AwayHandicap
-		if rr.AwayHandicapUsed != nil {
-			awayHC = *rr.AwayHandicapUsed
-		}
-		spot := logic.CalcSpotM(homeHC, awayHC, multiplier)
-		rr.HandicapPts = spot.Pts
-		rr.HandicapTo = spot.To
-	}
-
-	homeAdj := homeRaw
-	awayAdj := awayRaw
-	switch rr.HandicapTo {
-	case "home":
-		homeAdj += rr.HandicapPts
-	case "away":
-		awayAdj += rr.HandicapPts
-	}
-
-	rr.HomeTotalPts = homeAdj
-	rr.AwayTotalPts = awayAdj
-
-	switch {
-	case homeAdj > awayAdj:
-		rr.PairingWinner = "home"
-	case awayAdj > homeAdj:
-		rr.PairingWinner = "away"
-	default:
-		rr.PairingWinner = "" // tie
-	}
-}
-
-func getRounds(w http.ResponseWriter, r *http.Request) {
+func getRounds(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-
-	// Look up the season multiplier so historical scoresheets use the right value
-	// when there is no snapshot (older rows). New rows have snapshots so this only
-	// matters as a fallback.
-	var seasonID int64
-	db.DB.QueryRow(`SELECT season_id FROM matches WHERE id=?`, id).Scan(&seasonID)
-	mult := seasonMultiplier(seasonID)
-
-	rows, err := db.DB.Query(`
-		SELECT rr.id, rr.match_id, rr.round_number,
-		       rr.home_player_id, hp.first_name||' '||hp.last_name, hp.handicap,
-		       rr.away_player_id, ap.first_name||' '||ap.last_name, ap.handicap,
-		       rr.game1_home, rr.game1_away,
-		       rr.game2_home, rr.game2_away,
-		       rr.game3_home, rr.game3_away,
-		       rr.home_handicap_used, rr.away_handicap_used,
-		       rr.handicap_pts_used,  rr.handicap_to
-		FROM round_results rr
-		JOIN players hp ON hp.id = rr.home_player_id
-		JOIN players ap ON ap.id = rr.away_player_id
-		WHERE rr.match_id = ?
-		ORDER BY rr.round_number, rr.id`, id)
+	rounds, err := mgr.GetRounds(r.Context(), id)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var rounds []models.RoundResult
-	for rows.Next() {
-		var rr models.RoundResult
-		if err := rows.Scan(&rr.ID, &rr.MatchID, &rr.RoundNumber,
-			&rr.HomePlayerID, &rr.HomePlayerName, &rr.HomeHandicap,
-			&rr.AwayPlayerID, &rr.AwayPlayerName, &rr.AwayHandicap,
-			&rr.Game1Home, &rr.Game1Away,
-			&rr.Game2Home, &rr.Game2Away,
-			&rr.Game3Home, &rr.Game3Away,
-			&rr.HomeHandicapUsed, &rr.AwayHandicapUsed,
-			&rr.HandicapPtsUsed, &rr.HandicapToUsed); err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		computePairingResult(&rr, mult)
-		rounds = append(rounds, rr)
-	}
-	if rounds == nil {
-		rounds = []models.RoundResult{}
-	}
 	jsonOK(w, rounds)
 }
 
-func saveRounds(w http.ResponseWriter, r *http.Request) {
+func saveRounds(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 	matchID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
-		return
-	}
-	if matchWeekClosed(matchID) {
-		jsonError(w, "week is closed; reopen before editing scores", http.StatusConflict)
 		return
 	}
 	var req models.SaveRoundsRequest
@@ -2294,340 +2091,50 @@ func saveRounds(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-
-	// Block scoresheet entry when either team has fewer than 3 season-roster players.
-	// Only enforced when season_teams is in use (see RosterEligible for details).
+	// Roster eligibility guard: cross-domain pre-TX check kept in handler per B3 decision.
 	if ok, msg := seasons.RosterEligible(db.DB, matchID, 3); !ok {
 		jsonError(w, msg, http.StatusUnprocessableEntity)
 		return
 	}
-
-	// Begin transaction first; all reads and writes go through the transaction
-	// so snapshot reads, deletes, and inserts are consistent.
-	tx, txErr := db.DB.Begin()
-	if txErr != nil {
-		jsonError(w, txErr.Error(), 500)
-		return
-	}
-	defer tx.Rollback()
-
-	// Look up current handicaps via transaction. Missing player is a 500.
-	currentHC := make(map[int64]float64)
-	for _, rr := range req.Rounds {
-		currentHC[rr.HomePlayerID] = 0
-		currentHC[rr.AwayPlayerID] = 0
-	}
-	for pid := range currentHC {
-		var hc float64
-		if err := tx.QueryRow(`SELECT handicap FROM players WHERE id=?`, pid).Scan(&hc); err != nil {
-			jsonError(w, fmt.Sprintf("player %d not found: %v", pid, err), 500)
-			return
-		}
-		currentHC[pid] = hc
-	}
-
-	// Look up season ID via transaction; match not found is a 500.
-	var saveSeasonID int64
-	if err := tx.QueryRow(`SELECT season_id FROM matches WHERE id=?`, matchID).Scan(&saveSeasonID); err != nil {
-		jsonError(w, fmt.Sprintf("match %d not found: %v", matchID, err), 500)
-		return
-	}
-	saveCfg, err := txSeasonRoundConfig(tx, saveSeasonID)
+	err = mgr.SaveRounds(r.Context(), matches.SaveRoundsInput{MatchID: matchID, Rounds: req.Rounds})
 	if err != nil {
-		jsonError(w, fmt.Sprintf("season %d: round config unavailable: %v", saveSeasonID, err), 500)
-		return
-	}
-
-	// Load prior snapshots grouped by round number. Each round may have multiple
-	// prior rows (one per home_player_id). Matching is by player identity below,
-	// not by (round, home) key, so home-side substitutions correctly preserve
-	// the unchanged away snapshot.
-	type priorRow struct {
-		homePlayerID     int64
-		awayPlayerID     int64
-		homeHandicapUsed sql.NullFloat64
-		awayHandicapUsed sql.NullFloat64
-	}
-	priorByRound := map[int][]priorRow{}
-	snapRows, snapErr := tx.Query(`
-		SELECT round_number, home_player_id, away_player_id,
-		       home_handicap_used, away_handicap_used
-		FROM round_results WHERE match_id=?`, matchID)
-	if snapErr != nil {
-		jsonError(w, snapErr.Error(), 500)
-		return
-	}
-	for snapRows.Next() {
-		var rn int
-		var pr priorRow
-		if err := snapRows.Scan(&rn, &pr.homePlayerID, &pr.awayPlayerID,
-			&pr.homeHandicapUsed, &pr.awayHandicapUsed); err != nil {
-			snapRows.Close()
-			jsonError(w, err.Error(), 500)
+		var vErr *matches.RoundValidationError
+		if errors.As(err, &vErr) {
+			jsonValidation(w, vErr.Result.Result)
 			return
 		}
-		priorByRound[rn] = append(priorByRound[rn], pr)
-	}
-	if err := snapRows.Err(); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	snapRows.Close()
-
-	// Resolve effective handicap per pairing (indexed by submission slot).
-	// - home same:  preserve home HC; preserve away HC only when away also same.
-	// - home new:   search for prior row where away matches (unambiguous only);
-	//               preserve away HC; fresh HC for the substituted home player.
-	// - no match:   fresh HCs for both.
-	type effectiveHCEntry struct{ home, away float64 }
-	effectiveBySlot := make([]effectiveHCEntry, len(req.Rounds))
-	for i, rr := range req.Rounds {
-		homeHC := currentHC[rr.HomePlayerID]
-		awayHC := currentHC[rr.AwayPlayerID]
-
-		priors := priorByRound[rr.RoundNumber]
-
-		var matchedByHome *priorRow
-		for j := range priors {
-			if priors[j].homePlayerID == rr.HomePlayerID {
-				matchedByHome = &priors[j]
-				break
+		var de *domainerr.Err
+		if errors.As(err, &de) {
+			switch de.Category {
+			case domainerr.Conflict:
+				jsonError(w, de.Message, http.StatusConflict)
+			case domainerr.Unprocessable:
+				jsonError(w, de.Message, http.StatusUnprocessableEntity)
+			default:
+				jsonError(w, de.Message, http.StatusInternalServerError)
 			}
-		}
-
-		if matchedByHome != nil {
-			if matchedByHome.homeHandicapUsed.Valid {
-				homeHC = matchedByHome.homeHandicapUsed.Float64
-			}
-			if matchedByHome.awayPlayerID == rr.AwayPlayerID && matchedByHome.awayHandicapUsed.Valid {
-				awayHC = matchedByHome.awayHandicapUsed.Float64
-			}
-		} else {
-			var matchedByAway *priorRow
-			var awayCount int
-			for j := range priors {
-				if priors[j].awayPlayerID == rr.AwayPlayerID {
-					matchedByAway = &priors[j]
-					awayCount++
-				}
-			}
-			if awayCount > 1 {
-				jsonError(w, fmt.Sprintf(
-					"round %d: away player %d appears in %d prior pairings; cannot determine which snapshot to preserve",
-					rr.RoundNumber, rr.AwayPlayerID, awayCount), http.StatusUnprocessableEntity)
-				return
-			}
-			if awayCount == 1 && matchedByAway.awayHandicapUsed.Valid {
-				awayHC = matchedByAway.awayHandicapUsed.Float64
-			}
-		}
-
-		effectiveBySlot[i] = effectiveHCEntry{homeHC, awayHC}
-	}
-
-	// Per-pairing HC for ValidateRounds: each pairing validated with exactly
-	// the handicaps that will be stored.
-	pairingHCSlice := make([]matches.PairingHC, len(req.Rounds))
-	for i, e := range effectiveBySlot {
-		pairingHCSlice[i] = matches.PairingHC{HomeHC: e.home, AwayHC: e.away}
-	}
-
-	vResult := matches.ValidateRounds(req.Rounds, pairingHCSlice, saveCfg)
-	if vResult.HasErrors() {
-		jsonValidation(w, vResult.Result)
-		return
-	}
-
-	// Delete existing round results; abort on failure so no inserts follow a partial delete.
-	if _, err := tx.Exec(`DELETE FROM round_results WHERE match_id=?`, matchID); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	for i, rr := range req.Rounds {
-		ehc := effectiveBySlot[i]
-		spot := logic.CalcSpotM(ehc.home, ehc.away, saveCfg.Multiplier)
-		_, err := tx.Exec(`
-			INSERT INTO round_results
-			  (match_id, round_number, home_player_id, away_player_id,
-			   game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
-			   home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			matchID, rr.RoundNumber, rr.HomePlayerID, rr.AwayPlayerID,
-			rr.Game1Home, rr.Game1Away,
-			rr.Game2Home, rr.Game2Away,
-			rr.Game3Home, rr.Game3Away,
-			ehc.home, ehc.away,
-			spot.Pts, spot.To)
-		if err != nil {
-			jsonError(w, err.Error(), 500)
 			return
 		}
-	}
-
-	// Derive per-player match_results from round scores.
-	// games_won  = individual games where the player scored 10 (won the game)
-	// games_lost = individual games where they scored < 10 (lost)
-	// diff       = games_won − games_lost for this match (numerator for Diff handicap)
-	// sets_won / sets_lost = rounds won/lost by the player's team
-	type tally struct{ gw, gl, sw, sl int }
-	tallies := map[int64]*tally{}
-	ensure := func(pid int64) *tally {
-		if tallies[pid] == nil {
-			tallies[pid] = &tally{}
-		}
-		return tallies[pid]
-	}
-
-	for _, rr := range req.Rounds {
-		for _, pair := range [][2]int{
-			{rr.Game1Home, rr.Game1Away},
-			{rr.Game2Home, rr.Game2Away},
-			{rr.Game3Home, rr.Game3Away},
-		} {
-			h, a := pair[0], pair[1]
-			switch {
-			case h == 10:
-				ensure(rr.HomePlayerID).gw++
-				ensure(rr.AwayPlayerID).gl++
-			case a == 10:
-				ensure(rr.AwayPlayerID).gw++
-				ensure(rr.HomePlayerID).gl++
-				// If neither is 10 the game wasn't entered yet — skip
-			}
-		}
-	}
-
-	// Resolve team IDs from the match via transaction; failure is a 500.
-	var homeTeamID, awayTeamID int64
-	if err := tx.QueryRow(`SELECT home_team_id, away_team_id FROM matches WHERE id=?`, matchID).
-		Scan(&homeTeamID, &awayTeamID); err != nil {
-		jsonError(w, fmt.Sprintf("match %d team lookup failed: %v", matchID, err), 500)
-		return
-	}
-
-	pTeam := map[int64]int64{}
-	for _, rr := range req.Rounds {
-		pTeam[rr.HomePlayerID] = homeTeamID
-		pTeam[rr.AwayPlayerID] = awayTeamID
-	}
-
-	// Compute per-player sets_won / sets_lost from round winners.
-	for roundNum, winner := range vResult.RoundWinners {
-		if winner == "" {
-			continue
-		}
-		for _, rr := range req.Rounds {
-			if rr.RoundNumber != roundNum {
-				continue
-			}
-			if winner == "home" {
-				ensure(rr.HomePlayerID).sw++
-				ensure(rr.AwayPlayerID).sl++
-			} else {
-				ensure(rr.AwayPlayerID).sw++
-				ensure(rr.HomePlayerID).sl++
-			}
-		}
-	}
-
-	// Replace match_results
-	if _, err := tx.Exec(`DELETE FROM match_results WHERE match_id=?`, matchID); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	for pid, t := range tallies {
-		diff := float64(t.gw - t.gl)
-		_, err := tx.Exec(`
-			INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff, sets_won, sets_lost)
-			VALUES (?,?,?,?,?,?,?,?)`,
-			matchID, pid, pTeam[pid], t.gw, t.gl, diff, t.sw, t.sl)
-		if err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-	}
-
-	// Mark match completed whenever any game has been scored (score of 10 recorded)
-	anyScored := false
-	for _, rr := range req.Rounds {
-		for _, s := range []int{rr.Game1Home, rr.Game1Away, rr.Game2Home, rr.Game2Away, rr.Game3Home, rr.Game3Away} {
-			if s == 10 {
-				anyScored = true
-				break
-			}
-		}
-		if anyScored {
-			break
-		}
-	}
-	if anyScored {
-		tx.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID)
-	}
-
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	jsonOK(w, map[string]any{"saved": len(req.Rounds)})
 }
 
-func getPlayerStats(w http.ResponseWriter, r *http.Request) {
-	seasonID := qparam(r, "season_id")
-	leagueID := qparam(r, "league_id")
-	var query string
-	var args []any
-	switch {
-	case seasonID != "":
-		query = `
-			SELECT p.id, COALESCE(p.player_number,''), p.first_name || ' ' || p.last_name,
-			       COALESCE(t.name,''), p.handicap,
-			       COALESCE(SUM(mr.sets_won),0), COALESCE(SUM(mr.sets_lost),0),
-			       COALESCE(SUM(mr.games_won),0), COALESCE(SUM(mr.games_lost),0)
-			FROM players p
-			JOIN teams t ON t.id = p.team_id
-			JOIN seasons s ON s.league_id = t.league_id AND s.id = ?
-			LEFT JOIN match_results mr ON mr.player_id = p.id
-			    AND mr.match_id IN (
-			        SELECT id FROM matches
-			        WHERE season_id=? AND completed=1 AND week_closed=1
-			    )
-			GROUP BY p.id ORDER BY SUM(mr.sets_won) DESC, SUM(mr.games_won) DESC`
-		args = []any{seasonID, seasonID}
-	case leagueID != "":
-		query = `
-			SELECT p.id, COALESCE(p.player_number,''), p.first_name || ' ' || p.last_name,
-			       COALESCE(t.name,''), p.handicap,
-			       COALESCE(SUM(mr.sets_won),0), COALESCE(SUM(mr.sets_lost),0),
-			       COALESCE(SUM(mr.games_won),0), COALESCE(SUM(mr.games_lost),0)
-			FROM players p
-			JOIN teams t ON t.id = p.team_id AND t.league_id = ?
-			LEFT JOIN match_results mr ON mr.player_id = p.id
-			GROUP BY p.id ORDER BY SUM(mr.sets_won) DESC, SUM(mr.games_won) DESC`
-		args = []any{leagueID}
-	default:
+func getPlayerStats(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
+	var req matches.PlayerStatsRequest
+	if sid, ok := qparamInt(r, "season_id"); ok {
+		req.SeasonID = sid
+	} else if lid, ok := qparamInt(r, "league_id"); ok {
+		req.LeagueID = lid
+	} else {
 		jsonOK(w, []models.PlayerStat{})
 		return
 	}
-	rows, err := db.DB.Query(query, args...)
+	stats, err := mgr.GetPlayerStats(r.Context(), req)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
-	}
-	defer rows.Close()
-	var stats []models.PlayerStat
-	for rows.Next() {
-		var s models.PlayerStat
-		rows.Scan(&s.PlayerID, &s.PlayerNumber, &s.PlayerName, &s.TeamName, &s.Handicap,
-			&s.SetsWon, &s.SetsLost, &s.GamesWon, &s.GamesLost)
-		total := s.GamesWon + s.GamesLost
-		if total > 0 {
-			s.WinPct = float64(s.GamesWon) / float64(total)
-		}
-		stats = append(stats, s)
-	}
-	if stats == nil {
-		stats = []models.PlayerStat{}
 	}
 	jsonOK(w, stats)
 }
