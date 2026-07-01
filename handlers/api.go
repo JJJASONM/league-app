@@ -141,8 +141,10 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", func(w http.ResponseWriter, r *http.Request) {
 			getWeekAcknowledgments(w, r, weekMgr)
 		})
+		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/advance-preview", func(w http.ResponseWriter, r *http.Request) {
+			getAdvancePreview(w, r, weekMgr)
+		})
 	}
-	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/advance-preview", getAdvancePreview)
 	hcSvc := deps.HandicapSvc
 	mux.HandleFunc("GET /api/seasons/{id}/handicap-recommendations", func(w http.ResponseWriter, r *http.Request) {
 		getHandicapRecommendations(w, r, hcSvc)
@@ -1685,7 +1687,7 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	}
 
 	// Best-effort advance result; close is already committed.
-	ar, aerr := buildAdvanceResult(seasonID, weekNum)
+	ar, aerr := mgr.AdvanceData(r.Context(), seasonID, weekNum)
 	if aerr != nil {
 		jsonOK(w, map[string]any{
 			"closed":               true,
@@ -1759,336 +1761,7 @@ func getWeekAcknowledgments(w http.ResponseWriter, r *http.Request, mgr WeekMana
 	jsonOK(w, acks)
 }
 
-// buildAdvanceResult queries the current DB state and returns an AdvanceResult.
-// Called from both getAdvancePreview (before close) and closeWeekHandler (after commit).
-// No writes are performed. The caller sets AdvanceResult.Message.
-func buildAdvanceResult(seasonID, weekNum int64) (models.AdvanceResult, error) {
-	// Match counts for the week (matchCount counted during scan, not a separate query).
-	var matchCount, completedCount, closedCount int
-	cRows, err := db.DB.Query(`SELECT completed, week_closed FROM matches WHERE season_id=? AND week_number=?`,
-		seasonID, weekNum)
-	if err != nil {
-		return models.AdvanceResult{}, err
-	}
-	defer cRows.Close()
-	for cRows.Next() {
-		var comp, wc int
-		if err := cRows.Scan(&comp, &wc); err != nil {
-			return models.AdvanceResult{}, err
-		}
-		matchCount++
-		completedCount += comp
-		closedCount += wc
-	}
-	if err := cRows.Err(); err != nil {
-		return models.AdvanceResult{}, err
-	}
-
-	// Week status: ErrNoRows means no league_weeks row (implicitly open).
-	var weekStatus string
-	switch err := db.DB.QueryRow(`SELECT COALESCE(status,'open') FROM league_weeks WHERE season_id=? AND week_number=?`,
-		seasonID, weekNum).Scan(&weekStatus); err {
-	case nil:
-	case sql.ErrNoRows:
-		weekStatus = "open"
-	default:
-		return models.AdvanceResult{}, err
-	}
-	if weekStatus == "" {
-		weekStatus = "open"
-	}
-
-	// Find the next scheduled week (aggregate always returns one row).
-	var nextWeekNum int
-	if err := db.DB.QueryRow(`SELECT COALESCE(MIN(week_number),0) FROM matches WHERE season_id=? AND week_number>?`,
-		seasonID, weekNum).Scan(&nextWeekNum); err != nil {
-		return models.AdvanceResult{}, err
-	}
-
-	var nextWeekNumPtr *int
-	var nextWeek *models.AdvancePreviewNextWeek
-
-	if nextWeekNum > 0 {
-		nextWeekNumPtr = &nextWeekNum
-
-		var nextMatchCount int
-		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
-			seasonID, nextWeekNum).Scan(&nextMatchCount); err != nil {
-			return models.AdvanceResult{}, err
-		}
-
-		var assignedCount int
-		if err := db.DB.QueryRow(`
-			SELECT COUNT(*) FROM matches
-			WHERE season_id=? AND week_number=?
-			  AND home_team_id IS NOT NULL AND away_team_id IS NOT NULL`,
-			seasonID, nextWeekNum).Scan(&assignedCount); err != nil {
-			return models.AdvanceResult{}, err
-		}
-
-		var lineupPlanCount int
-		if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lineup_plans WHERE season_id=? AND week_number=?`,
-			seasonID, nextWeekNum).Scan(&lineupPlanCount); err != nil {
-			return models.AdvanceResult{}, err
-		}
-
-		// Teams that appear in next week's matches.
-		teamRows, tErr := db.DB.Query(`
-			SELECT DISTINCT t FROM (
-				SELECT home_team_id AS t FROM matches
-				WHERE season_id=? AND week_number=? AND home_team_id IS NOT NULL
-				UNION
-				SELECT away_team_id AS t FROM matches
-				WHERE season_id=? AND week_number=? AND away_team_id IS NOT NULL
-			)`, seasonID, nextWeekNum, seasonID, nextWeekNum)
-		if tErr != nil {
-			return models.AdvanceResult{}, tErr
-		}
-		defer teamRows.Close()
-		var allTeamIDs []int64
-		for teamRows.Next() {
-			var tid int64
-			if err := teamRows.Scan(&tid); err != nil {
-				return models.AdvanceResult{}, err
-			}
-			allTeamIDs = append(allTeamIDs, tid)
-		}
-		if err := teamRows.Err(); err != nil {
-			return models.AdvanceResult{}, err
-		}
-
-		missingTeamIDs := make([]int64, 0)
-		for _, tid := range allTeamIDs {
-			var planCount int
-			if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lineup_plans WHERE season_id=? AND week_number=? AND team_id=?`,
-				seasonID, nextWeekNum, tid).Scan(&planCount); err != nil {
-				return models.AdvanceResult{}, err
-			}
-			if planCount == 0 {
-				missingTeamIDs = append(missingTeamIDs, tid)
-			}
-		}
-
-		nextWeek = &models.AdvancePreviewNextWeek{
-			MatchCount:           nextMatchCount,
-			AssignedCount:        assignedCount,
-			UnassignedCount:      nextMatchCount - assignedCount,
-			LineupPlanCount:      lineupPlanCount,
-			MissingLineupTeamIDs: missingTeamIDs,
-		}
-	}
-
-	hc, err := buildHandicapPreview(seasonID, weekNum)
-	if err != nil {
-		return models.AdvanceResult{}, err
-	}
-
-	return models.AdvanceResult{
-		ClosedWeek: models.AdvancePreviewWeekSummary{
-			MatchCount:     matchCount,
-			CompletedCount: completedCount,
-			ClosedCount:    closedCount,
-			Status:         weekStatus,
-		},
-		NextWeekNumber: nextWeekNumPtr,
-		NextWeek:       nextWeek,
-		Handicap:       hc,
-	}, nil
-}
-
-// buildHandicapPreview computes read-only handicap recommendations for a season.
-// No writes are performed to players, handicap_history, or any other table.
-// Recommendations are draft preview logic (game_diff_average) -- not confirmed league policy.
-func buildHandicapPreview(seasonID, _ int64) (models.AdvancePreviewHandicap, error) {
-	method, err := seasonHandicapUpdateMethod(seasonID)
-	if err != nil {
-		return models.AdvancePreviewHandicap{}, err
-	}
-	switch method {
-	case "kicker_average_preview":
-		return models.AdvancePreviewHandicap{
-			Method:  method,
-			Status:  "unsupported",
-			Message: "Kicker average handicap recommendations are not implemented yet. No handicap changes are applied automatically.",
-		}, nil
-	case "game_diff_average":
-		maxHC, err := seasonMaxIndividualHC(seasonID)
-		if err != nil {
-			return models.AdvancePreviewHandicap{}, err
-		}
-		recs, err := computeGameDiffAverageRecs(seasonID, maxHC)
-		if err != nil {
-			return models.AdvancePreviewHandicap{}, err
-		}
-		changedCount := 0
-		for _, r := range recs {
-			if !r.Skipped && r.Reason != "no_change" {
-				changedCount++
-			}
-		}
-		var msg string
-		switch {
-		case changedCount == 1:
-			msg = "1 player has a recommended handicap change (not yet applied)."
-		case changedCount > 1:
-			msg = fmt.Sprintf("%d players have recommended handicap changes (not yet applied).", changedCount)
-		default:
-			msg = "No handicap changes recommended. No changes are applied automatically."
-		}
-		return models.AdvancePreviewHandicap{
-			Method:          method,
-			Status:          "preview",
-			Message:         msg,
-			Recommendations: recs,
-		}, nil
-	default: // "manual_review" and any unknown method
-		return models.AdvancePreviewHandicap{
-			Method:  method,
-			Status:  "no_auto_apply",
-			Message: "No handicap changes are applied automatically.",
-		}, nil
-	}
-}
-
-// computeGameDiffAverageRecs returns per-player handicap recommendations using average
-// game diff across all completed, officially closed matches for the season.
-// Players are sourced from season_rosters (managed seasons) and/or match_results for
-// closed matches (legacy seasons), so no_data entries can be represented.
-// No writes are performed.
-func computeGameDiffAverageRecs(seasonID int64, maxHC float64) ([]models.PlayerHandicapRec, error) {
-	rows, err := db.DB.Query(`
-		SELECT
-		    p.id,
-		    p.first_name || ' ' || p.last_name,
-		    p.handicap,
-		    p.admin_hold,
-		    COUNT(mr.id),
-		    COALESCE(SUM(mr.diff), 0.0)
-		FROM (
-		    SELECT DISTINCT player_id FROM season_rosters WHERE season_id = ?
-		    UNION
-		    SELECT DISTINCT mr2.player_id
-		    FROM match_results mr2
-		    JOIN matches m2 ON m2.id = mr2.match_id
-		    WHERE m2.season_id = ? AND m2.completed = 1 AND m2.week_closed = 1
-		) AS candidates
-		JOIN players p ON p.id = candidates.player_id
-		LEFT JOIN match_results mr ON mr.player_id = p.id
-		    AND mr.match_id IN (
-		        SELECT id FROM matches
-		        WHERE season_id = ? AND completed = 1 AND week_closed = 1
-		    )
-		GROUP BY p.id, p.first_name, p.last_name, p.handicap, p.admin_hold
-		ORDER BY p.first_name, p.last_name`,
-		seasonID, seasonID, seasonID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var recs []models.PlayerHandicapRec
-	for rows.Next() {
-		var (
-			playerID   int64
-			playerName string
-			currentHC  float64
-			adminHold  bool
-			matchCount int
-			totalDiff  float64
-		)
-		if err := rows.Scan(&playerID, &playerName, &currentHC, &adminHold, &matchCount, &totalDiff); err != nil {
-			return nil, err
-		}
-
-		rec := models.PlayerHandicapRec{
-			PlayerID:        playerID,
-			PlayerName:      playerName,
-			CurrentHandicap: currentHC,
-			AdminHold:       adminHold,
-			MatchesPlayed:   matchCount,
-		}
-
-		if adminHold {
-			rec.Skipped             = true
-			rec.Reason              = "admin_hold"
-			rec.RecommendedHandicap = currentHC
-			recs = append(recs, rec)
-			continue
-		}
-
-		if matchCount == 0 {
-			rec.Skipped             = true
-			rec.Reason              = "no_data"
-			rec.RecommendedHandicap = currentHC
-			recs = append(recs, rec)
-			continue
-		}
-
-		avg := totalDiff / float64(matchCount)
-		recommended := math.Round(avg*10) / 10 // nearest 0.1
-
-		capped := false
-		if recommended > maxHC {
-			recommended = math.Round(maxHC*10) / 10
-			capped = true
-		} else if recommended < -maxHC {
-			recommended = math.Round(-maxHC*10) / 10
-			capped = true
-		}
-		rec.RecommendedHandicap = recommended
-
-		switch {
-		case capped:
-			rec.Reason = "capped"
-		case math.Round(currentHC*10)/10 == recommended:
-			rec.Reason = "no_change"
-		}
-
-		recs = append(recs, rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return recs, nil
-}
-
-// seasonHandicapUpdateMethod returns the handicap_update_method rule for a season,
-// defaulting to "manual_review" if absent or empty.
-func seasonHandicapUpdateMethod(seasonID int64) (string, error) {
-	var val string
-	err := db.DB.QueryRow(
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_update_method'`,
-		seasonID).Scan(&val)
-	if err == sql.ErrNoRows || val == "" {
-		return "manual_review", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return val, nil
-}
-
-// seasonMaxIndividualHC returns the max_individual_handicap rule for a season,
-// defaulting to 4.5 if absent or invalid.
-func seasonMaxIndividualHC(seasonID int64) (float64, error) {
-	var val string
-	err := db.DB.QueryRow(
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='max_individual_handicap'`,
-		seasonID).Scan(&val)
-	if err == sql.ErrNoRows || val == "" {
-		return 4.5, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	f, parseErr := strconv.ParseFloat(val, 64)
-	if parseErr != nil || f <= 0 {
-		return 4.5, nil
-	}
-	return f, nil
-}
-
-func getAdvancePreview(w http.ResponseWriter, r *http.Request) {
+func getAdvancePreview(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	seasonID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -2100,48 +1773,15 @@ func getAdvancePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 404 when no matches exist for this season/week.
-	var matchCount int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
-		seasonID, weekNum).Scan(&matchCount); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if matchCount == 0 {
-		jsonError(w, "week not found: no matches for this season and week", http.StatusNotFound)
-		return
-	}
-
-	// Run validation to determine can_close and messages.
-	cfg := seasonRoundConfig(seasonID)
-	result := matches.ValidateWeek(db.DB, seasonID, int(weekNum), cfg)
-
-	previewMsgs := make([]models.AdvancePreviewMessage, 0, len(result.Messages))
-	for _, msg := range result.Messages {
-		previewMsgs = append(previewMsgs, models.AdvancePreviewMessage{
-			Code:    msg.Code,
-			Field:   msg.Field,
-			Message: msg.Message,
-			Level:   string(msg.Level),
-			MatchID: msg.MatchID,
-		})
-	}
-
-	ar, err := buildAdvanceResult(seasonID, weekNum)
+	preview, err := mgr.AdvancePreview(r.Context(), seasonID, weekNum)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		var de *domainerr.Err
+		if errors.As(err, &de) && de.Category == domainerr.NotFound {
+			jsonError(w, de.Message, http.StatusNotFound)
+		} else {
+			jsonError(w, err.Error(), 500)
+		}
 		return
-	}
-
-	preview := models.AdvancePreview{
-		SeasonID:           seasonID,
-		WeekNumber:         int(weekNum),
-		CanClose:           !result.HasErrors(),
-		ValidationMessages: previewMsgs,
-		CurrentWeek:        ar.ClosedWeek,
-		NextWeekNumber:     ar.NextWeekNumber,
-		NextWeek:           ar.NextWeek,
-		Handicap:           ar.Handicap,
 	}
 	jsonOK(w, preview)
 }

@@ -215,6 +215,145 @@ func (s *WeekStore) ReopenWeek(ctx context.Context, seasonID, weekNum int64) err
 	return nil
 }
 
+// GetWeekAdvanceSummary returns match counts, week status, and next-week
+// readiness for the advance-preview and close-result response. Read-only.
+// Returns an empty summary without error when no matches exist for the week.
+func (s *WeekStore) GetWeekAdvanceSummary(ctx context.Context, seasonID, weekNum int64) (matches.WeekAdvanceSummary, error) {
+	// Match counts for the closing week.
+	var matchCount, completedCount, closedCount int
+	cRows, err := s.db.QueryContext(ctx, `
+		SELECT completed, week_closed FROM matches
+		WHERE season_id=? AND week_number=?`, seasonID, weekNum)
+	if err != nil {
+		return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: match counts: %w", err)
+	}
+	defer cRows.Close()
+	for cRows.Next() {
+		var comp, wc int
+		if err := cRows.Scan(&comp, &wc); err != nil {
+			return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: match counts scan: %w", err)
+		}
+		matchCount++
+		completedCount += comp
+		closedCount += wc
+	}
+	if err := cRows.Err(); err != nil {
+		return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: match counts rows: %w", err)
+	}
+
+	// Week status from league_weeks; absence means open.
+	var weekStatus string
+	switch err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(status,'open') FROM league_weeks
+		WHERE season_id=? AND week_number=?`, seasonID, weekNum).Scan(&weekStatus); err {
+	case nil:
+	case sql.ErrNoRows:
+		weekStatus = "open"
+	default:
+		return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: week status: %w", err)
+	}
+	if weekStatus == "" {
+		weekStatus = "open"
+	}
+
+	// Next scheduled week (COALESCE returns 0 when no later week exists).
+	var nextWeekNum int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MIN(week_number),0) FROM matches
+		WHERE season_id=? AND week_number>?`, seasonID, weekNum).Scan(&nextWeekNum); err != nil {
+		return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: next week: %w", err)
+	}
+
+	var nextWeekNumPtr *int
+	var nextWeek *models.AdvancePreviewNextWeek
+
+	if nextWeekNum > 0 {
+		nextWeekNumPtr = &nextWeekNum
+
+		var nextMatchCount int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
+			seasonID, nextWeekNum).Scan(&nextMatchCount); err != nil {
+			return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: next week match count: %w", err)
+		}
+
+		var assignedCount int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM matches
+			WHERE season_id=? AND week_number=?
+			  AND home_team_id IS NOT NULL AND away_team_id IS NOT NULL`,
+			seasonID, nextWeekNum).Scan(&assignedCount); err != nil {
+			return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: next week assigned count: %w", err)
+		}
+
+		var lineupPlanCount int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM lineup_plans WHERE season_id=? AND week_number=?`,
+			seasonID, nextWeekNum).Scan(&lineupPlanCount); err != nil {
+			return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: next week lineup count: %w", err)
+		}
+
+		// Distinct team IDs in next week's matches.
+		teamRows, err := s.db.QueryContext(ctx, `
+			SELECT DISTINCT t FROM (
+				SELECT home_team_id AS t FROM matches
+				WHERE season_id=? AND week_number=? AND home_team_id IS NOT NULL
+				UNION
+				SELECT away_team_id AS t FROM matches
+				WHERE season_id=? AND week_number=? AND away_team_id IS NOT NULL
+			)`, seasonID, nextWeekNum, seasonID, nextWeekNum)
+		if err != nil {
+			return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: next week teams: %w", err)
+		}
+		var allTeamIDs []int64
+		for teamRows.Next() {
+			var tid int64
+			if err := teamRows.Scan(&tid); err != nil {
+				teamRows.Close()
+				return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: next week teams scan: %w", err)
+			}
+			allTeamIDs = append(allTeamIDs, tid)
+		}
+		teamRows.Close()
+		if err := teamRows.Err(); err != nil {
+			return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: next week teams rows: %w", err)
+		}
+
+		missingTeamIDs := make([]int64, 0)
+		for _, tid := range allTeamIDs {
+			var planCount int
+			if err := s.db.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM lineup_plans
+				WHERE season_id=? AND week_number=? AND team_id=?`,
+				seasonID, nextWeekNum, tid).Scan(&planCount); err != nil {
+				return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: lineup check team %d: %w", tid, err)
+			}
+			if planCount == 0 {
+				missingTeamIDs = append(missingTeamIDs, tid)
+			}
+		}
+
+		nextWeek = &models.AdvancePreviewNextWeek{
+			MatchCount:           nextMatchCount,
+			AssignedCount:        assignedCount,
+			UnassignedCount:      nextMatchCount - assignedCount,
+			LineupPlanCount:      lineupPlanCount,
+			MissingLineupTeamIDs: missingTeamIDs,
+		}
+	}
+
+	return matches.WeekAdvanceSummary{
+		ClosedWeek: models.AdvancePreviewWeekSummary{
+			MatchCount:     matchCount,
+			CompletedCount: completedCount,
+			ClosedCount:    closedCount,
+			Status:         weekStatus,
+		},
+		NextWeekNumber: nextWeekNumPtr,
+		NextWeek:       nextWeek,
+	}, nil
+}
+
 // ListAcknowledgments returns all close acknowledgments for the week, ordered
 // by acknowledged_at DESC.
 func (s *WeekStore) ListAcknowledgments(ctx context.Context, seasonID, weekNum int64) ([]models.CloseAck, error) {

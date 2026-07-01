@@ -1082,8 +1082,9 @@ Week routes are conditionally registered when `deps.WeekMgr != nil`. In producti
 auth tests) may omit it; those test servers simply won't have week endpoints. All
 existing week integration tests go through `testServer()` which wires `WeekMgr`.
 
-The `advance-preview` route is always registered (it still uses `db.DB` directly via
-`buildAdvanceResult`, deferred to B2).
+The `advance-preview` route was registered outside the weekMgr block in B1 (still using
+`db.DB` directly via `buildAdvanceResult`). Moved inside the block and delegated to
+`WeekMgr.AdvancePreview` in B2.
 
 ### Not in B1
 
@@ -1091,6 +1092,87 @@ The `advance-preview` route is always registered (it still uses `db.DB` directly
 - `saveRounds` HC snapshot TX logic (B3)
 - `ValidateWeek` signature change from `*sql.DB` to a store interface (B4)
 - Route/shape changes, new endpoints
+
+## Phase B2 — Advance Preview and Close Result Extraction (implemented 2026-07-01)
+
+### Goal
+
+Extract advance-preview assembly and handicap preview assembly out of
+`handlers/api.go` into their respective domain services. No route paths or
+JSON shapes changed; browser behavior is unchanged.
+
+### New files
+
+| File | Role |
+|------|------|
+| `backend/domains/matches/advance.go` | `HandicapPreviewer` interface; `WeekAdvanceSummary` type |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `backend/domains/matches/store.go` | Added `GetWeekAdvanceSummary` to `WeekStore` interface |
+| `backend/domains/matches/service.go` | Added `hcPreview HandicapPreviewer` field; `AdvanceData`, `AdvancePreview` methods; `roundConfig` private helper |
+| `backend/domains/matches/service_test.go` | Added stub `GetWeekAdvanceSummary`; added `stubHandicapPreviewer`; added `AdvanceData` and `AdvancePreview` tests |
+| `backend/domains/handicaps/store.go` | Added `GameDiffAverageRow` type; `GameDiffAverageRecs` to `Store` interface |
+| `backend/domains/handicaps/service.go` | Added `HandicapPreview` method; `applyGameDiffCap` helper |
+| `backend/domains/handicaps/service_test.go` | Added `gameDiffRecs` field to stub; `GameDiffAverageRecs` stub; 7 `HandicapPreview` tests |
+| `backend/storage/sqlite/week_store.go` | `GetWeekAdvanceSummary` implementation |
+| `backend/storage/sqlite/week_store_test.go` | 5 `GetWeekAdvanceSummary` tests |
+| `backend/storage/sqlite/handicap_store.go` | `GameDiffAverageRecs` implementation |
+| `backend/storage/sqlite/handicap_store_test.go` | 4 `GameDiffAverageRecs` tests |
+| `handlers/deps.go` | Added `AdvanceData` and `AdvancePreview` to `WeekManager` interface |
+| `handlers/api.go` | Thinned `getAdvancePreview` to delegate; `closeWeekHandler` calls `mgr.AdvanceData`; deleted `buildAdvanceResult`, `buildHandicapPreview`, `computeGameDiffAverageRecs`, `seasonHandicapUpdateMethod`, `seasonMaxIndividualHC` (~270 lines removed) |
+| `handlers/api_test.go` | `testServer()` updated to 3-arg `NewWeekService` |
+| `handlers/api_apply_c1_test.go` | Updated to 3-arg `NewWeekService` |
+| `main.go` | `NewWeekService` now passes `hcSvc` as third argument |
+
+### Architecture
+
+```
+getAdvancePreview handler
+  → deps.WeekMgr.AdvancePreview (WeekManager)
+      → matches.WeekService.AdvancePreview
+          → store.WeekMatchCount   (404 check)
+          → ValidateWeek           (validation; B4 debt: uses s.db)
+          → WeekService.AdvanceData
+              → store.GetWeekAdvanceSummary (match counts, status, next week)
+              → hcPreview.HandicapPreview   (HandicapPreviewer interface)
+                  → handicaps.Service.HandicapPreview
+                      → store.SeasonHandicapRules
+                      → store.GameDiffAverageRecs (outside RunTx; read-only preview)
+
+closeWeekHandler
+  → deps.WeekMgr.CloseWeek       (unchanged from B1)
+  → deps.WeekMgr.AdvanceData     (new; post-commit best-effort summary)
+      → (same path as above)
+```
+
+### HandicapPreviewer interface (consumer-defines)
+
+`HandicapPreviewer` is defined in the `matches` package (consumer) and
+implemented by `handicaps.Service`. This is the standard Go consumer-defines-
+interface pattern and avoids an import cycle between `matches` and `handicaps`.
+
+### Temporary debt accepted in B2
+
+- `WeekService.roundConfig` reads `handicap_multiplier` and `min_ball_handicap`
+  from `s.db` directly. This mirrors the handler's old `seasonRoundConfig`.
+  Both move to a `WeekStore` method in B4 when `ValidateWeek` is extracted.
+- `WeekService.db *sql.DB` is retained for the same reason (B4 will remove it).
+- `GameDiffAverageRecs` is called outside `RunTx` (read-only preview, no
+  atomicity needed). Acceptable for best-effort pre-close display.
+- `HandicapPreview` uses `game_diff_average` logic in the advance-preview path,
+  which is the legacy formula. The Handicap Review screen uses the
+  opponent-normalized formula via `Recommendations`. The preview path is display-
+  only and not authoritative for Apply.
+
+### Not in B2
+
+- `saveRounds` HC snapshot TX logic (B3)
+- `ValidateWeek` signature change (B4)
+- Standings or stats extraction
+- Route/shape changes
 
 ## Decision History
 

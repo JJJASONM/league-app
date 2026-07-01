@@ -49,7 +49,7 @@ func testServer(t *testing.T) *httptest.Server {
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
 	weekStore := sqlite.NewWeekStore(db.DB)
-	weekSvc := matches.NewWeekService(weekStore, db.DB)
+	weekSvc := matches.NewWeekService(weekStore, db.DB, hcSvc)
 	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)

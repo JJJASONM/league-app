@@ -277,3 +277,100 @@ func TestWeekStore_ListAcknowledgments_ReturnsInsertedRows(t *testing.T) {
 		t.Errorf("want 2 ack rows, got %d", len(got))
 	}
 }
+
+func TestWeekStore_GetWeekAdvanceSummary_NoMatches_EmptySummary(t *testing.T) {
+	initWeekDB(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	summary, err := store.GetWeekAdvanceSummary(context.Background(), 99, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.ClosedWeek.MatchCount != 0 {
+		t.Errorf("want 0 matches, got %d", summary.ClosedWeek.MatchCount)
+	}
+	if summary.NextWeekNumber != nil {
+		t.Error("want nil NextWeekNumber when no matches")
+	}
+	if summary.NextWeek != nil {
+		t.Error("want nil NextWeek when no matches")
+	}
+}
+
+func TestWeekStore_GetWeekAdvanceSummary_CountsMatchCompletedClosed(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	// Mark match as completed and closed.
+	db.DB.Exec(`UPDATE matches SET completed=1, week_closed=1 WHERE id=?`, matchID)
+
+	summary, err := store.GetWeekAdvanceSummary(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.ClosedWeek.MatchCount != 1 {
+		t.Errorf("want MatchCount=1, got %d", summary.ClosedWeek.MatchCount)
+	}
+	if summary.ClosedWeek.CompletedCount != 1 {
+		t.Errorf("want CompletedCount=1, got %d", summary.ClosedWeek.CompletedCount)
+	}
+	if summary.ClosedWeek.ClosedCount != 1 {
+		t.Errorf("want ClosedCount=1, got %d", summary.ClosedWeek.ClosedCount)
+	}
+}
+
+func TestWeekStore_GetWeekAdvanceSummary_StatusClosedAfterClose(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	store.CloseWeek(context.Background(), seasonID, 1, nil)
+
+	summary, err := store.GetWeekAdvanceSummary(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.ClosedWeek.Status != "closed" {
+		t.Errorf("want status=closed after CloseWeek, got %q", summary.ClosedWeek.Status)
+	}
+}
+
+func TestWeekStore_GetWeekAdvanceSummary_StatusOpenByDefault(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	summary, err := store.GetWeekAdvanceSummary(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.ClosedWeek.Status != "open" {
+		t.Errorf("want status=open (no league_weeks row), got %q", summary.ClosedWeek.Status)
+	}
+}
+
+func TestWeekStore_GetWeekAdvanceSummary_NextWeekDetected(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t) // seeds week 1
+
+	// Seed a second match in week 2.
+	var tA, tB int64
+	db.DB.QueryRow(`SELECT home_team_id, away_team_id FROM matches WHERE season_id=?`, seasonID).Scan(&tA, &tB)
+	db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number) VALUES (?,?,?,2)`, seasonID, tA, tB)
+
+	store := sqlite.NewWeekStore(db.DB)
+	summary, err := store.GetWeekAdvanceSummary(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.NextWeekNumber == nil || *summary.NextWeekNumber != 2 {
+		t.Errorf("want NextWeekNumber=2, got %v", summary.NextWeekNumber)
+	}
+	if summary.NextWeek == nil {
+		t.Fatal("want non-nil NextWeek")
+	}
+	if summary.NextWeek.MatchCount != 1 {
+		t.Errorf("want NextWeek.MatchCount=1, got %d", summary.NextWeek.MatchCount)
+	}
+}

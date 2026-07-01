@@ -75,6 +75,18 @@ type RackRow struct {
 	AwayHCUsed   *float64
 }
 
+// GameDiffAverageRow is raw aggregated match-result data for one player in the
+// game-diff-average advance preview. Business logic (cap, rounding, reason
+// classification) is applied by Service.HandicapPreview, not in the store.
+type GameDiffAverageRow struct {
+	PlayerID   int64
+	PlayerName string
+	CurrentHC  float64
+	AdminHold  bool
+	MatchCount int
+	TotalDiff  float64
+}
+
 // Store is the data-access contract for the handicaps domain.
 // Implementations own all SQL. Service code contains no SQL.
 // No database/sql types appear in any method signature.
@@ -127,4 +139,11 @@ type Store interface {
 
 	// InsertHandicapHistory inserts one row into handicap_history with all Phase B columns.
 	InsertHandicapHistory(ctx context.Context, row HandicapHistoryRow) error
+
+	// GameDiffAverageRecs returns raw aggregated match-result data for all candidate
+	// players in the season. Candidates come from season_rosters and from players
+	// appearing in officially closed match results (completed=1, week_closed=1).
+	// Returns a non-nil empty slice when no candidates exist.
+	// Called outside RunTx; no write transaction is needed for a preview read.
+	GameDiffAverageRecs(ctx context.Context, seasonID int64) ([]GameDiffAverageRow, error)
 }

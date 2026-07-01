@@ -91,7 +91,7 @@ func main() {
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
 	weekStore := sqlite.NewWeekStore(db.DB)
-	weekSvc := matches.NewWeekService(weekStore, db.DB)
+	weekSvc := matches.NewWeekService(weekStore, db.DB, hcSvc)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,

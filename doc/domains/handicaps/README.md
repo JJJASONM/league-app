@@ -543,7 +543,21 @@ and business logic. Phase A extracted that into a three-layer stack:
 The handler is now a ~20-line thin delegator. The two extracted private functions
 (`seasonHandicapWindowConfig`, `computeOpponentNormalizedRecs`) were deleted from
 `handlers/api.go`. `seasonHandicapUpdateMethod` and `seasonMaxIndividualHC` were
-retained for the `buildAdvanceResult`/close-week path.
+retained for the `buildAdvanceResult`/close-week path until B2.
+
+### 2026-07-01 - B2: HandicapPreview added; seasonHandicapUpdateMethod/MaxIndividualHC removed from handlers
+
+**Status:** `accepted`
+
+`handicaps.Service` gained a `HandicapPreview(ctx, seasonID)` method that
+assembles advance-preview handicap data using `GameDiffAverageRecs` from the
+store. The `HandicapPreviewer` interface is defined in the `matches` package
+(consumer) and implemented here, avoiding an import cycle.
+
+`seasonHandicapUpdateMethod` and `seasonMaxIndividualHC` were deleted from
+`handlers/api.go`. `computeGameDiffAverageRecs` and `buildHandicapPreview`
+were also deleted. Their replacements live in `handicaps.Service.HandicapPreview`
+and `sqlite.HandicapStore.GameDiffAverageRecs`.
 
 ### 2026-06-30 - Phase B2 registers Apply route behind static bearer token
 

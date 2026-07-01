@@ -46,6 +46,8 @@ type WeekManager interface {
 	CloseWeek(ctx context.Context, req matches.CloseWeekRequest) (matches.CloseWeekResult, error)
 	ReopenWeek(ctx context.Context, seasonID, weekNum int64) error
 	ListAcknowledgments(ctx context.Context, seasonID, weekNum int64) ([]models.CloseAck, error)
+	AdvanceData(ctx context.Context, seasonID, weekNum int64) (models.AdvanceResult, error)
+	AdvancePreview(ctx context.Context, seasonID, weekNum int64) (models.AdvancePreview, error)
 }
 
 // Dependencies holds domain services injected into handlers at startup.

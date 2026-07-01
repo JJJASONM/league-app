@@ -30,12 +30,16 @@ type stubStore struct {
 	racksErr        error
 
 	// Write-side fields (Phase B)
-	priorHistory       []handicaps.AppliedHistory
-	priorHistoryErr    error
-	updateHCUpdated    bool
-	updateHCErr        error
-	insertHistoryErr   error
+	priorHistory        []handicaps.AppliedHistory
+	priorHistoryErr     error
+	updateHCUpdated     bool
+	updateHCErr         error
+	insertHistoryErr    error
 	insertedHistoryRows []handicaps.HandicapHistoryRow
+
+	// Preview-side fields
+	gameDiffRecs    []handicaps.GameDiffAverageRow
+	gameDiffRecsErr error
 }
 
 func (s *stubStore) RunTx(_ context.Context, fn func(handicaps.Store) error) error {
@@ -71,6 +75,10 @@ func (s *stubStore) UpdatePlayerHandicap(_ context.Context, _ int64, _, _ float6
 func (s *stubStore) InsertHandicapHistory(_ context.Context, row handicaps.HandicapHistoryRow) error {
 	s.insertedHistoryRows = append(s.insertedHistoryRows, row)
 	return s.insertHistoryErr
+}
+
+func (s *stubStore) GameDiffAverageRecs(_ context.Context, _ int64) ([]handicaps.GameDiffAverageRow, error) {
+	return s.gameDiffRecs, s.gameDiffRecsErr
 }
 
 // runTxTrackingStore counts RunTx calls and panics on direct data-method calls.
@@ -112,6 +120,9 @@ func (s *runTxTrackingStore) UpdatePlayerHandicap(_ context.Context, _ int64, _,
 }
 func (s *runTxTrackingStore) InsertHandicapHistory(_ context.Context, _ handicaps.HandicapHistoryRow) error {
 	panic("InsertHandicapHistory called on Recommendations-only tracking store")
+}
+func (s *runTxTrackingStore) GameDiffAverageRecs(_ context.Context, _ int64) ([]handicaps.GameDiffAverageRow, error) {
+	panic("GameDiffAverageRecs called on Recommendations-only tracking store")
 }
 
 func ptr(s string) *string { return &s }
@@ -450,5 +461,157 @@ func TestRecommendations_Preview_ChangedCountMessage(t *testing.T) {
 	}
 	if resp.Message == "" {
 		t.Error("want non-empty message")
+	}
+}
+
+// ============================================================================
+// HandicapPreview
+// ============================================================================
+
+func TestHandicapPreview_ManualReview_NoAutoApply(t *testing.T) {
+	method := "manual_review"
+	store := &stubStore{
+		rules: handicaps.HandicapRuleRow{UpdateMethod: &method},
+	}
+	svc := handicaps.NewService(store)
+
+	hc, err := svc.HandicapPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hc.Method != "manual_review" {
+		t.Errorf("want method=manual_review, got %q", hc.Method)
+	}
+	if hc.Status != "no_auto_apply" {
+		t.Errorf("want status=no_auto_apply, got %q", hc.Status)
+	}
+}
+
+func TestHandicapPreview_KickerAverage_Unsupported(t *testing.T) {
+	method := "kicker_average_preview"
+	store := &stubStore{
+		rules: handicaps.HandicapRuleRow{UpdateMethod: &method},
+	}
+	svc := handicaps.NewService(store)
+
+	hc, err := svc.HandicapPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hc.Status != "unsupported" {
+		t.Errorf("want status=unsupported, got %q", hc.Status)
+	}
+}
+
+func TestHandicapPreview_GameDiffAverage_NoRecs_NoChange(t *testing.T) {
+	method := "game_diff_average"
+	store := &stubStore{
+		rules:        handicaps.HandicapRuleRow{UpdateMethod: &method},
+		gameDiffRecs: []handicaps.GameDiffAverageRow{},
+	}
+	svc := handicaps.NewService(store)
+
+	hc, err := svc.HandicapPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hc.Status != "preview" {
+		t.Errorf("want status=preview, got %q", hc.Status)
+	}
+	if len(hc.Recommendations) != 0 {
+		t.Errorf("want 0 recommendations, got %d", len(hc.Recommendations))
+	}
+}
+
+func TestHandicapPreview_GameDiffAverage_OneChange_MessageSingular(t *testing.T) {
+	method := "game_diff_average"
+	maxHC := "4.5"
+	store := &stubStore{
+		rules: handicaps.HandicapRuleRow{UpdateMethod: &method, MaxHC: &maxHC},
+		gameDiffRecs: []handicaps.GameDiffAverageRow{
+			{PlayerID: 1, PlayerName: "Alice A", CurrentHC: 2.0, MatchCount: 3, TotalDiff: 9.0},
+		},
+	}
+	svc := handicaps.NewService(store)
+
+	hc, err := svc.HandicapPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hc.Status != "preview" {
+		t.Errorf("want status=preview, got %q", hc.Status)
+	}
+	if len(hc.Recommendations) != 1 {
+		t.Fatalf("want 1 recommendation, got %d", len(hc.Recommendations))
+	}
+	rec := hc.Recommendations[0]
+	if rec.RecommendedHandicap != 3.0 {
+		t.Errorf("want recommended=3.0, got %v", rec.RecommendedHandicap)
+	}
+	if rec.Reason == "no_change" {
+		t.Error("expected a change reason, got no_change")
+	}
+}
+
+func TestHandicapPreview_GameDiffAverage_AdminHold_Skipped(t *testing.T) {
+	method := "game_diff_average"
+	store := &stubStore{
+		rules: handicaps.HandicapRuleRow{UpdateMethod: &method},
+		gameDiffRecs: []handicaps.GameDiffAverageRow{
+			{PlayerID: 1, PlayerName: "Bob B", CurrentHC: 2.0, AdminHold: true, MatchCount: 5, TotalDiff: 15.0},
+		},
+	}
+	svc := handicaps.NewService(store)
+
+	hc, err := svc.HandicapPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hc.Recommendations) != 1 {
+		t.Fatalf("want 1 rec, got %d", len(hc.Recommendations))
+	}
+	rec := hc.Recommendations[0]
+	if !rec.Skipped {
+		t.Error("want Skipped=true for admin_hold player")
+	}
+	if rec.Reason != "admin_hold" {
+		t.Errorf("want reason=admin_hold, got %q", rec.Reason)
+	}
+}
+
+func TestHandicapPreview_GameDiffAverage_CappedAtMaxHC(t *testing.T) {
+	method := "game_diff_average"
+	maxHC := "3.0"
+	store := &stubStore{
+		rules: handicaps.HandicapRuleRow{UpdateMethod: &method, MaxHC: &maxHC},
+		gameDiffRecs: []handicaps.GameDiffAverageRow{
+			{PlayerID: 1, PlayerName: "Carol C", CurrentHC: 1.0, MatchCount: 2, TotalDiff: 10.0},
+		},
+	}
+	svc := handicaps.NewService(store)
+
+	hc, err := svc.HandicapPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hc.Recommendations) != 1 {
+		t.Fatalf("want 1 rec, got %d", len(hc.Recommendations))
+	}
+	rec := hc.Recommendations[0]
+	if rec.RecommendedHandicap != 3.0 {
+		t.Errorf("want recommended capped at 3.0, got %v", rec.RecommendedHandicap)
+	}
+	if rec.Reason != "capped" {
+		t.Errorf("want reason=capped, got %q", rec.Reason)
+	}
+}
+
+func TestHandicapPreview_RulesError_Propagates(t *testing.T) {
+	store := &stubStore{rulesErr: errors.New("db error")}
+	svc := handicaps.NewService(store)
+
+	_, err := svc.HandicapPreview(context.Background(), 1)
+	if err == nil {
+		t.Fatal("want error when rules query fails")
 	}
 }

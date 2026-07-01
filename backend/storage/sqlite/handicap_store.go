@@ -230,3 +230,55 @@ func (s *HandicapStore) EligibleRacks(ctx context.Context, playerIDs []int64) ([
 	}
 	return result, nil
 }
+
+// GameDiffAverageRecs returns raw aggregated match-result data for all candidate
+// players in the season. Candidates are drawn from season_rosters plus any player
+// who appeared in officially closed match results (completed=1, week_closed=1).
+// Returns a non-nil empty slice when no candidates exist.
+func (s *HandicapStore) GameDiffAverageRecs(ctx context.Context, seasonID int64) ([]handicaps.GameDiffAverageRow, error) {
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT
+		    p.id,
+		    p.first_name || ' ' || p.last_name,
+		    p.handicap,
+		    p.admin_hold,
+		    COUNT(mr.id),
+		    COALESCE(SUM(mr.diff), 0.0)
+		FROM (
+		    SELECT DISTINCT player_id FROM season_rosters WHERE season_id = ?
+		    UNION
+		    SELECT DISTINCT mr2.player_id
+		    FROM match_results mr2
+		    JOIN matches m2 ON m2.id = mr2.match_id
+		    WHERE m2.season_id = ? AND m2.completed = 1 AND m2.week_closed = 1
+		) AS candidates
+		JOIN players p ON p.id = candidates.player_id
+		LEFT JOIN match_results mr ON mr.player_id = p.id
+		    AND mr.match_id IN (
+		        SELECT id FROM matches
+		        WHERE season_id = ? AND completed = 1 AND week_closed = 1
+		    )
+		GROUP BY p.id, p.first_name, p.last_name, p.handicap, p.admin_hold
+		ORDER BY p.first_name, p.last_name`,
+		seasonID, seasonID, seasonID)
+	if err != nil {
+		return nil, fmt.Errorf("season %d: game diff average recs: %w", seasonID, err)
+	}
+	defer rows.Close()
+
+	result := make([]handicaps.GameDiffAverageRow, 0)
+	for rows.Next() {
+		var row handicaps.GameDiffAverageRow
+		var adminHold int
+		if err := rows.Scan(&row.PlayerID, &row.PlayerName, &row.CurrentHC, &adminHold,
+			&row.MatchCount, &row.TotalDiff); err != nil {
+			return nil, fmt.Errorf("season %d: game diff average recs scan: %w", seasonID, err)
+		}
+		row.AdminHold = adminHold != 0
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("season %d: game diff average recs rows: %w", seasonID, err)
+	}
+	return result, nil
+}
