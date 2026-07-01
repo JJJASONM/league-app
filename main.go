@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"league_app/backend/domains/handicaps"
+	"league_app/backend/domains/matches"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
 	"league_app/handlers"
@@ -89,11 +90,14 @@ func main() {
 	// Wire domain services
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
+	weekStore := sqlite.NewWeekStore(db.DB)
+	weekSvc := matches.NewWeekService(weekStore, db.DB)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
 		AdminToken:      os.Getenv("LEAGUE_ADMIN_TOKEN"),
 		ApplyAuth:       sqlite.NewApplyAuthStore(db.DB),
+		WeekMgr:         weekSvc,
 	}
 
 	// API routes

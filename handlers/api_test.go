@@ -16,6 +16,7 @@ import (
 
 	"league_app/backend/domainerr"
 	"league_app/backend/domains/handicaps"
+	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
@@ -47,7 +48,9 @@ func testServer(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc}
+	weekStore := sqlite.NewWeekStore(db.DB)
+	weekSvc := matches.NewWeekService(weekStore, db.DB)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

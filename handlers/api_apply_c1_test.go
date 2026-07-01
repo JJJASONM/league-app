@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"league_app/backend/domains/handicaps"
+	"league_app/backend/domains/matches"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
 	"league_app/handlers"
@@ -34,11 +35,14 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
 	authStore := sqlite.NewApplyAuthStore(db.DB)
+	weekStore := sqlite.NewWeekStore(db.DB)
+	weekSvc := matches.NewWeekService(weekStore, db.DB)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
 		AdminToken:      c1AdminToken,
 		ApplyAuth:       authStore,
+		WeekMgr:         weekSvc,
 	}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)

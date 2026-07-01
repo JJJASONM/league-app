@@ -122,11 +122,26 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	mux.HandleFunc("GET /api/rules/definitions", listRuleDefinitions)
 
 	// Week workflow -- Close Week gate
-	mux.HandleFunc("GET /api/seasons/{id}/weeks", listWeeks)
-	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/validate", validateWeekHandler)
-	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close", closeWeekHandler)
-	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen", reopenWeekHandler)
-	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", getWeekAcknowledgments)
+	// Routes are registered only when a WeekManager is wired in (always in production,
+	// conditionally in tests that don't exercise week routes).
+	if deps.WeekMgr != nil {
+		weekMgr := deps.WeekMgr
+		mux.HandleFunc("GET /api/seasons/{id}/weeks", func(w http.ResponseWriter, r *http.Request) {
+			listWeeks(w, r, weekMgr)
+		})
+		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/validate", func(w http.ResponseWriter, r *http.Request) {
+			validateWeekHandler(w, r, weekMgr)
+		})
+		mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close", func(w http.ResponseWriter, r *http.Request) {
+			closeWeekHandler(w, r, weekMgr)
+		})
+		mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen", func(w http.ResponseWriter, r *http.Request) {
+			reopenWeekHandler(w, r, weekMgr)
+		})
+		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", func(w http.ResponseWriter, r *http.Request) {
+			getWeekAcknowledgments(w, r, weekMgr)
+		})
+	}
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/advance-preview", getAdvancePreview)
 	hcSvc := deps.HandicapSvc
 	mux.HandleFunc("GET /api/seasons/{id}/handicap-recommendations", func(w http.ResponseWriter, r *http.Request) {
@@ -1595,114 +1610,21 @@ func clearResults(w http.ResponseWriter, r *http.Request) {
 
 // Week Workflow ---------------------------------------------------------------
 
-func listWeeks(w http.ResponseWriter, r *http.Request) {
+func listWeeks(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	seasonID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-
-	// Aggregate per-week match counts directly from matches table.
-	type weekCount struct{ total, completed, closed int }
-	counts := map[int]weekCount{}
-	var weekOrder []int
-	seen := map[int]bool{}
-
-	matchRows, err := db.DB.Query(`
-		SELECT week_number, completed, week_closed
-		FROM matches WHERE season_id=?
-		ORDER BY week_number`, seasonID)
+	summaries, err := mgr.ListWeeks(r.Context(), seasonID)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
-	}
-	defer matchRows.Close()
-	for matchRows.Next() {
-		var wn, comp, wc int
-		matchRows.Scan(&wn, &comp, &wc)
-		c := counts[wn]
-		c.total++
-		c.completed += comp
-		c.closed += wc
-		counts[wn] = c
-		if !seen[wn] {
-			weekOrder = append(weekOrder, wn)
-			seen[wn] = true
-		}
-	}
-
-	// Look up any existing league_weeks status rows for this season.
-	type weekStatusRow struct {
-		status   string
-		closedAt *string
-	}
-	statusMap := map[int]weekStatusRow{}
-	statusRows, err := db.DB.Query(`
-		SELECT week_number, status, closed_at
-		FROM league_weeks WHERE season_id=?`, seasonID)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer statusRows.Close()
-	for statusRows.Next() {
-		var wn int
-		var st string
-		var ca *string
-		statusRows.Scan(&wn, &st, &ca)
-		statusMap[wn] = weekStatusRow{st, ca}
-	}
-
-	// Aggregate acknowledgment counts per week from week_close_acknowledgments.
-	ackCounts := map[int]int{}
-	ackCountRows, err := db.DB.Query(`
-		SELECT week_number, COUNT(*) FROM week_close_acknowledgments
-		WHERE season_id=? GROUP BY week_number`, seasonID)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer ackCountRows.Close()
-	for ackCountRows.Next() {
-		var wn, cnt int
-		if err := ackCountRows.Scan(&wn, &cnt); err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		ackCounts[wn] = cnt
-	}
-	if err := ackCountRows.Err(); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	var summaries []models.WeekSummary
-	for _, wn := range weekOrder {
-		c := counts[wn]
-		st := statusMap[wn]
-		status := "open"
-		var closedAt *string
-		if st.status != "" {
-			status = st.status
-			closedAt = st.closedAt
-		}
-		summaries = append(summaries, models.WeekSummary{
-			WeekNumber:     wn,
-			Status:         status,
-			ClosedAt:       closedAt,
-			MatchCount:     c.total,
-			CompletedCount: c.completed,
-			ClosedCount:    c.closed,
-			AckCount:       ackCounts[wn],
-		})
-	}
-	if summaries == nil {
-		summaries = []models.WeekSummary{}
 	}
 	jsonOK(w, summaries)
 }
 
-func validateWeekHandler(w http.ResponseWriter, r *http.Request) {
+func validateWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	seasonID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -1714,11 +1636,15 @@ func validateWeekHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := seasonRoundConfig(seasonID)
-	result := matches.ValidateWeek(db.DB, seasonID, int(weekNum), cfg)
+	result, err := mgr.ValidateWeek(r.Context(), seasonID, weekNum, cfg)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
 	jsonOK(w, result)
 }
 
-func closeWeekHandler(w http.ResponseWriter, r *http.Request) {
+func closeWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	seasonID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -1730,143 +1656,54 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional acknowledgments from request body.
-	type ackEntry struct {
-		MatchID     int64  `json:"match_id"`
-		WarningCode string `json:"warning_code"`
-		Field       string `json:"field"`
-		Notes       string `json:"notes"`
+	type ackReq struct {
+		Acknowledgments []matches.AckEntry `json:"acknowledgments"`
 	}
-	type ackRequest struct {
-		Acknowledgments []ackEntry `json:"acknowledgments"`
-	}
-	var req ackRequest
+	var body ackReq
 	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
 			jsonError(w, "invalid close week request body", http.StatusBadRequest)
 			return
 		}
 	}
 
 	cfg := seasonRoundConfig(seasonID)
-	result := matches.ValidateWeek(db.DB, seasonID, int(weekNum), cfg)
-	if result.HasErrors() {
-		jsonValidation(w, result)
-		return
-	}
-
-	// Build acknowledgment lookup: (match_id, warning_code, field) -> notes.
-	type ackKey struct {
-		matchID int64
-		code    string
-		field   string
-	}
-	ackSet := make(map[ackKey]string, len(req.Acknowledgments))
-	for _, a := range req.Acknowledgments {
-		ackSet[ackKey{a.MatchID, a.WarningCode, a.Field}] = a.Notes
-	}
-
-	// Every current warning must be acknowledged; stale/extra acks are ignored.
-	var unacked []validation.Message
-	for _, msg := range result.Warnings() {
-		var mid int64
-		if msg.MatchID != nil {
-			mid = *msg.MatchID
-		}
-		if _, ok := ackSet[ackKey{mid, msg.Code, msg.Field}]; !ok {
-			unacked = append(unacked, msg)
-		}
-	}
-	if len(unacked) > 0 {
-		var ackResult validation.Result
-		for _, msg := range unacked {
-			ackResult.AddError(msg.Code, msg.Field,
-				"warning requires acknowledgment before close: "+msg.Message)
-			if msg.MatchID != nil {
-				id := *msg.MatchID
-				ackResult.Messages[len(ackResult.Messages)-1].MatchID = &id
-			}
-		}
-		jsonValidation(w, ackResult)
-		return
-	}
-
-	tx, err := db.DB.Begin()
+	result, err := mgr.CloseWeek(r.Context(), matches.CloseWeekRequest{
+		SeasonID:        seasonID,
+		WeekNumber:      weekNum,
+		Acknowledgments: body.Acknowledgments,
+		Cfg:             cfg,
+	})
 	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer tx.Rollback()
-
-	// Upsert the league_weeks row -- idempotent re-close updates closed_at.
-	_, err = tx.Exec(`
-		INSERT INTO league_weeks (season_id, week_number, status, closed_at)
-		VALUES (?, ?, 'closed', CURRENT_TIMESTAMP)
-		ON CONFLICT(season_id, week_number) DO UPDATE
-		SET status='closed', closed_at=CURRENT_TIMESTAMP`,
-		seasonID, weekNum)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	// Mark every match in the week as officially closed.
-	_, err = tx.Exec(`
-		UPDATE matches SET week_closed=1
-		WHERE season_id=? AND week_number=?`,
-		seasonID, weekNum)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	// Store one acknowledgment row per current warning in the same transaction.
-	for _, msg := range result.Warnings() {
-		var mid int64
-		if msg.MatchID != nil {
-			mid = *msg.MatchID
-		}
-		notes := ackSet[ackKey{mid, msg.Code, msg.Field}]
-		var matchIDVal interface{}
-		if mid != 0 {
-			matchIDVal = mid
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO week_close_acknowledgments
-			    (season_id, week_number, match_id, warning_code, field, notes)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			seasonID, weekNum, matchIDVal, msg.Code, msg.Field, notes); err != nil {
+		var wce *matches.WeekCloseErr
+		if errors.As(err, &wce) {
+			jsonValidation(w, wce.Result)
+		} else {
 			jsonError(w, err.Error(), 500)
-			return
 		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
 		return
 	}
 
-	// Use the current close's warning count -- the only rows just inserted.
-	// A cumulative DB count would overstate after reopen + re-close cycles.
-	ackCount := len(result.Warnings())
-
-	// Build advance result from post-commit DB state (best-effort; close already committed).
-	ar, err := buildAdvanceResult(seasonID, weekNum)
-	if err != nil {
-		jsonOK(w, map[string]any{"closed": true, "week_number": int(weekNum), "acknowledgment_count": ackCount})
+	// Best-effort advance result; close is already committed.
+	ar, aerr := buildAdvanceResult(seasonID, weekNum)
+	if aerr != nil {
+		jsonOK(w, map[string]any{
+			"closed":               true,
+			"week_number":          int(weekNum),
+			"acknowledgment_count": result.AckCount,
+		})
 		return
 	}
 	ar.Message = "Week closed. Standings and player stats now include this week's results."
-
 	jsonOK(w, map[string]any{
 		"closed":               true,
 		"week_number":          int(weekNum),
-		"acknowledgment_count": ackCount,
+		"acknowledgment_count": result.AckCount,
 		"advance_result":       ar,
 	})
 }
 
-func reopenWeekHandler(w http.ResponseWriter, r *http.Request) {
+func reopenWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	seasonID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -1878,52 +1715,26 @@ func reopenWeekHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Require at least one match to exist for this season/week.
-	var matchCount int
-	db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
-		seasonID, weekNum).Scan(&matchCount)
-	if matchCount == 0 {
-		jsonError(w, "week not found: no matches for this season and week", http.StatusNotFound)
-		return
-	}
-
-	// Require the week to be currently closed.
-	var status string
-	db.DB.QueryRow(`SELECT status FROM league_weeks WHERE season_id=? AND week_number=?`,
-		seasonID, weekNum).Scan(&status)
-	if status != "closed" {
-		jsonError(w, "week is not closed", http.StatusConflict)
-		return
-	}
-
-	tx, err := db.DB.Begin()
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer tx.Rollback()
-
-	if _, err = tx.Exec(`
-		UPDATE league_weeks SET status='open', closed_at=NULL
-		WHERE season_id=? AND week_number=?`, seasonID, weekNum); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if _, err = tx.Exec(`
-		UPDATE matches SET week_closed=0
-		WHERE season_id=? AND week_number=?`, seasonID, weekNum); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.ReopenWeek(r.Context(), seasonID, weekNum); err != nil {
+		var de *domainerr.Err
+		if errors.As(err, &de) {
+			switch de.Category {
+			case domainerr.NotFound:
+				jsonError(w, de.Message, http.StatusNotFound)
+			case domainerr.Conflict:
+				jsonError(w, de.Message, http.StatusConflict)
+			default:
+				jsonError(w, de.Message, http.StatusInternalServerError)
+			}
+		} else {
+			jsonError(w, err.Error(), 500)
+		}
 		return
 	}
 	jsonOK(w, map[string]any{"reopened": true, "week_number": int(weekNum)})
 }
 
-func getWeekAcknowledgments(w http.ResponseWriter, r *http.Request) {
+func getWeekAcknowledgments(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	seasonID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -1935,45 +1746,15 @@ func getWeekAcknowledgments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 404 when no matches exist for this season/week.
-	var matchCount int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND week_number=?`,
-		seasonID, weekNum).Scan(&matchCount); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if matchCount == 0 {
-		jsonError(w, "week not found: no matches for this season and week", http.StatusNotFound)
-		return
-	}
-
-	rows, err := db.DB.Query(`
-		SELECT id, season_id, week_number, match_id, warning_code, field, notes, acknowledged_at
-		FROM week_close_acknowledgments
-		WHERE season_id=? AND week_number=?
-		ORDER BY acknowledged_at DESC`, seasonID, weekNum)
+	acks, err := mgr.ListAcknowledgments(r.Context(), seasonID, weekNum)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer rows.Close()
-
-	var acks []models.CloseAck
-	for rows.Next() {
-		var a models.CloseAck
-		if err := rows.Scan(&a.ID, &a.SeasonID, &a.WeekNumber, &a.MatchID,
-			&a.WarningCode, &a.Field, &a.Notes, &a.AcknowledgedAt); err != nil {
+		var de *domainerr.Err
+		if errors.As(err, &de) && de.Category == domainerr.NotFound {
+			jsonError(w, de.Message, http.StatusNotFound)
+		} else {
 			jsonError(w, err.Error(), 500)
-			return
 		}
-		acks = append(acks, a)
-	}
-	if err := rows.Err(); err != nil {
-		jsonError(w, err.Error(), 500)
 		return
-	}
-	if acks == nil {
-		acks = []models.CloseAck{}
 	}
 	jsonOK(w, acks)
 }
