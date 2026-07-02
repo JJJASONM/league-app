@@ -49,7 +49,7 @@ func testServer(t *testing.T) *httptest.Server {
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
 	weekStore := sqlite.NewWeekStore(db.DB)
-	weekSvc := matches.NewWeekService(weekStore, db.DB, hcSvc)
+	weekSvc := matches.NewWeekService(weekStore, hcSvc)
 	roundStore := sqlite.NewRoundStore(db.DB)
 	roundSvc := matches.NewRoundService(roundStore)
 	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc}
@@ -6070,36 +6070,22 @@ func TestSaveRounds_InvalidMultiplierReturns500(t *testing.T) {
 	}
 }
 
-// TestValidateWeek_RoundQueryFailureProducesWeekInternalError is a regression test for
-// the close-week round-results query correction: when the round_results table is unavailable,
-// ValidateWeek must emit WEEK_INTERNAL_ERROR with the match_id stamped rather than
-// silently skipping the match.
-func TestValidateWeek_RoundQueryFailureProducesWeekInternalError(t *testing.T) {
+// TestValidateWeek_RoundQueryFailureReturns500 verifies that when the underlying
+// data fetch fails (round_results table dropped), ValidateWeek propagates the error
+// as HTTP 500 rather than silently returning empty validation messages.
+func TestValidateWeek_RoundQueryFailureReturns500(t *testing.T) {
 	f := weekTestSeed(t)
 
-	// Drop round_results so the per-match SELECT fails for every match in the week.
+	// Drop round_results so GetWeekValidationData fails for every match in the week.
 	db.DB.Exec(`DROP TABLE round_results`)
 
-	msgs := weekValidate(t, f.srv.URL, f.sid, 1)
-
-	var found bool
-	for _, msg := range msgs {
-		if msg["code"] == "WEEK_INTERNAL_ERROR" {
-			found = true
-			if msg["match_id"] == nil {
-				t.Error("WEEK_INTERNAL_ERROR must carry a match_id")
-			}
-			break
-		}
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks/%d/validate", f.srv.URL, f.sid, 1))
+	if err != nil {
+		t.Fatalf("validate request failed: %v", err)
 	}
-	if !found {
-		codes := make([]string, 0, len(msgs))
-		for _, m := range msgs {
-			if c, ok := m["code"].(string); ok {
-				codes = append(codes, c)
-			}
-		}
-		t.Errorf("expected WEEK_INTERNAL_ERROR, got codes: %v", codes)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("want 500 when round_results unavailable, got %d", resp.StatusCode)
 	}
 }
 

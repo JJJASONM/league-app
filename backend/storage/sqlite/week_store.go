@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 
 	"league_app/backend/domains/matches"
+	"league_app/logic"
 	"league_app/models"
 )
 
@@ -352,6 +354,124 @@ func (s *WeekStore) GetWeekAdvanceSummary(ctx context.Context, seasonID, weekNum
 		NextWeekNumber: nextWeekNumPtr,
 		NextWeek:       nextWeek,
 	}, nil
+}
+
+// SeasonRoundConfig reads handicap_multiplier and min_ball_handicap from
+// season_rules for the given season. Returns defaults (logic.Multiplier, 0)
+// when rules are absent or unparseable.
+func (s *WeekStore) SeasonRoundConfig(ctx context.Context, seasonID int64) (matches.RoundConfig, error) {
+	var multStr string
+	s.db.QueryRowContext(ctx,
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_multiplier'`,
+		seasonID).Scan(&multStr)
+	mult := logic.Multiplier
+	if multStr != "" {
+		if f, err := strconv.ParseFloat(multStr, 64); err == nil && f > 0 {
+			mult = f
+		}
+	}
+	var minBallStr string
+	s.db.QueryRowContext(ctx,
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
+		seasonID).Scan(&minBallStr)
+	minBallHC, _ := strconv.Atoi(minBallStr)
+	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}, nil
+}
+
+// GetWeekValidationData returns all match and round data needed for week
+// validation. For each round_results row, home_handicap_used / away_handicap_used
+// snapshots take priority; the current player handicap is used as fallback via
+// a LEFT JOIN, defaulting to 0 when neither value is available.
+func (s *WeekStore) GetWeekValidationData(ctx context.Context, seasonID, weekNum int64) (matches.WeekValidationData, error) {
+	mRows, err := s.db.QueryContext(ctx,
+		`SELECT id, home_team_id, away_team_id
+		 FROM matches WHERE season_id=? AND week_number=? ORDER BY id`,
+		seasonID, weekNum)
+	if err != nil {
+		return matches.WeekValidationData{}, fmt.Errorf("get week validation data: matches: %w", err)
+	}
+	defer mRows.Close()
+
+	type rawMatch struct {
+		id         int64
+		homeTeamID sql.NullInt64
+		awayTeamID sql.NullInt64
+	}
+	var rawMatches []rawMatch
+	for mRows.Next() {
+		var rm rawMatch
+		if err := mRows.Scan(&rm.id, &rm.homeTeamID, &rm.awayTeamID); err != nil {
+			return matches.WeekValidationData{}, fmt.Errorf("get week validation data: match scan: %w", err)
+		}
+		rawMatches = append(rawMatches, rm)
+	}
+	if err := mRows.Err(); err != nil {
+		return matches.WeekValidationData{}, fmt.Errorf("get week validation data: match rows: %w", err)
+	}
+
+	result := matches.WeekValidationData{
+		Matches: make([]matches.MatchValidationRow, 0, len(rawMatches)),
+	}
+
+	for _, rm := range rawMatches {
+		var homeID, awayID *int64
+		if rm.homeTeamID.Valid {
+			v := rm.homeTeamID.Int64
+			homeID = &v
+		}
+		if rm.awayTeamID.Valid {
+			v := rm.awayTeamID.Int64
+			awayID = &v
+		}
+
+		rrRows, err := s.db.QueryContext(ctx, `
+			SELECT rr.round_number, rr.home_player_id, rr.away_player_id,
+			       rr.game1_home, rr.game1_away,
+			       rr.game2_home, rr.game2_away,
+			       rr.game3_home, rr.game3_away,
+			       COALESCE(rr.home_handicap_used, hp.handicap, 0) AS home_hc,
+			       COALESCE(rr.away_handicap_used, ap.handicap, 0) AS away_hc
+			FROM round_results rr
+			LEFT JOIN players hp ON hp.id = rr.home_player_id
+			LEFT JOIN players ap ON ap.id = rr.away_player_id
+			WHERE rr.match_id = ?
+			ORDER BY rr.round_number, rr.home_player_id`, rm.id)
+		if err != nil {
+			return matches.WeekValidationData{}, fmt.Errorf("get week validation data: rounds for match %d: %w", rm.id, err)
+		}
+
+		var rounds []matches.RoundValidationRow
+		var rowErr error
+		for rrRows.Next() {
+			var row matches.RoundValidationRow
+			if rowErr = rrRows.Scan(
+				&row.RoundNumber, &row.HomePlayerID, &row.AwayPlayerID,
+				&row.Game1Home, &row.Game1Away,
+				&row.Game2Home, &row.Game2Away,
+				&row.Game3Home, &row.Game3Away,
+				&row.HomeHC, &row.AwayHC,
+			); rowErr != nil {
+				break
+			}
+			rounds = append(rounds, row)
+		}
+		rrRows.Close()
+		if rowErr == nil {
+			rowErr = rrRows.Err()
+		}
+		if rowErr != nil {
+			return matches.WeekValidationData{}, fmt.Errorf("get week validation data: round scan for match %d: %w", rm.id, rowErr)
+		}
+
+		result.Matches = append(result.Matches, matches.MatchValidationRow{
+			MatchID:    rm.id,
+			HomeTeamID: homeID,
+			AwayTeamID: awayID,
+			Rounds:     rounds,
+		})
+	}
+
+	return result, nil
 }
 
 // ListAcknowledgments returns all close acknowledgments for the week, ordered
