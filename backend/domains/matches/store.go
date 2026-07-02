@@ -43,4 +43,9 @@ type WeekStore interface {
 	// ListAcknowledgments returns all close acknowledgments for the week,
 	// ordered by acknowledged_at DESC.
 	ListAcknowledgments(ctx context.Context, seasonID, weekNum int64) ([]models.CloseAck, error)
+
+	// GetWeekAdvanceSummary returns match counts, week status, and next-week
+	// readiness for the advance-preview and close-result response. Read-only.
+	// Returns an empty summary without error when no matches exist for the week.
+	GetWeekAdvanceSummary(ctx context.Context, seasonID, weekNum int64) (WeekAdvanceSummary, error)
 }

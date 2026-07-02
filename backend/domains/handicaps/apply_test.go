@@ -648,6 +648,9 @@ func (b *busyWriteStore) UpdatePlayerHandicap(ctx context.Context, pid int64, n,
 func (b *busyWriteStore) InsertHandicapHistory(ctx context.Context, row handicaps.HandicapHistoryRow) error {
 	return b.inner.InsertHandicapHistory(ctx, row)
 }
+func (b *busyWriteStore) GameDiffAverageRecs(ctx context.Context, id int64) ([]handicaps.GameDiffAverageRow, error) {
+	return b.inner.GameDiffAverageRecs(ctx, id)
+}
 
 // ============================================================================
 // Token / hash determinism

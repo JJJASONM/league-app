@@ -49,8 +49,10 @@ func testServer(t *testing.T) *httptest.Server {
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
 	weekStore := sqlite.NewWeekStore(db.DB)
-	weekSvc := matches.NewWeekService(weekStore, db.DB)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc}
+	weekSvc := matches.NewWeekService(weekStore, db.DB, hcSvc)
+	roundStore := sqlite.NewRoundStore(db.DB)
+	roundSvc := matches.NewRoundService(roundStore)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -918,6 +920,8 @@ func TestCloseWeek_SetsMatchWeekClosed(t *testing.T) {
 
 func TestSaveRounds_BlockedWhenWeekClosed(t *testing.T) {
 	f := weekTestSeed(t)
+	// Disable roster gate so the week-closed check is reached (teams_managed=1 by default via API).
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
 
 	closeReq, _ := http.NewRequest(http.MethodPost,

@@ -539,3 +539,101 @@ func TestRunTx_NilErrorCommits(t *testing.T) {
 		t.Error("want SeasonExists=true inside committed transaction")
 	}
 }
+
+// ============================================================================
+// GameDiffAverageRecs
+// ============================================================================
+
+func TestGameDiffAverageRecs_NoRoster_NoMatches_ReturnsEmpty(t *testing.T) {
+	initDB(t)
+	seasonID := seedSeason(t, seedLeague(t, "8ball"))
+	store := sqlite.NewHandicapStore(db.DB)
+
+	recs, err := store.GameDiffAverageRecs(context.Background(), seasonID)
+	if err != nil {
+		t.Fatalf("GameDiffAverageRecs: %v", err)
+	}
+	if len(recs) != 0 {
+		t.Errorf("want 0 recs, got %d", len(recs))
+	}
+}
+
+func TestGameDiffAverageRecs_RosterPlayer_NoMatches_ZeroDiff(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamID := seedTeam(t, leagueID, "A")
+	playerID := seedPlayer(t, teamID, "Alice", "A", 2.5)
+	db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'A')`, seasonID, teamID)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, seasonID, teamID, playerID)
+
+	store := sqlite.NewHandicapStore(db.DB)
+	recs, err := store.GameDiffAverageRecs(context.Background(), seasonID)
+	if err != nil {
+		t.Fatalf("GameDiffAverageRecs: %v", err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("want 1 rec, got %d", len(recs))
+	}
+	if recs[0].MatchCount != 0 {
+		t.Errorf("want MatchCount=0 (no closed matches), got %d", recs[0].MatchCount)
+	}
+	if recs[0].CurrentHC != 2.5 {
+		t.Errorf("want CurrentHC=2.5, got %v", recs[0].CurrentHC)
+	}
+}
+
+func TestGameDiffAverageRecs_ClosedMatch_AccumulatesDiff(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamA := seedTeam(t, leagueID, "A")
+	teamB := seedTeam(t, leagueID, "B")
+	playerID := seedPlayer(t, teamA, "Bob", "B", 3.0)
+	matchID := seedMatch(t, seasonID, teamA, teamB, "2026-01-07", 1, 1, 1)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, diff) VALUES (?,?,?,?)`,
+		matchID, playerID, teamA, 1.5)
+
+	store := sqlite.NewHandicapStore(db.DB)
+	recs, err := store.GameDiffAverageRecs(context.Background(), seasonID)
+	if err != nil {
+		t.Fatalf("GameDiffAverageRecs: %v", err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("want 1 rec, got %d", len(recs))
+	}
+	if recs[0].MatchCount != 1 {
+		t.Errorf("want MatchCount=1, got %d", recs[0].MatchCount)
+	}
+	if recs[0].TotalDiff != 1.5 {
+		t.Errorf("want TotalDiff=1.5, got %v", recs[0].TotalDiff)
+	}
+}
+
+func TestGameDiffAverageRecs_OpenMatch_NotCounted(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamA := seedTeam(t, leagueID, "A")
+	teamB := seedTeam(t, leagueID, "B")
+	playerID := seedPlayer(t, teamA, "Carol", "C", 1.0)
+	// completed=1 but week_closed=0 → should NOT count as a closed week result.
+	matchID := seedMatch(t, seasonID, teamA, teamB, "2026-01-07", 1, 1, 0)
+	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, diff) VALUES (?,?,?,?)`,
+		matchID, playerID, teamA, 2.0)
+	// Roster player so they appear in candidates.
+	db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'A')`, seasonID, teamA)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, seasonID, teamA, playerID)
+
+	store := sqlite.NewHandicapStore(db.DB)
+	recs, err := store.GameDiffAverageRecs(context.Background(), seasonID)
+	if err != nil {
+		t.Fatalf("GameDiffAverageRecs: %v", err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("want 1 rec, got %d", len(recs))
+	}
+	if recs[0].MatchCount != 0 {
+		t.Errorf("want MatchCount=0 (open match not counted), got %d", recs[0].MatchCount)
+	}
+}

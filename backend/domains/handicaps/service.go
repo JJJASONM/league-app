@@ -370,3 +370,109 @@ func (s *Service) buildRecs(
 	}
 	return recs, nil
 }
+
+// HandicapPreview implements matches.HandicapPreviewer. Returns a read-only
+// summary of the handicap update mode and preview recommendations for the
+// advance-preview and close-result response. No writes are performed.
+func (s *Service) HandicapPreview(ctx context.Context, seasonID int64) (models.AdvancePreviewHandicap, error) {
+	rules, err := s.store.SeasonHandicapRules(ctx, seasonID)
+	if err != nil {
+		return models.AdvancePreviewHandicap{}, fmt.Errorf("handicap preview: %w", err)
+	}
+
+	method := "manual_review"
+	if rules.UpdateMethod != nil && *rules.UpdateMethod != "" {
+		method = *rules.UpdateMethod
+	}
+
+	switch method {
+	case "kicker_average_preview":
+		return models.AdvancePreviewHandicap{
+			Method:  method,
+			Status:  "unsupported",
+			Message: "Kicker average handicap recommendations are not implemented yet. No handicap changes are applied automatically.",
+		}, nil
+	case "game_diff_average":
+		maxHC := s.interpretMaxHC(rules)
+		raws, err := s.store.GameDiffAverageRecs(ctx, seasonID)
+		if err != nil {
+			return models.AdvancePreviewHandicap{}, fmt.Errorf("handicap preview: recs: %w", err)
+		}
+		recs := applyGameDiffCap(raws, maxHC)
+		changedCount := 0
+		for _, r := range recs {
+			if !r.Skipped && r.Reason != "no_change" {
+				changedCount++
+			}
+		}
+		var msg string
+		switch {
+		case changedCount == 1:
+			msg = "1 player has a recommended handicap change (not yet applied)."
+		case changedCount > 1:
+			msg = fmt.Sprintf("%d players have recommended handicap changes (not yet applied).", changedCount)
+		default:
+			msg = "No handicap changes recommended. No changes are applied automatically."
+		}
+		return models.AdvancePreviewHandicap{
+			Method:          method,
+			Status:          "preview",
+			Message:         msg,
+			Recommendations: recs,
+		}, nil
+	default: // "manual_review" and any unknown method
+		return models.AdvancePreviewHandicap{
+			Method:  method,
+			Status:  "no_auto_apply",
+			Message: "No handicap changes are applied automatically.",
+		}, nil
+	}
+}
+
+// applyGameDiffCap converts raw GameDiffAverageRows into PlayerHandicapRecs,
+// applying the maxHC cap, nearest-0.1 rounding, and reason classification.
+func applyGameDiffCap(raws []GameDiffAverageRow, maxHC float64) []models.PlayerHandicapRec {
+	recs := make([]models.PlayerHandicapRec, 0, len(raws))
+	for _, raw := range raws {
+		rec := models.PlayerHandicapRec{
+			PlayerID:        raw.PlayerID,
+			PlayerName:      raw.PlayerName,
+			CurrentHandicap: raw.CurrentHC,
+			AdminHold:       raw.AdminHold,
+			MatchesPlayed:   raw.MatchCount,
+		}
+		if raw.AdminHold {
+			rec.Skipped = true
+			rec.Reason = "admin_hold"
+			rec.RecommendedHandicap = raw.CurrentHC
+			recs = append(recs, rec)
+			continue
+		}
+		if raw.MatchCount == 0 {
+			rec.Skipped = true
+			rec.Reason = "no_data"
+			rec.RecommendedHandicap = raw.CurrentHC
+			recs = append(recs, rec)
+			continue
+		}
+		avg := raw.TotalDiff / float64(raw.MatchCount)
+		recommended := math.Round(avg*10) / 10
+		capped := false
+		if recommended > maxHC {
+			recommended = math.Round(maxHC*10) / 10
+			capped = true
+		} else if recommended < -maxHC {
+			recommended = math.Round(-maxHC*10) / 10
+			capped = true
+		}
+		rec.RecommendedHandicap = recommended
+		switch {
+		case capped:
+			rec.Reason = "capped"
+		case math.Round(raw.CurrentHC*10)/10 == recommended:
+			rec.Reason = "no_change"
+		}
+		recs = append(recs, rec)
+	}
+	return recs
+}

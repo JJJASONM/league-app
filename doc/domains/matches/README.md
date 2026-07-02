@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.2`
-**Last reviewed:** `2026-06-29`
+**Current version:** `0.3`
+**Last reviewed:** `2026-07-01`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -1082,8 +1082,9 @@ Week routes are conditionally registered when `deps.WeekMgr != nil`. In producti
 auth tests) may omit it; those test servers simply won't have week endpoints. All
 existing week integration tests go through `testServer()` which wires `WeekMgr`.
 
-The `advance-preview` route is always registered (it still uses `db.DB` directly via
-`buildAdvanceResult`, deferred to B2).
+The `advance-preview` route was registered outside the weekMgr block in B1 (still using
+`db.DB` directly via `buildAdvanceResult`). Moved inside the block and delegated to
+`WeekMgr.AdvancePreview` in B2.
 
 ### Not in B1
 
@@ -1091,6 +1092,193 @@ The `advance-preview` route is always registered (it still uses `db.DB` directly
 - `saveRounds` HC snapshot TX logic (B3)
 - `ValidateWeek` signature change from `*sql.DB` to a store interface (B4)
 - Route/shape changes, new endpoints
+
+## Phase B2 — Advance Preview and Close Result Extraction (implemented 2026-07-01)
+
+### Goal
+
+Extract advance-preview assembly and handicap preview assembly out of
+`handlers/api.go` into their respective domain services. No route paths or
+JSON shapes changed; browser behavior is unchanged.
+
+### New files
+
+| File | Role |
+|------|------|
+| `backend/domains/matches/advance.go` | `HandicapPreviewer` interface; `WeekAdvanceSummary` type |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `backend/domains/matches/store.go` | Added `GetWeekAdvanceSummary` to `WeekStore` interface |
+| `backend/domains/matches/service.go` | Added `hcPreview HandicapPreviewer` field; `AdvanceData`, `AdvancePreview` methods; `roundConfig` private helper |
+| `backend/domains/matches/service_test.go` | Added stub `GetWeekAdvanceSummary`; added `stubHandicapPreviewer`; added `AdvanceData` and `AdvancePreview` tests |
+| `backend/domains/handicaps/store.go` | Added `GameDiffAverageRow` type; `GameDiffAverageRecs` to `Store` interface |
+| `backend/domains/handicaps/service.go` | Added `HandicapPreview` method; `applyGameDiffCap` helper |
+| `backend/domains/handicaps/service_test.go` | Added `gameDiffRecs` field to stub; `GameDiffAverageRecs` stub; 7 `HandicapPreview` tests |
+| `backend/storage/sqlite/week_store.go` | `GetWeekAdvanceSummary` implementation |
+| `backend/storage/sqlite/week_store_test.go` | 5 `GetWeekAdvanceSummary` tests |
+| `backend/storage/sqlite/handicap_store.go` | `GameDiffAverageRecs` implementation |
+| `backend/storage/sqlite/handicap_store_test.go` | 4 `GameDiffAverageRecs` tests |
+| `handlers/deps.go` | Added `AdvanceData` and `AdvancePreview` to `WeekManager` interface |
+| `handlers/api.go` | Thinned `getAdvancePreview` to delegate; `closeWeekHandler` calls `mgr.AdvanceData`; deleted `buildAdvanceResult`, `buildHandicapPreview`, `computeGameDiffAverageRecs`, `seasonHandicapUpdateMethod`, `seasonMaxIndividualHC` (~270 lines removed) |
+| `handlers/api_test.go` | `testServer()` updated to 3-arg `NewWeekService` |
+| `handlers/api_apply_c1_test.go` | Updated to 3-arg `NewWeekService` |
+| `main.go` | `NewWeekService` now passes `hcSvc` as third argument |
+
+### Architecture
+
+```
+getAdvancePreview handler
+  → deps.WeekMgr.AdvancePreview (WeekManager)
+      → matches.WeekService.AdvancePreview
+          → store.WeekMatchCount   (404 check)
+          → ValidateWeek           (validation; B4 debt: uses s.db)
+          → WeekService.AdvanceData
+              → store.GetWeekAdvanceSummary (match counts, status, next week)
+              → hcPreview.HandicapPreview   (HandicapPreviewer interface)
+                  → handicaps.Service.HandicapPreview
+                      → store.SeasonHandicapRules
+                      → store.GameDiffAverageRecs (outside RunTx; read-only preview)
+
+closeWeekHandler
+  → deps.WeekMgr.CloseWeek       (unchanged from B1)
+  → deps.WeekMgr.AdvanceData     (new; post-commit best-effort summary)
+      → (same path as above)
+```
+
+### HandicapPreviewer interface (consumer-defines)
+
+`HandicapPreviewer` is defined in the `matches` package (consumer) and
+implemented by `handicaps.Service`. This is the standard Go consumer-defines-
+interface pattern and avoids an import cycle between `matches` and `handicaps`.
+
+### Temporary debt accepted in B2
+
+- `WeekService.roundConfig` reads `handicap_multiplier` and `min_ball_handicap`
+  from `s.db` directly. This mirrors the handler's old `seasonRoundConfig`.
+  Both move to a `WeekStore` method in B4 when `ValidateWeek` is extracted.
+- `WeekService.db *sql.DB` is retained for the same reason (B4 will remove it).
+- `GameDiffAverageRecs` is called outside `RunTx` (read-only preview, no
+  atomicity needed). Acceptable for best-effort pre-close display.
+- `HandicapPreview` uses `game_diff_average` logic in the advance-preview path,
+  which is the legacy formula. The Handicap Review screen uses the
+  opponent-normalized formula via `Recommendations`. The preview path is display-
+  only and not authoritative for Apply.
+
+### Not in B2
+
+- `saveRounds` HC snapshot TX logic (B3)
+- `ValidateWeek` signature change (B4)
+- Standings or stats extraction
+- Route/shape changes
+
+## Phase B3 — Round Save/Read, Standings, and Stats Extraction (implemented 2026-07-01)
+
+### Goal
+
+Extract `saveRounds`, `getRounds`, `getStandings`, `getPlayerStats`, `submitResults`,
+and `clearResults` from `handlers/api.go` into a dedicated `RoundService` and
+`RoundStore` domain boundary. No route paths or JSON shapes changed; browser
+behavior is unchanged.
+
+### New files
+
+| File | Role |
+|------|------|
+| `backend/domains/matches/round_store.go` | `RoundStore` interface + domain types |
+| `backend/domains/matches/round_service.go` | `RoundService` + `computePairingResult` |
+| `backend/domains/matches/round_service_test.go` | Unit tests with stub store (17 tests) |
+| `backend/storage/sqlite/round_store.go` | SQLite implementation of `RoundStore` |
+| `backend/storage/sqlite/round_store_test.go` | DB integration tests (13 tests) |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `handlers/deps.go` | `RoundManager` interface + `RoundMgr RoundManager` field on `Dependencies` |
+| `handlers/api.go` | Six handlers thinned to delegate; routes conditional on `RoundMgr != nil`; removed `computePairingResult`, `txSeasonMultiplier`, `txSeasonRoundConfig`, `matchWeekClosed` (~450 lines removed) |
+| `handlers/api_test.go` | `testServer()` wires `RoundService` into deps |
+| `handlers/api_apply_c1_test.go` | `testServerWithApplyAuth()` wires `RoundService` into deps |
+| `main.go` | `sqlite.NewRoundStore` → `matches.NewRoundService` → `deps.RoundMgr` |
+| `doc/domains/matches/README.md` | This section |
+
+### Architecture
+
+```
+saveRounds handler
+  → deps.RoundMgr.SaveRounds (RoundManager interface)
+      → matches.RoundService.SaveRounds
+          → store.IsWeekClosed         (pre-TX guard → 409 if closed)
+          → store.RunTx(fn)
+              → store.LoadMatchContext  (season, home/away team IDs)
+              → store.SeasonRoundConfig (handicap_multiplier + min_ball_handicap)
+              → store.LoadPlayerHandicap (per unique player)
+              → store.LoadPriorSnapshots (HC snapshot preservation)
+              → matches.ValidateRounds  (→ RoundValidationError on error)
+              → store.DeleteRoundResults / InsertRoundResult × N
+              → store.DeleteMatchResults / InsertMatchResult × M
+              → store.MarkMatchCompleted (if any game scored)
+```
+
+### Key design decisions (Q-B3-1/2/3)
+
+**Q-B3-1 (include submitResults/clearResults):** Both included in B3 scope.
+`SubmitResults` and `ClearResults` are thin TX operations wrapped by the store.
+`SubmitMatchResults` on the store calls `DeleteMatchResults` + `InsertMatchResult` × N
++ `MarkMatchCompleted` inside its own `RunTx`.
+
+**Q-B3-2 (config inside service):** `RoundService.SaveRounds` calls
+`store.SeasonRoundConfig` inside `RunTx` — no `Cfg` passed from the handler.
+This keeps the handler thin and ensures the config read is part of the same
+transaction as the writes.
+
+**Q-B3-3 (active-season fallback in handler):** `getStandings` resolves
+`season_id` from `league_id` via an active-season lookup in the handler, then
+passes the resolved ID to `mgr.GetStandings`. The service never sees a nil season ID.
+
+### HC snapshot preservation
+
+The `LoadPriorSnapshots` store method reads prior `round_results` rows inside the
+active transaction (before `DeleteRoundResults`). `SaveRounds` builds a
+`priorByRound` map and applies the same snapshot preservation logic as the old
+handler:
+
+| Scenario | home_handicap_used | away_handicap_used |
+|----------|-------------------|--------------------|
+| Same player on same side | Preserved from prior row | Preserved from prior row |
+| Home substituted, away same | Fresh from `players.handicap` | Preserved |
+| Both substituted | Fresh | Fresh |
+| First save | Fresh | Fresh |
+| Prior snapshot NULL (legacy) | Fresh at re-save | Fresh at re-save |
+
+### Error types
+
+| Error | HTTP mapping |
+|-------|-------------|
+| `*matches.RoundValidationError` | 422 with `{"messages": [...]}` |
+| `domainerr.Conflict` | 409 |
+| `domainerr.Unprocessable` | 422 with plain `{"error": "..."}` |
+| Other errors | 500 |
+
+### Temporary debt accepted in B3
+
+- `seasonMultiplier` and `seasonRoundConfig` remain in `handlers/api.go` for
+  `validateWeekHandler` and `closeWeekHandler` (B4 will move these to
+  `WeekStore.SeasonRoundConfig`).
+- `WeekService.db *sql.DB` is retained (B4 debt from B1/B2).
+- The `seasons.RosterEligible` cross-domain pre-TX guard stays in the handler,
+  called before `mgr.SaveRounds`. It checks `teams_managed=1` seasons only;
+  legacy seasons bypass the check automatically.
+- `GetRounds` falls back to `logic.Multiplier` (2.55) when `LoadMatchContext`
+  or `SeasonRoundConfig` fails, matching the old handler's silent error handling.
+
+### Not in B3
+
+- `ValidateWeek` signature change from `*sql.DB` to store interface (B4)
+- `seasonRoundConfig` / `seasonMultiplier` removal from `handlers/api.go` (B4)
+- Route or JSON shape changes
 
 ## Decision History
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 
 	"league_app/backend/domainerr"
 	"league_app/backend/validation"
+	"league_app/logic"
 	"league_app/models"
 )
 
@@ -33,17 +35,42 @@ func (e *WeekCloseErr) Error() string {
 	return fmt.Sprintf("week close blocked: %d error(s)", len(e.Result.Errors()))
 }
 
-// WeekService orchestrates list, validate, close, reopen, and acknowledgment-history
-// for the week-workflow. It implements the WeekManager interface declared in handlers/deps.go.
+// WeekService orchestrates list, validate, close, reopen, acknowledgment-history,
+// and advance-preview for the week-workflow.
+// It implements the WeekManager interface declared in handlers/deps.go.
 type WeekService struct {
-	store WeekStore
-	db    *sql.DB // temporary: passed to ValidateWeek until B4 moves validation to a store method
+	store     WeekStore
+	db        *sql.DB         // temporary: passed to ValidateWeek until B4 moves validation to a store method
+	hcPreview HandicapPreviewer // nil-safe: advance preview returns empty Handicap when nil
 }
 
 // NewWeekService returns a WeekService backed by the given store and database connection.
-// The db argument is used only to call the package-level ValidateWeek function.
-func NewWeekService(store WeekStore, db *sql.DB) *WeekService {
-	return &WeekService{store: store, db: db}
+// hcPreview is optional (nil disables handicap preview in AdvanceData/AdvancePreview).
+// The db argument is used to call ValidateWeek and read season rules; both are B4 debt.
+func NewWeekService(store WeekStore, db *sql.DB, hcPreview HandicapPreviewer) *WeekService {
+	return &WeekService{store: store, db: db, hcPreview: hcPreview}
+}
+
+// roundConfig reads the handicap_multiplier and min_ball_handicap season rules
+// from s.db and returns a RoundConfig. This is temporary B4 debt — rule-reading
+// will move to a store method when ValidateWeek is extracted from the package level.
+func (s *WeekService) roundConfig(seasonID int64) RoundConfig {
+	var multStr string
+	s.db.QueryRow(
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_multiplier'`,
+		seasonID).Scan(&multStr)
+	mult := logic.Multiplier
+	if multStr != "" {
+		if f, err := strconv.ParseFloat(multStr, 64); err == nil && f > 0 {
+			mult = f
+		}
+	}
+	var minBallStr string
+	s.db.QueryRow(
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
+		seasonID).Scan(&minBallStr)
+	minBallHC, _ := strconv.Atoi(minBallStr)
+	return RoundConfig{Multiplier: mult, MinBallHC: minBallHC}
 }
 
 // ListWeeks returns the current status and match counts for all scheduled weeks
@@ -167,4 +194,74 @@ func (s *WeekService) ListAcknowledgments(ctx context.Context, seasonID, weekNum
 		acks = []models.CloseAck{}
 	}
 	return acks, nil
+}
+
+// AdvanceData assembles the advance-result response for a season/week.
+// It reads match counts, week status, and next-week readiness from the store,
+// then calls the HandicapPreviewer (if wired) for the handicap portion.
+// Called from closeWeekHandler after a successful commit, and from AdvancePreview.
+func (s *WeekService) AdvanceData(ctx context.Context, seasonID, weekNum int64) (models.AdvanceResult, error) {
+	summary, err := s.store.GetWeekAdvanceSummary(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.AdvanceResult{}, fmt.Errorf("advance data: %w", err)
+	}
+
+	var hc models.AdvancePreviewHandicap
+	if s.hcPreview != nil {
+		hc, err = s.hcPreview.HandicapPreview(ctx, seasonID)
+		if err != nil {
+			return models.AdvanceResult{}, fmt.Errorf("advance data: handicap preview: %w", err)
+		}
+	}
+
+	return models.AdvanceResult{
+		ClosedWeek:     summary.ClosedWeek,
+		NextWeekNumber: summary.NextWeekNumber,
+		NextWeek:       summary.NextWeek,
+		Handicap:       hc,
+	}, nil
+}
+
+// AdvancePreview builds the full advance-preview response for a season/week.
+// Returns domainerr.NotFound (404) when no matches exist for the week.
+// Called from the getAdvancePreview handler.
+func (s *WeekService) AdvancePreview(ctx context.Context, seasonID, weekNum int64) (models.AdvancePreview, error) {
+	count, err := s.store.WeekMatchCount(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.AdvancePreview{}, fmt.Errorf("advance preview: %w", err)
+	}
+	if count == 0 {
+		return models.AdvancePreview{}, domainerr.New("WEEK_NOT_FOUND", domainerr.NotFound,
+			"week not found: no matches for this season and week")
+	}
+
+	cfg := s.roundConfig(seasonID)
+	result := ValidateWeek(s.db, seasonID, int(weekNum), cfg)
+
+	msgs := make([]models.AdvancePreviewMessage, 0, len(result.Messages))
+	for _, msg := range result.Messages {
+		msgs = append(msgs, models.AdvancePreviewMessage{
+			Code:    msg.Code,
+			Field:   msg.Field,
+			Message: msg.Message,
+			Level:   string(msg.Level),
+			MatchID: msg.MatchID,
+		})
+	}
+
+	ar, err := s.AdvanceData(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.AdvancePreview{}, fmt.Errorf("advance preview: %w", err)
+	}
+
+	return models.AdvancePreview{
+		SeasonID:           seasonID,
+		WeekNumber:         int(weekNum),
+		CanClose:           !result.HasErrors(),
+		ValidationMessages: msgs,
+		CurrentWeek:        ar.ClosedWeek,
+		NextWeekNumber:     ar.NextWeekNumber,
+		NextWeek:           ar.NextWeek,
+		Handicap:           ar.Handicap,
+	}, nil
 }
