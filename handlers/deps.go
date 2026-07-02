@@ -9,6 +9,15 @@ import (
 	"league_app/models"
 )
 
+// RuleManager is the subset of rules.RuleService used by the season-rules handlers.
+// Accepting an interface allows stub injection in tests.
+type RuleManager interface {
+	List(ctx context.Context, seasonID int64) ([]models.SeasonRule, error)
+	Upsert(ctx context.Context, rule models.SeasonRule) (models.SeasonRule, error)
+	Update(ctx context.Context, ruleID int64, label, value string) error
+	Delete(ctx context.Context, ruleID int64) error
+}
+
 // HandicapRecommender is the subset of handicaps.Service used by the read handler.
 // Accepting an interface (rather than the concrete type) allows stub injection in tests.
 type HandicapRecommender interface {
@@ -79,4 +88,7 @@ type Dependencies struct {
 	// RoundMgr handles scoresheet save/read, standings, and player stats.
 	// When nil, round/standings/stats routes are not registered.
 	RoundMgr RoundManager
+	// RuleMgr handles per-season rule CRUD.
+	// Required: Register panics if nil.
+	RuleMgr RuleManager
 }

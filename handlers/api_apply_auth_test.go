@@ -20,6 +20,19 @@ func (n *noopRecommender) Recommendations(_ context.Context, _ int64) (models.Ha
 	return models.HandicapReviewResponse{}, nil
 }
 
+// noopRuleManager satisfies RuleManager for tests that only exercise auth or
+// route-mounting logic and do not exercise the season-rules endpoints.
+type noopRuleManager struct{}
+
+func (n *noopRuleManager) List(_ context.Context, _ int64) ([]models.SeasonRule, error) {
+	return nil, nil
+}
+func (n *noopRuleManager) Upsert(_ context.Context, r models.SeasonRule) (models.SeasonRule, error) {
+	return r, nil
+}
+func (n *noopRuleManager) Update(_ context.Context, _ int64, _, _ string) error { return nil }
+func (n *noopRuleManager) Delete(_ context.Context, _ int64) error               { return nil }
+
 // stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.
 // ResolveKey maps a cleartext key to a user; zero-value returns nil (no match).
 type stubApplyAuth struct {
@@ -257,6 +270,7 @@ func TestRegister_ApplyRoute_NotMounted_WhenTokenEmpty(t *testing.T) {
 		HandicapSvc:     &noopRecommender{},
 		HandicapApplier: &stubApplier{},
 		AdminToken:      "",
+		RuleMgr:         &noopRuleManager{},
 	}
 	Register(mux, t.TempDir(), deps)
 
@@ -280,6 +294,7 @@ func TestRegister_ApplyRoute_Mounted_WhenTokenPresent(t *testing.T) {
 		HandicapSvc:     &noopRecommender{},
 		HandicapApplier: &stubApplier{},
 		AdminToken:      "test-token",
+		RuleMgr:         &noopRuleManager{},
 	}
 	Register(mux, t.TempDir(), deps)
 
@@ -304,6 +319,7 @@ func TestRegister_ApplyRoute_CorrectToken_ReachesHandler(t *testing.T) {
 		HandicapSvc:     &noopRecommender{},
 		HandicapApplier: &stubApplier{},
 		AdminToken:      "test-token",
+		RuleMgr:         &noopRuleManager{},
 	}
 	Register(mux, t.TempDir(), deps)
 
@@ -368,5 +384,6 @@ func TestRegister_NilApplier_NoToken_DoesNotPanic(t *testing.T) {
 		HandicapSvc:     &noopRecommender{},
 		HandicapApplier: nil,
 		AdminToken:      "",
+		RuleMgr:         &noopRuleManager{},
 	})
 }

@@ -34,6 +34,19 @@ func (s *stubHandicapSvc) Recommendations(ctx context.Context, seasonID int64) (
 	return s.fn(ctx, seasonID)
 }
 
+// noopRuleMgr satisfies handlers.RuleManager for tests that only exercise other
+// handler logic and do not exercise the season-rules endpoints.
+type noopRuleMgr struct{}
+
+func (n *noopRuleMgr) List(_ context.Context, _ int64) ([]models.SeasonRule, error) {
+	return nil, nil
+}
+func (n *noopRuleMgr) Upsert(_ context.Context, r models.SeasonRule) (models.SeasonRule, error) {
+	return r, nil
+}
+func (n *noopRuleMgr) Update(_ context.Context, _ int64, _, _ string) error { return nil }
+func (n *noopRuleMgr) Delete(_ context.Context, _ int64) error               { return nil }
+
 // testServer initializes a fresh SQLite database in a temp directory and
 // returns a running test HTTP server with all routes registered.
 // The DB connection and server are closed automatically when the test ends.
@@ -52,7 +65,9 @@ func testServer(t *testing.T) *httptest.Server {
 	weekSvc := matches.NewWeekService(weekStore, hcSvc)
 	roundStore := sqlite.NewRoundStore(db.DB)
 	roundSvc := matches.NewRoundService(roundStore)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc}
+	ruleStore := sqlite.NewRuleStore(db.DB)
+	ruleSvc := rules.NewRuleService(ruleStore)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -72,7 +87,7 @@ func TestGetHandicapRecommendations_NotFound404(t *testing.T) {
 		return models.HandicapReviewResponse{}, domainerr.New("HC_SEASON_NOT_FOUND", domainerr.NotFound, "season not found")
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -97,7 +112,7 @@ func TestGetHandicapRecommendations_InternalError500(t *testing.T) {
 		return models.HandicapReviewResponse{}, domainerr.Wrap("HC_DATA_ERROR", domainerr.Internal, "internal error", fmt.Errorf("db offline"))
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -130,7 +145,7 @@ func TestGetHandicapRecommendations_Success200(t *testing.T) {
 		return want, nil
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -165,7 +180,7 @@ func TestGetHandicapRecommendations_NonDomainError500NoLeak(t *testing.T) {
 		return models.HandicapReviewResponse{}, errors.New("secret database path /var/db/prod.db")
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
