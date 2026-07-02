@@ -42,7 +42,7 @@ type applyUserIDKey struct{}
 // Accepting an interface allows stub injection in tests.
 type WeekManager interface {
 	ListWeeks(ctx context.Context, seasonID int64) ([]models.WeekSummary, error)
-	ValidateWeek(ctx context.Context, seasonID, weekNum int64, cfg matches.RoundConfig) (validation.Result, error)
+	ValidateWeek(ctx context.Context, seasonID, weekNum int64) (validation.Result, error)
 	CloseWeek(ctx context.Context, req matches.CloseWeekRequest) (matches.CloseWeekResult, error)
 	ReopenWeek(ctx context.Context, seasonID, weekNum int64) error
 	ListAcknowledgments(ctx context.Context, seasonID, weekNum int64) ([]models.CloseAck, error)

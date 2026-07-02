@@ -1636,8 +1636,7 @@ func validateWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager
 		jsonError(w, "invalid week", 400)
 		return
 	}
-	cfg := seasonRoundConfig(seasonID)
-	result, err := mgr.ValidateWeek(r.Context(), seasonID, weekNum, cfg)
+	result, err := mgr.ValidateWeek(r.Context(), seasonID, weekNum)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -1668,12 +1667,10 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 		}
 	}
 
-	cfg := seasonRoundConfig(seasonID)
 	result, err := mgr.CloseWeek(r.Context(), matches.CloseWeekRequest{
 		SeasonID:        seasonID,
 		WeekNumber:      weekNum,
 		Acknowledgments: body.Acknowledgments,
-		Cfg:             cfg,
 	})
 	if err != nil {
 		var wce *matches.WeekCloseErr
@@ -2033,36 +2030,6 @@ func getStandings(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 	jsonOK(w, standings)
 }
 
-// seasonMultiplier returns the handicap_multiplier rule value for a season,
-// defaulting to logic.Multiplier (2.55) if the rule is absent or invalid.
-// B4 debt: used by validateWeekHandler and closeWeekHandler; stays until WeekService
-// owns its own config reads.
-func seasonMultiplier(seasonID int64) float64 {
-	var val string
-	db.DB.QueryRow(
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_multiplier'`,
-		seasonID).Scan(&val)
-	if val == "" {
-		return logic.Multiplier
-	}
-	f, err := strconv.ParseFloat(val, 64)
-	if err != nil || f <= 0 {
-		return logic.Multiplier
-	}
-	return f
-}
-
-// seasonRoundConfig builds a RoundConfig from the season's handicap_multiplier and
-// min_ball_handicap rules. B4 debt: used by validateWeekHandler and closeWeekHandler.
-func seasonRoundConfig(seasonID int64) matches.RoundConfig {
-	mult := seasonMultiplier(seasonID)
-	var minBallStr string
-	db.DB.QueryRow(
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
-		seasonID).Scan(&minBallStr)
-	minBallHC, _ := strconv.Atoi(minBallStr)
-	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}
-}
 
 // ─── 8-Ball Round Results ─────────────────────────────────────────────────────
 

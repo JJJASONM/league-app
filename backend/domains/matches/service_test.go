@@ -7,7 +7,6 @@ import (
 
 	"league_app/backend/domainerr"
 	"league_app/backend/domains/matches"
-	"league_app/db"
 	"league_app/models"
 )
 
@@ -65,16 +64,19 @@ func (s *stubHandicapPreviewer) HandicapPreview(_ context.Context, _ int64) (mod
 	return s.result, s.err
 }
 
-// newTestSvc creates a WeekService backed by the stub store and a fresh empty DB.
+func (s *stubWeekStore) SeasonRoundConfig(_ context.Context, _ int64) (matches.RoundConfig, error) {
+	return matches.RoundConfig{Multiplier: 2.55}, nil
+}
+
+func (s *stubWeekStore) GetWeekValidationData(_ context.Context, _, _ int64) (matches.WeekValidationData, error) {
+	return matches.WeekValidationData{}, nil
+}
+
+// newTestSvc creates a WeekService backed by the stub store.
 // previewer is optional; pass nil to test the nil-safe path.
 func newTestSvc(t *testing.T, store *stubWeekStore, previewer matches.HandicapPreviewer) *matches.WeekService {
 	t.Helper()
-	dir := t.TempDir()
-	if err := db.Init(dir); err != nil {
-		t.Fatalf("db.Init: %v", err)
-	}
-	t.Cleanup(func() { db.DB.Close() })
-	return matches.NewWeekService(store, db.DB, previewer)
+	return matches.NewWeekService(store, previewer)
 }
 
 // --- ReopenWeek ---
@@ -193,7 +195,6 @@ func TestWeekService_CloseWeek_SuccessOnEmptyWeek(t *testing.T) {
 	result, err := svc.CloseWeek(context.Background(), matches.CloseWeekRequest{
 		SeasonID:   1,
 		WeekNumber: 1,
-		Cfg:        matches.RoundConfig{Multiplier: 2.55},
 	})
 
 	if err != nil {
@@ -214,7 +215,6 @@ func TestWeekService_CloseWeek_PropagatesStoreError(t *testing.T) {
 	_, err := svc.CloseWeek(context.Background(), matches.CloseWeekRequest{
 		SeasonID:   1,
 		WeekNumber: 1,
-		Cfg:        matches.RoundConfig{Multiplier: 2.55},
 	})
 
 	if err == nil {

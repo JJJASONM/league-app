@@ -7,6 +7,7 @@ import (
 	"league_app/backend/domains/matches"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
+	"league_app/logic"
 )
 
 // initWeekDB initialises a fresh in-memory-like temp DB for week store tests.
@@ -347,6 +348,167 @@ func TestWeekStore_GetWeekAdvanceSummary_StatusOpenByDefault(t *testing.T) {
 	}
 	if summary.ClosedWeek.Status != "open" {
 		t.Errorf("want status=open (no league_weeks row), got %q", summary.ClosedWeek.Status)
+	}
+}
+
+// ─── SeasonRoundConfig ────────────────────────────────────────────────────────
+
+func TestWeekStore_SeasonRoundConfig_DefaultsWhenNoRules(t *testing.T) {
+	initWeekDB(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	cfg, err := store.SeasonRoundConfig(context.Background(), 99)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Multiplier != logic.Multiplier {
+		t.Errorf("want default multiplier %.2f, got %.2f", logic.Multiplier, cfg.Multiplier)
+	}
+	if cfg.MinBallHC != 0 {
+		t.Errorf("want MinBallHC=0, got %d", cfg.MinBallHC)
+	}
+}
+
+func TestWeekStore_SeasonRoundConfig_ReadsStoredValues(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`, seasonID, "handicap_multiplier", "Multiplier", "3.0")
+	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`, seasonID, "min_ball_handicap", "Min Ball HC", "2")
+	store := sqlite.NewWeekStore(db.DB)
+
+	cfg, err := store.SeasonRoundConfig(context.Background(), seasonID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Multiplier != 3.0 {
+		t.Errorf("want multiplier=3.0, got %.2f", cfg.Multiplier)
+	}
+	if cfg.MinBallHC != 2 {
+		t.Errorf("want MinBallHC=2, got %d", cfg.MinBallHC)
+	}
+}
+
+// ─── GetWeekValidationData ────────────────────────────────────────────────────
+
+func TestWeekStore_GetWeekValidationData_EmptyWhenNoMatches(t *testing.T) {
+	initWeekDB(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekValidationData(context.Background(), 99, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Matches) != 0 {
+		t.Errorf("want 0 matches, got %d", len(data.Matches))
+	}
+}
+
+func TestWeekStore_GetWeekValidationData_MatchPresentNoRounds(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekValidationData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Matches) != 1 {
+		t.Fatalf("want 1 match, got %d", len(data.Matches))
+	}
+	if data.Matches[0].MatchID != matchID {
+		t.Errorf("want matchID=%d, got %d", matchID, data.Matches[0].MatchID)
+	}
+	if data.Matches[0].HomeTeamID == nil {
+		t.Error("want HomeTeamID non-nil (seeded match has teams assigned)")
+	}
+	if len(data.Matches[0].Rounds) != 0 {
+		t.Errorf("want 0 rounds, got %d", len(data.Matches[0].Rounds))
+	}
+}
+
+func TestWeekStore_GetWeekValidationData_UnassignedTeamsNil(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	db.DB.Exec(`UPDATE matches SET home_team_id=NULL, away_team_id=NULL WHERE id=?`, matchID)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekValidationData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Matches) != 1 {
+		t.Fatalf("want 1 match, got %d", len(data.Matches))
+	}
+	if data.Matches[0].HomeTeamID != nil {
+		t.Error("want HomeTeamID=nil when column is NULL")
+	}
+	if data.Matches[0].AwayTeamID != nil {
+		t.Error("want AwayTeamID=nil when column is NULL")
+	}
+}
+
+func TestWeekStore_GetWeekValidationData_RoundsHCFromSnapshot(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+
+	db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('H','P',1.5)`)
+	var hpID int64
+	db.DB.QueryRow(`SELECT id FROM players ORDER BY id DESC LIMIT 1`).Scan(&hpID)
+	db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('A','P',2.5)`)
+	var apID int64
+	db.DB.QueryRow(`SELECT id FROM players ORDER BY id DESC LIMIT 1`).Scan(&apID)
+
+	db.DB.Exec(`INSERT INTO round_results
+		(match_id, round_number, home_player_id, away_player_id,
+		 game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+		 home_handicap_used, away_handicap_used)
+		VALUES (?,1,?,?,10,0,0,0,0,0,1.0,2.0)`, matchID, hpID, apID)
+
+	store := sqlite.NewWeekStore(db.DB)
+	data, err := store.GetWeekValidationData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Matches[0].Rounds) != 1 {
+		t.Fatalf("want 1 round, got %d", len(data.Matches[0].Rounds))
+	}
+	row := data.Matches[0].Rounds[0]
+	if row.HomeHC != 1.0 {
+		t.Errorf("want HomeHC=1.0 (snapshot), got %f", row.HomeHC)
+	}
+	if row.AwayHC != 2.0 {
+		t.Errorf("want AwayHC=2.0 (snapshot), got %f", row.AwayHC)
+	}
+}
+
+func TestWeekStore_GetWeekValidationData_RoundsHCFallbackToPlayer(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+
+	db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('H','P',1.5)`)
+	var hpID int64
+	db.DB.QueryRow(`SELECT id FROM players ORDER BY id DESC LIMIT 1`).Scan(&hpID)
+	db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('A','P',2.5)`)
+	var apID int64
+	db.DB.QueryRow(`SELECT id FROM players ORDER BY id DESC LIMIT 1`).Scan(&apID)
+
+	// No home_handicap_used / away_handicap_used → falls back to player.handicap
+	db.DB.Exec(`INSERT INTO round_results
+		(match_id, round_number, home_player_id, away_player_id,
+		 game1_home, game1_away, game2_home, game2_away, game3_home, game3_away)
+		VALUES (?,1,?,?,10,0,0,0,0,0)`, matchID, hpID, apID)
+
+	store := sqlite.NewWeekStore(db.DB)
+	data, err := store.GetWeekValidationData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := data.Matches[0].Rounds[0]
+	if row.HomeHC != 1.5 {
+		t.Errorf("want HomeHC=1.5 (player fallback), got %f", row.HomeHC)
+	}
+	if row.AwayHC != 2.5 {
+		t.Errorf("want AwayHC=2.5 (player fallback), got %f", row.AwayHC)
 	}
 }
 
