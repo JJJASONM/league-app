@@ -53,6 +53,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	if v := reflect.ValueOf(deps.RuleMgr); v.Kind() == reflect.Ptr && v.IsNil() {
 		panic("handlers.Register: deps.RuleMgr must not be a typed nil")
 	}
+	if deps.SeasonMgr == nil {
+		panic("handlers.Register: deps.SeasonMgr must not be nil")
+	}
+	if v := reflect.ValueOf(deps.SeasonMgr); v.Kind() == reflect.Ptr && v.IsNil() {
+		panic("handlers.Register: deps.SeasonMgr must not be a typed nil")
+	}
 	// Leagues
 	mux.HandleFunc("GET /api/leagues", listLeagues)
 	mux.HandleFunc("POST /api/leagues", createLeague)
@@ -80,7 +86,10 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	mux.HandleFunc("GET /api/seasons/{id}", getSeason)
 	mux.HandleFunc("PUT /api/seasons/{id}", updateSeason)
 	mux.HandleFunc("DELETE /api/seasons/{id}", deleteSeason)
-	mux.HandleFunc("POST /api/seasons/{id}/activate", activateSeason)
+	seasonMgr := deps.SeasonMgr
+	mux.HandleFunc("POST /api/seasons/{id}/activate", func(w http.ResponseWriter, r *http.Request) {
+		activateSeason(w, r, seasonMgr)
+	})
 
 	// Season sub-resources
 	ruleMgr := deps.RuleMgr
@@ -108,15 +117,29 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 
 	// Season teams and rosters
 	mux.HandleFunc("GET /api/seasons/{id}/teams", listSeasonTeams)
-	mux.HandleFunc("POST /api/seasons/{id}/teams", addSeasonTeam)
-	mux.HandleFunc("GET /api/seasons/{id}/previous", getPreviousSeasonTeams)
-	mux.HandleFunc("PUT /api/seasons/{id}/teams/{tid}", updateSeasonTeam)
-	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}", removeSeasonTeam)
+	mux.HandleFunc("POST /api/seasons/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
+		addSeasonTeam(w, r, seasonMgr)
+	})
+	mux.HandleFunc("GET /api/seasons/{id}/previous", func(w http.ResponseWriter, r *http.Request) {
+		getPreviousSeasonTeams(w, r, seasonMgr)
+	})
+	mux.HandleFunc("PUT /api/seasons/{id}/teams/{tid}", func(w http.ResponseWriter, r *http.Request) {
+		updateSeasonTeam(w, r, seasonMgr)
+	})
+	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}", func(w http.ResponseWriter, r *http.Request) {
+		removeSeasonTeam(w, r, seasonMgr)
+	})
 	mux.HandleFunc("GET /api/seasons/{id}/teams/{tid}/roster", listSeasonRoster)
-	mux.HandleFunc("POST /api/seasons/{id}/teams/{tid}/roster", addRosterPlayer)
-	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}", removeRosterPlayer)
+	mux.HandleFunc("POST /api/seasons/{id}/teams/{tid}/roster", func(w http.ResponseWriter, r *http.Request) {
+		addRosterPlayer(w, r, seasonMgr)
+	})
+	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}", func(w http.ResponseWriter, r *http.Request) {
+		removeRosterPlayer(w, r, seasonMgr)
+	})
 	mux.HandleFunc("GET /api/seasons/{id}/players/available", listAvailablePlayers)
-	mux.HandleFunc("GET /api/seasons/{id}/checklist", getSeasonChecklist)
+	mux.HandleFunc("GET /api/seasons/{id}/checklist", func(w http.ResponseWriter, r *http.Request) {
+		getSeasonChecklist(w, r, seasonMgr)
+	})
 
 	// Matches — scoped to ?season_id= (season implies league)
 	mux.HandleFunc("GET /api/matches", listMatches)
@@ -869,46 +892,27 @@ func deleteSeason(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
-func activateSeason(w http.ResponseWriter, r *http.Request) {
+func activateSeason(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	// Only deactivate seasons within the same league
-	var leagueID int64
-	if err := db.DB.QueryRow(`SELECT league_id FROM seasons WHERE id=?`, id).Scan(&leagueID); err != nil {
-		jsonError(w, "season not found", 404)
-		return
-	}
-
-	// Enforce checklist blockers when season_teams is in use.
-	checklist, clErr := seasons.Checklist(db.DB, id)
-	if clErr != nil {
-		jsonError(w, clErr.Error(), 500)
-		return
-	}
-	if !checklist.CanActivate {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error":    "season cannot be activated; resolve all blockers first",
-			"blockers": checklist.Blockers,
-		})
-		return
-	}
-
-	tx, err := db.DB.Begin()
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer tx.Rollback()
-	tx.Exec(`UPDATE seasons SET active=0 WHERE league_id=?`, leagueID)
-	// Set activated_at once on first activation (persistent setup lock).
-	tx.Exec(`UPDATE seasons SET active=1, activated_at=COALESCE(activated_at, CURRENT_TIMESTAMP) WHERE id=?`, id)
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.Activate(r.Context(), id); err != nil {
+		var blockErr *seasons.ChecklistBlockErr
+		switch {
+		case errors.As(err, &blockErr):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":    "season cannot be activated; resolve all blockers first",
+				"blockers": blockErr.Blockers,
+			})
+		case errors.Is(err, seasons.ErrNotFound):
+			jsonError(w, "season not found", 404)
+		default:
+			jsonError(w, err.Error(), 500)
+		}
 		return
 	}
 	jsonOK(w, map[string]string{"status": "activated"})
@@ -2264,31 +2268,18 @@ type addSeasonTeamRequest struct {
 	Name         string `json:"name"`           // new team name (creates a teams record)
 }
 
-// markStaleIfScheduled sets schedule_stale=1 when unplayed matches already exist.
-func markStaleIfScheduled(seasonID int64) {
-	var n int
-	db.DB.QueryRow(`SELECT COUNT(*) FROM matches WHERE season_id=? AND completed=0`, seasonID).Scan(&n)
-	if n > 0 {
-		db.DB.Exec(`UPDATE seasons SET schedule_stale=1 WHERE id=?`, seasonID)
-	}
-}
-
-// isDraftSeason returns false when the season's setup has been locked by activation.
-// activated_at is set once on first activation and never cleared; it survives
-// another season becoming active (deactivation does not reset it).
-func isDraftSeason(seasonID int64) bool {
-	var activatedAt *string
-	db.DB.QueryRow(`SELECT activated_at FROM seasons WHERE id=?`, seasonID).Scan(&activatedAt)
-	return activatedAt == nil
-}
-
-func addSeasonTeam(w http.ResponseWriter, r *http.Request) {
+func addSeasonTeam(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	if !isDraftSeason(sid) {
+	draft, err := mgr.IsDraft(r.Context(), sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if !draft {
 		jsonError(w, "cannot modify teams in an active season", 422)
 		return
 	}
@@ -2300,9 +2291,8 @@ func addSeasonTeam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var leagueID int64
-	var startDate *string
 	var draftTeamsManaged int
-	if err := db.DB.QueryRow(`SELECT league_id, start_date, COALESCE(teams_managed,0) FROM seasons WHERE id=?`, sid).Scan(&leagueID, &startDate, &draftTeamsManaged); err != nil {
+	if err := db.DB.QueryRow(`SELECT league_id, COALESCE(teams_managed,0) FROM seasons WHERE id=?`, sid).Scan(&leagueID, &draftTeamsManaged); err != nil {
 		jsonError(w, "season not found", 404)
 		return
 	}
@@ -2316,12 +2306,12 @@ func addSeasonTeam(w http.ResponseWriter, r *http.Request) {
 
 	// When from_season_id is provided, it must be the immediately previous season.
 	if req.FromTeamID > 0 && req.FromSeasonID > 0 {
-		prev, prevErr := seasons.PreviousSeason(db.DB, sid, leagueID, normDatePtr(startDate))
+		prevResult, prevErr := mgr.PreviousSeason(r.Context(), sid)
 		if prevErr != nil {
 			jsonError(w, prevErr.Error(), 500)
 			return
 		}
-		if prev == nil || prev.ID != req.FromSeasonID {
+		if prevResult.Season == nil || prevResult.Season.ID != req.FromSeasonID {
 			jsonError(w, "from_season_id must be the immediately previous season", 400)
 			return
 		}
@@ -2442,7 +2432,7 @@ func addSeasonTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	markStaleIfScheduled(sid)
+	_ = mgr.MarkStaleIfScheduled(r.Context(), sid)
 
 	row := db.DB.QueryRow(seasonTeamSelect+` WHERE st.season_id=? AND st.team_id=?`, sid, teamID)
 	st, _ := scanSeasonTeam(row)
@@ -2456,7 +2446,7 @@ type updateSeasonTeamRequest struct {
 	CaptainID  *int64 `json:"captain_id"`
 }
 
-func updateSeasonTeam(w http.ResponseWriter, r *http.Request) {
+func updateSeasonTeam(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -2467,7 +2457,12 @@ func updateSeasonTeam(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid team id", 400)
 		return
 	}
-	if !isDraftSeason(sid) {
+	draft, err := mgr.IsDraft(r.Context(), sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if !draft {
 		jsonError(w, "cannot modify teams in an active season", 422)
 		return
 	}
@@ -2508,7 +2503,7 @@ func updateSeasonTeam(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, st)
 }
 
-func removeSeasonTeam(w http.ResponseWriter, r *http.Request) {
+func removeSeasonTeam(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -2519,7 +2514,12 @@ func removeSeasonTeam(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid team id", 400)
 		return
 	}
-	if !isDraftSeason(sid) {
+	draft, err := mgr.IsDraft(r.Context(), sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if !draft {
 		jsonError(w, "cannot modify teams in an active season", 422)
 		return
 	}
@@ -2563,7 +2563,7 @@ func removeSeasonTeam(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	markStaleIfScheduled(sid)
+	_ = mgr.MarkStaleIfScheduled(r.Context(), sid)
 	jsonOK(w, map[string]string{"status": "removed"})
 }
 
@@ -2610,7 +2610,7 @@ type addRosterPlayerRequest struct {
 	PlayerID int64 `json:"player_id"`
 }
 
-func addRosterPlayer(w http.ResponseWriter, r *http.Request) {
+func addRosterPlayer(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -2621,7 +2621,12 @@ func addRosterPlayer(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid team id", 400)
 		return
 	}
-	if !isDraftSeason(sid) {
+	draft, err := mgr.IsDraft(r.Context(), sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if !draft {
 		jsonError(w, "cannot modify rosters in an active season", 422)
 		return
 	}
@@ -2680,7 +2685,7 @@ func addRosterPlayer(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, entry)
 }
 
-func removeRosterPlayer(w http.ResponseWriter, r *http.Request) {
+func removeRosterPlayer(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -2696,7 +2701,12 @@ func removeRosterPlayer(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid player id", 400)
 		return
 	}
-	if !isDraftSeason(sid) {
+	draft, err := mgr.IsDraft(r.Context(), sid)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if !draft {
 		jsonError(w, "cannot modify rosters in an active season", 422)
 		return
 	}
@@ -2788,97 +2798,36 @@ func listAvailablePlayers(w http.ResponseWriter, r *http.Request) {
 
 // ── Previous Season ────────────────────────────────────────────────────────────
 
-type previousSeasonResponse struct {
-	Season *models.Season      `json:"season"`
-	Teams  []previousTeamEntry `json:"teams"`
-}
-
-type previousTeamEntry struct {
-	TeamID     int64  `json:"team_id"`
-	TeamName   string `json:"team_name"`
-	SeasonName string `json:"season_name"`
-	CaptainID  *int64 `json:"captain_id"`
-}
-
-func getPreviousSeasonTeams(w http.ResponseWriter, r *http.Request) {
+func getPreviousSeasonTeams(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-
-	var leagueID int64
-	var startDate *string
-	if err := db.DB.QueryRow(`SELECT league_id, start_date FROM seasons WHERE id=?`, sid).
-		Scan(&leagueID, &startDate); err != nil {
-		jsonError(w, "season not found", 404)
-		return
-	}
-	startDate = normDatePtr(startDate)
-
-	prev, err := seasons.PreviousSeason(db.DB, sid, leagueID, startDate)
+	result, err := mgr.PreviousSeason(r.Context(), sid)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		if errors.Is(err, seasons.ErrNotFound) {
+			jsonError(w, "season not found", 404)
+		} else {
+			jsonError(w, err.Error(), 500)
+		}
 		return
 	}
-
-	resp := previousSeasonResponse{Season: prev, Teams: []previousTeamEntry{}}
-	if prev == nil {
-		jsonOK(w, resp)
-		return
-	}
-
-	// Prefer season_teams from the previous season; fall back to match participants.
-	var stCount int
-	db.DB.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=?`, prev.ID).Scan(&stCount)
-
-	if stCount > 0 {
-		rows, err := db.DB.Query(`
-			SELECT st.team_id, t.name,
-			       CASE WHEN st.season_name != '' THEN st.season_name ELSE t.name END,
-			       st.captain_id
-			FROM season_teams st JOIN teams t ON t.id=st.team_id
-			WHERE st.season_id=? ORDER BY st.id`, prev.ID)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var e previousTeamEntry
-				rows.Scan(&e.TeamID, &e.TeamName, &e.SeasonName, &e.CaptainID)
-				resp.Teams = append(resp.Teams, e)
-			}
-		}
-	} else {
-		// Fall back: distinct teams that appeared in the prior season's matches.
-		rows, err := db.DB.Query(`
-			SELECT DISTINCT t.id, t.name FROM teams t
-			JOIN matches m ON (m.home_team_id=t.id OR m.away_team_id=t.id)
-			WHERE m.season_id=? ORDER BY t.name`, prev.ID)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var e previousTeamEntry
-				rows.Scan(&e.TeamID, &e.TeamName)
-				e.SeasonName = e.TeamName
-				resp.Teams = append(resp.Teams, e)
-			}
-		}
-	}
-
-	jsonOK(w, resp)
+	jsonOK(w, result)
 }
 
 // ── Setup Checklist ────────────────────────────────────────────────────────────
 
-func getSeasonChecklist(w http.ResponseWriter, r *http.Request) {
+func getSeasonChecklist(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	c, err := seasons.Checklist(db.DB, sid)
+	c, err := mgr.Checklist(r.Context(), sid)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			jsonError(w, err.Error(), 404)
+		if errors.Is(err, seasons.ErrNotFound) {
+			jsonError(w, "season not found", 404)
 		} else {
 			jsonError(w, err.Error(), 500)
 		}

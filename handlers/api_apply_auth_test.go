@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"league_app/backend/domains/seasons"
 	"league_app/models"
 )
 
@@ -32,6 +33,20 @@ func (n *noopRuleManager) Upsert(_ context.Context, r models.SeasonRule) (models
 }
 func (n *noopRuleManager) Update(_ context.Context, _ int64, _, _ string) error { return nil }
 func (n *noopRuleManager) Delete(_ context.Context, _ int64) error               { return nil }
+
+// noopSeasonMgr satisfies SeasonManager for tests that only exercise auth or
+// route-mounting logic and do not exercise season lifecycle endpoints.
+type noopSeasonMgr struct{}
+
+func (n *noopSeasonMgr) Activate(_ context.Context, _ int64) error { return nil }
+func (n *noopSeasonMgr) Checklist(_ context.Context, _ int64) (models.SetupChecklist, error) {
+	return models.SetupChecklist{CanActivate: true}, nil
+}
+func (n *noopSeasonMgr) PreviousSeason(_ context.Context, _ int64) (seasons.PreviousSeasonResult, error) {
+	return seasons.PreviousSeasonResult{Teams: []seasons.SeasonTeamEntry{}}, nil
+}
+func (n *noopSeasonMgr) IsDraft(_ context.Context, _ int64) (bool, error) { return true, nil }
+func (n *noopSeasonMgr) MarkStaleIfScheduled(_ context.Context, _ int64) error { return nil }
 
 // stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.
 // ResolveKey maps a cleartext key to a user; zero-value returns nil (no match).
@@ -271,6 +286,7 @@ func TestRegister_ApplyRoute_NotMounted_WhenTokenEmpty(t *testing.T) {
 		HandicapApplier: &stubApplier{},
 		AdminToken:      "",
 		RuleMgr:         &noopRuleManager{},
+		SeasonMgr:       &noopSeasonMgr{},
 	}
 	Register(mux, t.TempDir(), deps)
 
@@ -295,6 +311,7 @@ func TestRegister_ApplyRoute_Mounted_WhenTokenPresent(t *testing.T) {
 		HandicapApplier: &stubApplier{},
 		AdminToken:      "test-token",
 		RuleMgr:         &noopRuleManager{},
+		SeasonMgr:       &noopSeasonMgr{},
 	}
 	Register(mux, t.TempDir(), deps)
 
@@ -320,6 +337,7 @@ func TestRegister_ApplyRoute_CorrectToken_ReachesHandler(t *testing.T) {
 		HandicapApplier: &stubApplier{},
 		AdminToken:      "test-token",
 		RuleMgr:         &noopRuleManager{},
+		SeasonMgr:       &noopSeasonMgr{},
 	}
 	Register(mux, t.TempDir(), deps)
 
@@ -385,5 +403,6 @@ func TestRegister_NilApplier_NoToken_DoesNotPanic(t *testing.T) {
 		HandicapApplier: nil,
 		AdminToken:      "",
 		RuleMgr:         &noopRuleManager{},
+		SeasonMgr:       &noopSeasonMgr{},
 	})
 }

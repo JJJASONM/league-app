@@ -123,9 +123,66 @@ created before Phase One) skip all checklist enforcement and always return
 flag. New seasons created via the API always get `teams_managed=1`.
 
 **Setup lock:** First activation sets `activated_at=CURRENT_TIMESTAMP` on the
-season row. This timestamp is never cleared. `isDraftSeason()` checks
-`activated_at IS NULL`, so the setup lock persists even after another season
-becomes active (deactivation does not re-enable editing).
+season row. This timestamp is never cleared. `IsDraft()` on `SeasonService`
+checks `activated_at IS NULL`, so the setup lock persists even after another
+season becomes active (deactivation does not re-enable editing).
+
+## Backend Domain Boundary (Phase A)
+
+The seasons domain is extracted from `handlers/api.go` into a layered stack:
+
+```
+handlers/api.go          — thin HTTP layer; calls SeasonManager interface
+handlers/deps.go         — SeasonManager interface definition
+backend/domains/seasons/ — pure domain logic; no HTTP or database imports
+  service.go             — SeasonService: Activate, Checklist, PreviousSeason,
+                           IsDraft, MarkStaleIfScheduled
+  store.go               — SeasonStore interface + types (SeasonMeta, TeamSummary,
+                           SeasonTeamEntry, PreviousSeasonResult, ChecklistBlockErr,
+                           ErrNotFound)
+  public.go              — package-level helpers: RosterEligible
+backend/storage/sqlite/
+  season_store.go        — sqlite.SeasonStore implementing seasons.SeasonStore
+```
+
+### SeasonStore interface
+
+Methods: `IsDraft`, `GetMeta`, `GetTeamSummaries`, `GetMatchCount`, `Activate`,
+`MarkStaleIfScheduled`, `FindActiveWithNoEndDate`, `FindClosestPriorByEndDate`,
+`GetSeasonTeams`, `GetMatchTeams`.
+
+`GetMeta` uses `strftime('%Y-%m-%d', col)` in the SELECT to force TEXT return from
+the SQLite driver, which would otherwise convert DATE-typed columns to `time.Time`.
+
+### SeasonService methods
+
+- **IsDraft** — delegates to store; returns `ErrNotFound` when season absent
+- **Checklist** — builds `models.SetupChecklist`; skips all checks for legacy
+  seasons (`teams_managed=0`); returns `(SetupChecklist, ErrNotFound)` for absent
+  seasons
+- **Activate** — runs checklist; returns `*ChecklistBlockErr` when blocked;
+  otherwise calls store.Activate; TODO comment marks rule-snapshot hook as deferred
+- **PreviousSeason** — priority 1: active season with no end_date; priority 2:
+  closest prior by end_date; team data from `season_teams` with fallback to match
+  history
+- **MarkStaleIfScheduled** — sets `schedule_stale=1` when unplayed matches exist
+
+### Handler thinning (Phase A)
+
+Logic removed from `handlers/api.go`:
+- `isDraftSeason(seasonID int64) bool` — deleted; replaced by `mgr.IsDraft(ctx, id)`
+- `markStaleIfScheduled(seasonID int64)` — deleted; replaced by `mgr.MarkStaleIfScheduled(ctx, id)`
+- `previousSeasonResponse` and `previousTeamEntry` types — deleted; replaced by
+  `seasons.PreviousSeasonResult` and `seasons.SeasonTeamEntry`
+
+Handlers thinned: `activateSeason`, `getSeasonChecklist`, `getPreviousSeasonTeams`,
+`addSeasonTeam`, `updateSeasonTeam`, `removeSeasonTeam`, `addRosterPlayer`,
+`removeRosterPlayer` — all now take a `SeasonManager` parameter injected via closure.
+
+### Deferred
+
+Rule snapshot at activation (lock `season_rules` against further changes) is marked
+with a TODO comment in `SeasonService.Activate` and remains unimplemented.
 
 ## Available Players
 

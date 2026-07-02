@@ -18,6 +18,7 @@ import (
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
+	"league_app/backend/domains/seasons"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
 	"league_app/handlers"
@@ -47,6 +48,20 @@ func (n *noopRuleMgr) Upsert(_ context.Context, r models.SeasonRule) (models.Sea
 func (n *noopRuleMgr) Update(_ context.Context, _ int64, _, _ string) error { return nil }
 func (n *noopRuleMgr) Delete(_ context.Context, _ int64) error               { return nil }
 
+// noopSeasonMgr satisfies handlers.SeasonManager for tests that only exercise
+// non-season handler logic.
+type noopSeasonMgr struct{}
+
+func (n *noopSeasonMgr) Activate(_ context.Context, _ int64) error { return nil }
+func (n *noopSeasonMgr) Checklist(_ context.Context, _ int64) (models.SetupChecklist, error) {
+	return models.SetupChecklist{CanActivate: true}, nil
+}
+func (n *noopSeasonMgr) PreviousSeason(_ context.Context, _ int64) (seasons.PreviousSeasonResult, error) {
+	return seasons.PreviousSeasonResult{Teams: []seasons.SeasonTeamEntry{}}, nil
+}
+func (n *noopSeasonMgr) IsDraft(_ context.Context, _ int64) (bool, error) { return true, nil }
+func (n *noopSeasonMgr) MarkStaleIfScheduled(_ context.Context, _ int64) error { return nil }
+
 // testServer initializes a fresh SQLite database in a temp directory and
 // returns a running test HTTP server with all routes registered.
 // The DB connection and server are closed automatically when the test ends.
@@ -67,7 +82,9 @@ func testServer(t *testing.T) *httptest.Server {
 	roundStore := sqlite.NewRoundStore(db.DB)
 	roundSvc := matches.NewRoundService(roundStore, ruleStore)
 	ruleSvc := rules.NewRuleService(ruleStore)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc}
+	seasonStore := sqlite.NewSeasonStore(db.DB)
+	seasonSvc := seasons.NewSeasonService(seasonStore)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, SeasonMgr: seasonSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -87,7 +104,7 @@ func TestGetHandicapRecommendations_NotFound404(t *testing.T) {
 		return models.HandicapReviewResponse{}, domainerr.New("HC_SEASON_NOT_FOUND", domainerr.NotFound, "season not found")
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, SeasonMgr: &noopSeasonMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -112,7 +129,7 @@ func TestGetHandicapRecommendations_InternalError500(t *testing.T) {
 		return models.HandicapReviewResponse{}, domainerr.Wrap("HC_DATA_ERROR", domainerr.Internal, "internal error", fmt.Errorf("db offline"))
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, SeasonMgr: &noopSeasonMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -145,7 +162,7 @@ func TestGetHandicapRecommendations_Success200(t *testing.T) {
 		return want, nil
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, SeasonMgr: &noopSeasonMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -180,7 +197,7 @@ func TestGetHandicapRecommendations_NonDomainError500NoLeak(t *testing.T) {
 		return models.HandicapReviewResponse{}, errors.New("secret database path /var/db/prod.db")
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, SeasonMgr: &noopSeasonMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
