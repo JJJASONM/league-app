@@ -15,11 +15,6 @@ type RoundStore interface {
 	// Returns false when no match row exists.
 	IsWeekClosed(ctx context.Context, matchID int64) (bool, error)
 
-	// SeasonRoundConfig reads handicap_multiplier and min_ball_handicap from
-	// season_rules for the given season. Returns defaults when rules are absent.
-	// Returns an error when a stored value is present but malformed.
-	SeasonRoundConfig(ctx context.Context, seasonID int64) (RoundConfig, error)
-
 	// RunTx executes fn inside a single read/write transaction.
 	// The RoundStore passed to fn is tx-scoped. Panics and errors both roll back.
 	RunTx(ctx context.Context, fn func(RoundStore) error) error

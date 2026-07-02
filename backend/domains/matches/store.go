@@ -81,10 +81,6 @@ type WeekStore interface {
 	// Returns an empty summary without error when no matches exist for the week.
 	GetWeekAdvanceSummary(ctx context.Context, seasonID, weekNum int64) (WeekAdvanceSummary, error)
 
-	// SeasonRoundConfig reads handicap_multiplier and min_ball_handicap from
-	// season_rules for the given season. Returns defaults when rules are absent.
-	SeasonRoundConfig(ctx context.Context, seasonID int64) (RoundConfig, error)
-
 	// GetWeekValidationData returns all match and round data needed for week
 	// validation. Handicap snapshots take priority; falls back to current player
 	// handicap when the snapshot column is NULL.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"league_app/backend/domainerr"
+	"league_app/backend/domains/rules"
 	"league_app/backend/validation"
 	"league_app/models"
 )
@@ -37,12 +38,13 @@ func (e *WeekCloseErr) Error() string {
 type WeekService struct {
 	store     WeekStore
 	hcPreview HandicapPreviewer // nil-safe: advance preview returns empty Handicap when nil
+	ruleStore rules.RuleStore
 }
 
-// NewWeekService returns a WeekService backed by the given store.
+// NewWeekService returns a WeekService backed by the given store and rule store.
 // hcPreview is optional (nil disables handicap preview in AdvanceData/AdvancePreview).
-func NewWeekService(store WeekStore, hcPreview HandicapPreviewer) *WeekService {
-	return &WeekService{store: store, hcPreview: hcPreview}
+func NewWeekService(store WeekStore, hcPreview HandicapPreviewer, ruleStore rules.RuleStore) *WeekService {
+	return &WeekService{store: store, hcPreview: hcPreview, ruleStore: ruleStore}
 }
 
 // ListWeeks returns the current status and match counts for all scheduled weeks
@@ -54,7 +56,7 @@ func (s *WeekService) ListWeeks(ctx context.Context, seasonID int64) ([]models.W
 // ValidateWeek runs week validation and returns the result. Config and match data
 // are fetched from the store; no direct DB connection is required.
 func (s *WeekService) ValidateWeek(ctx context.Context, seasonID, weekNum int64) (validation.Result, error) {
-	cfg, err := s.store.SeasonRoundConfig(ctx, seasonID)
+	cfg, err := ResolveRoundConfig(ctx, s.ruleStore, seasonID)
 	if err != nil {
 		return validation.Result{}, fmt.Errorf("validate week: config: %w", err)
 	}
@@ -68,7 +70,7 @@ func (s *WeekService) ValidateWeek(ctx context.Context, seasonID, weekNum int64)
 // CloseWeek validates the week, checks that all warnings are acknowledged, then
 // commits the close. Returns *WeekCloseErr for validation/ack failures (HTTP 422).
 func (s *WeekService) CloseWeek(ctx context.Context, req CloseWeekRequest) (CloseWeekResult, error) {
-	cfg, err := s.store.SeasonRoundConfig(ctx, req.SeasonID)
+	cfg, err := ResolveRoundConfig(ctx, s.ruleStore, req.SeasonID)
 	if err != nil {
 		return CloseWeekResult{}, fmt.Errorf("close week: config: %w", err)
 	}
@@ -222,7 +224,7 @@ func (s *WeekService) AdvancePreview(ctx context.Context, seasonID, weekNum int6
 			"week not found: no matches for this season and week")
 	}
 
-	cfg, err := s.store.SeasonRoundConfig(ctx, seasonID)
+	cfg, err := ResolveRoundConfig(ctx, s.ruleStore, seasonID)
 	if err != nil {
 		return models.AdvancePreview{}, fmt.Errorf("advance preview: config: %w", err)
 	}

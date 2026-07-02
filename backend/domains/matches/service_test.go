@@ -64,10 +64,6 @@ func (s *stubHandicapPreviewer) HandicapPreview(_ context.Context, _ int64) (mod
 	return s.result, s.err
 }
 
-func (s *stubWeekStore) SeasonRoundConfig(_ context.Context, _ int64) (matches.RoundConfig, error) {
-	return matches.RoundConfig{Multiplier: 2.55}, nil
-}
-
 func (s *stubWeekStore) GetWeekValidationData(_ context.Context, _, _ int64) (matches.WeekValidationData, error) {
 	return matches.WeekValidationData{}, nil
 }
@@ -76,7 +72,7 @@ func (s *stubWeekStore) GetWeekValidationData(_ context.Context, _, _ int64) (ma
 // previewer is optional; pass nil to test the nil-safe path.
 func newTestSvc(t *testing.T, store *stubWeekStore, previewer matches.HandicapPreviewer) *matches.WeekService {
 	t.Helper()
-	return matches.NewWeekService(store, previewer)
+	return matches.NewWeekService(store, previewer, &stubRuleStore{})
 }
 
 // --- ReopenWeek ---

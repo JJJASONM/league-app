@@ -163,6 +163,60 @@ func TestRuleStore_UpdateByID_UpdatesLabelAndValue(t *testing.T) {
 	}
 }
 
+func TestRuleStore_GetValue_ReturnsFalseWhenAbsent(t *testing.T) {
+	initRuleDB(t)
+	seasonID := ruleStoreSeed(t)
+	store := sqlite.NewRuleStore(db.DB)
+
+	_, exists, err := store.GetValue(context.Background(), seasonID, "handicap_multiplier")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists {
+		t.Error("want exists=false for absent key, got true")
+	}
+}
+
+func TestRuleStore_GetValue_ReturnsValueWhenPresent(t *testing.T) {
+	initRuleDB(t)
+	seasonID := ruleStoreSeed(t)
+	store := sqlite.NewRuleStore(db.DB)
+	ctx := context.Background()
+
+	store.Upsert(ctx, models.SeasonRule{SeasonID: seasonID, RuleKey: "handicap_multiplier", RuleLabel: "M", RuleValue: "3.00"})
+
+	value, exists, err := store.GetValue(ctx, seasonID, "handicap_multiplier")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("want exists=true for present key, got false")
+	}
+	if value != "3.00" {
+		t.Errorf("want value=%q, got %q", "3.00", value)
+	}
+}
+
+func TestRuleStore_GetValue_ReturnsTrueForBlankStoredValue(t *testing.T) {
+	initRuleDB(t)
+	seasonID := ruleStoreSeed(t)
+	store := sqlite.NewRuleStore(db.DB)
+	ctx := context.Background()
+
+	store.Upsert(ctx, models.SeasonRule{SeasonID: seasonID, RuleKey: "allow_substitutes", RuleLabel: "Subs", RuleValue: ""})
+
+	value, exists, err := store.GetValue(ctx, seasonID, "allow_substitutes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("want exists=true for blank-but-present key, got false")
+	}
+	if value != "" {
+		t.Errorf("want empty value, got %q", value)
+	}
+}
+
 func TestRuleStore_DeleteByID_RemovesRow(t *testing.T) {
 	initRuleDB(t)
 	seasonID := ruleStoreSeed(t)
