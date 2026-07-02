@@ -47,6 +47,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 			panic("handlers.Register: deps.HandicapApplier must not be a typed nil when LEAGUE_ADMIN_TOKEN is set")
 		}
 	}
+	if deps.RuleMgr == nil {
+		panic("handlers.Register: deps.RuleMgr must not be nil")
+	}
+	if v := reflect.ValueOf(deps.RuleMgr); v.Kind() == reflect.Ptr && v.IsNil() {
+		panic("handlers.Register: deps.RuleMgr must not be a typed nil")
+	}
 	// Leagues
 	mux.HandleFunc("GET /api/leagues", listLeagues)
 	mux.HandleFunc("POST /api/leagues", createLeague)
@@ -77,10 +83,19 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	mux.HandleFunc("POST /api/seasons/{id}/activate", activateSeason)
 
 	// Season sub-resources
-	mux.HandleFunc("GET /api/seasons/{id}/rules", listSeasonRules)
-	mux.HandleFunc("POST /api/seasons/{id}/rules", createSeasonRule)
-	mux.HandleFunc("PUT /api/seasons/{id}/rules/{rid}", updateSeasonRule)
-	mux.HandleFunc("DELETE /api/seasons/{id}/rules/{rid}", deleteSeasonRule)
+	ruleMgr := deps.RuleMgr
+	mux.HandleFunc("GET /api/seasons/{id}/rules", func(w http.ResponseWriter, r *http.Request) {
+		listSeasonRules(w, r, ruleMgr)
+	})
+	mux.HandleFunc("POST /api/seasons/{id}/rules", func(w http.ResponseWriter, r *http.Request) {
+		createSeasonRule(w, r, ruleMgr)
+	})
+	mux.HandleFunc("PUT /api/seasons/{id}/rules/{rid}", func(w http.ResponseWriter, r *http.Request) {
+		updateSeasonRule(w, r, ruleMgr)
+	})
+	mux.HandleFunc("DELETE /api/seasons/{id}/rules/{rid}", func(w http.ResponseWriter, r *http.Request) {
+		deleteSeasonRule(w, r, ruleMgr)
+	})
 
 	mux.HandleFunc("GET /api/seasons/{id}/skipped-weeks", listSkippedWeeks)
 	mux.HandleFunc("POST /api/seasons/{id}/skipped-weeks", createSkippedWeek)
@@ -1176,33 +1191,21 @@ func listRuleDefinitions(w http.ResponseWriter, r *http.Request) {
 
 // ─── Season Rules ─────────────────────────────────────────────────────────────
 
-func listSeasonRules(w http.ResponseWriter, r *http.Request) {
+func listSeasonRules(w http.ResponseWriter, r *http.Request, mgr RuleManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	rows, err := db.DB.Query(
-		`SELECT id, season_id, rule_key, rule_label, rule_value FROM season_rules WHERE season_id=? ORDER BY id`,
-		sid)
+	rows, err := mgr.List(r.Context(), sid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var rules []models.SeasonRule
-	for rows.Next() {
-		var ru models.SeasonRule
-		rows.Scan(&ru.ID, &ru.SeasonID, &ru.RuleKey, &ru.RuleLabel, &ru.RuleValue)
-		rules = append(rules, ru)
-	}
-	if rules == nil {
-		rules = []models.SeasonRule{}
-	}
-	jsonOK(w, rules)
+	jsonOK(w, rows)
 }
 
-func createSeasonRule(w http.ResponseWriter, r *http.Request) {
+func createSeasonRule(w http.ResponseWriter, r *http.Request, mgr RuleManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -1214,26 +1217,21 @@ func createSeasonRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ru.SeasonID = sid
-	if ru.RuleKey == "" {
-		ru.RuleKey = fmt.Sprintf("rule_%d", time.Now().UnixMilli())
-	}
-	if err := rules.ValidateValue(ru.RuleKey, ru.RuleValue); err != nil {
-		jsonError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	res, err := db.DB.Exec(
-		`INSERT OR REPLACE INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`,
-		ru.SeasonID, ru.RuleKey, ru.RuleLabel, ru.RuleValue)
+	saved, err := mgr.Upsert(r.Context(), ru)
 	if err != nil {
+		var de *domainerr.Err
+		if errors.As(err, &de) && de.Category == domainerr.InvalidInput {
+			jsonError(w, de.Message, http.StatusBadRequest)
+			return
+		}
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	ru.ID, _ = res.LastInsertId()
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, ru)
+	jsonOK(w, saved)
 }
 
-func updateSeasonRule(w http.ResponseWriter, r *http.Request) {
+func updateSeasonRule(w http.ResponseWriter, r *http.Request, mgr RuleManager) {
 	rid, err := pathID(r, "rid")
 	if err != nil {
 		jsonError(w, "invalid rule id", 400)
@@ -1244,27 +1242,36 @@ func updateSeasonRule(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	var ruleKey string
-	db.DB.QueryRow(`SELECT rule_key FROM season_rules WHERE id=?`, rid).Scan(&ruleKey)
-	if ruleKey != "" {
-		if verr := rules.ValidateValue(ruleKey, ru.RuleValue); verr != nil {
-			jsonError(w, verr.Error(), http.StatusBadRequest)
+	if err := mgr.Update(r.Context(), rid, ru.RuleLabel, ru.RuleValue); err != nil {
+		var de *domainerr.Err
+		if errors.As(err, &de) {
+			switch de.Category {
+			case domainerr.NotFound:
+				jsonError(w, de.Message, http.StatusNotFound)
+			case domainerr.InvalidInput:
+				jsonError(w, de.Message, http.StatusBadRequest)
+			default:
+				jsonError(w, de.Message, http.StatusInternalServerError)
+			}
 			return
 		}
+		jsonError(w, err.Error(), 500)
+		return
 	}
-	db.DB.Exec(`UPDATE season_rules SET rule_label=?, rule_value=? WHERE id=?`,
-		ru.RuleLabel, ru.RuleValue, rid)
 	ru.ID = rid
 	jsonOK(w, ru)
 }
 
-func deleteSeasonRule(w http.ResponseWriter, r *http.Request) {
+func deleteSeasonRule(w http.ResponseWriter, r *http.Request, mgr RuleManager) {
 	rid, err := pathID(r, "rid")
 	if err != nil {
 		jsonError(w, "invalid rule id", 400)
 		return
 	}
-	db.DB.Exec(`DELETE FROM season_rules WHERE id=?`, rid)
+	if err := mgr.Delete(r.Context(), rid); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
