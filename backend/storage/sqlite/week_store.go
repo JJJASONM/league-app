@@ -4,10 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
 
 	"league_app/backend/domains/matches"
-	"league_app/logic"
 	"league_app/models"
 )
 
@@ -354,28 +352,6 @@ func (s *WeekStore) GetWeekAdvanceSummary(ctx context.Context, seasonID, weekNum
 		NextWeekNumber: nextWeekNumPtr,
 		NextWeek:       nextWeek,
 	}, nil
-}
-
-// SeasonRoundConfig reads handicap_multiplier and min_ball_handicap from
-// season_rules for the given season. Returns defaults (logic.Multiplier, 0)
-// when rules are absent or unparseable.
-func (s *WeekStore) SeasonRoundConfig(ctx context.Context, seasonID int64) (matches.RoundConfig, error) {
-	var multStr string
-	s.db.QueryRowContext(ctx,
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_multiplier'`,
-		seasonID).Scan(&multStr)
-	mult := logic.Multiplier
-	if multStr != "" {
-		if f, err := strconv.ParseFloat(multStr, 64); err == nil && f > 0 {
-			mult = f
-		}
-	}
-	var minBallStr string
-	s.db.QueryRowContext(ctx,
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
-		seasonID).Scan(&minBallStr)
-	minBallHC, _ := strconv.Atoi(minBallStr)
-	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}, nil
 }
 
 // GetWeekValidationData returns all match and round data needed for week

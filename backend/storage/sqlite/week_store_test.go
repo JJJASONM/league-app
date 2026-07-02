@@ -7,7 +7,6 @@ import (
 	"league_app/backend/domains/matches"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
-	"league_app/logic"
 )
 
 // initWeekDB initialises a fresh in-memory-like temp DB for week store tests.
@@ -348,43 +347,6 @@ func TestWeekStore_GetWeekAdvanceSummary_StatusOpenByDefault(t *testing.T) {
 	}
 	if summary.ClosedWeek.Status != "open" {
 		t.Errorf("want status=open (no league_weeks row), got %q", summary.ClosedWeek.Status)
-	}
-}
-
-// ─── SeasonRoundConfig ────────────────────────────────────────────────────────
-
-func TestWeekStore_SeasonRoundConfig_DefaultsWhenNoRules(t *testing.T) {
-	initWeekDB(t)
-	store := sqlite.NewWeekStore(db.DB)
-
-	cfg, err := store.SeasonRoundConfig(context.Background(), 99)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Multiplier != logic.Multiplier {
-		t.Errorf("want default multiplier %.2f, got %.2f", logic.Multiplier, cfg.Multiplier)
-	}
-	if cfg.MinBallHC != 0 {
-		t.Errorf("want MinBallHC=0, got %d", cfg.MinBallHC)
-	}
-}
-
-func TestWeekStore_SeasonRoundConfig_ReadsStoredValues(t *testing.T) {
-	initWeekDB(t)
-	seasonID, _ := weekStoreSeed(t)
-	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`, seasonID, "handicap_multiplier", "Multiplier", "3.0")
-	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`, seasonID, "min_ball_handicap", "Min Ball HC", "2")
-	store := sqlite.NewWeekStore(db.DB)
-
-	cfg, err := store.SeasonRoundConfig(context.Background(), seasonID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Multiplier != 3.0 {
-		t.Errorf("want multiplier=3.0, got %.2f", cfg.Multiplier)
-	}
-	if cfg.MinBallHC != 2 {
-		t.Errorf("want MinBallHC=2, got %d", cfg.MinBallHC)
 	}
 }
 

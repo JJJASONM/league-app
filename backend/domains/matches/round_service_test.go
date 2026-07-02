@@ -17,9 +17,6 @@ type stubRoundStore struct {
 	weekClosed    bool
 	weekClosedErr error
 
-	roundConfig    matches.RoundConfig
-	roundConfigErr error
-
 	matchCtx    matches.MatchContext
 	matchCtxErr error
 
@@ -55,9 +52,6 @@ type stubRoundStore struct {
 
 func (s *stubRoundStore) IsWeekClosed(_ context.Context, _ int64) (bool, error) {
 	return s.weekClosed, s.weekClosedErr
-}
-func (s *stubRoundStore) SeasonRoundConfig(_ context.Context, _ int64) (matches.RoundConfig, error) {
-	return s.roundConfig, s.roundConfigErr
 }
 func (s *stubRoundStore) RunTx(_ context.Context, fn func(matches.RoundStore) error) error {
 	return fn(s)
@@ -119,7 +113,7 @@ func (s *stubRoundStore) ClearMatchResults(_ context.Context, _ int64) error {
 // ─── helper ──────────────────────────────────────────────────────────────────
 
 func newTestRoundSvc(store matches.RoundStore) *matches.RoundService {
-	return matches.NewRoundService(store)
+	return matches.NewRoundService(store, &stubRuleStore{})
 }
 
 // ─── SaveRounds ──────────────────────────────────────────────────────────────
@@ -140,8 +134,7 @@ func TestSaveRounds_WeekClosed_ReturnsConflict(t *testing.T) {
 func TestSaveRounds_ValidationError_ReturnsRoundValidationError(t *testing.T) {
 	store := &stubRoundStore{
 		weekClosed:  false,
-		roundConfig: matches.RoundConfig{Multiplier: 2.55},
-		matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
 		playerHCs:   map[int64]float64{1: 1.0, 2: 2.0},
 	}
 	svc := newTestRoundSvc(store)
@@ -163,8 +156,7 @@ func TestSaveRounds_ValidationError_ReturnsRoundValidationError(t *testing.T) {
 func TestSaveRounds_Happy_InsertsRoundAndMatchResults(t *testing.T) {
 	store := &stubRoundStore{
 		weekClosed:  false,
-		roundConfig: matches.RoundConfig{Multiplier: 2.55},
-		matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
 		playerHCs:   map[int64]float64{1: 0.0, 2: 0.0},
 	}
 	svc := newTestRoundSvc(store)
@@ -193,8 +185,7 @@ func TestSaveRounds_SnapshotPreservation_SameHomePlayer(t *testing.T) {
 	// Resubmitting with same player should preserve 3.0, not use currentHC=1.0.
 	store := &stubRoundStore{
 		weekClosed:  false,
-		roundConfig: matches.RoundConfig{Multiplier: 2.55},
-		matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
 		playerHCs:   map[int64]float64{1: 1.0, 2: 2.0},
 		priorSnaps: []matches.PriorSnapshotRow{
 			{
@@ -236,8 +227,7 @@ func TestSaveRounds_Substitution_FreshSnapshot(t *testing.T) {
 	// currentHC for player 99, not any prior snapshot.
 	store := &stubRoundStore{
 		weekClosed:  false,
-		roundConfig: matches.RoundConfig{Multiplier: 2.55},
-		matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
 		playerHCs:   map[int64]float64{99: 5.0, 2: 2.0},
 		priorSnaps: []matches.PriorSnapshotRow{
 			{
@@ -279,8 +269,7 @@ func TestSaveRounds_AmbiguousSnapshot_ReturnsUnprocessable(t *testing.T) {
 	// Away player 2 appears in two prior rows for the same round — ambiguous.
 	store := &stubRoundStore{
 		weekClosed:  false,
-		roundConfig: matches.RoundConfig{Multiplier: 2.55},
-		matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
 		playerHCs:   map[int64]float64{99: 5.0, 2: 2.0},
 		priorSnaps: []matches.PriorSnapshotRow{
 			{RoundNumber: 1, HomePlayerID: 1, AwayPlayerID: 2,
@@ -326,8 +315,7 @@ func TestGetRounds_WithSnapshot_UsesSnapshot(t *testing.T) {
 	to := "home"
 	store := &stubRoundStore{
 		matchCtx:    matches.MatchContext{SeasonID: 1},
-		roundConfig: matches.RoundConfig{Multiplier: 2.55},
-		roundResults: []models.RoundResult{
+roundResults: []models.RoundResult{
 			{RoundNumber: 1, HomePlayerID: 1, AwayPlayerID: 2,
 				HomeHandicap: 1.0, AwayHandicap: 2.0,
 				Game1Home: 10, Game1Away: 3,
@@ -357,8 +345,7 @@ func TestGetRounds_NoSnapshot_ComputesFromHC(t *testing.T) {
 	// HC diff = 0.0-2.0 = -2.0, abs=2.0, *2.55=5.1 → 5 balls to home.
 	store := &stubRoundStore{
 		matchCtx:    matches.MatchContext{SeasonID: 1},
-		roundConfig: matches.RoundConfig{Multiplier: 2.55},
-		roundResults: []models.RoundResult{
+roundResults: []models.RoundResult{
 			{RoundNumber: 1, HomePlayerID: 1, AwayPlayerID: 2,
 				HomeHandicap: 0.0, AwayHandicap: 2.0,
 				Game1Home: 10, Game1Away: 3,

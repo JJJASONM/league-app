@@ -27,4 +27,8 @@ type RuleStore interface {
 
 	// DeleteByID removes the rule with the given ID.
 	DeleteByID(ctx context.Context, ruleID int64) error
+
+	// GetValue returns the stored text value for a season+key pair.
+	// exists=false when no row is present; err is non-nil only on DB error.
+	GetValue(ctx context.Context, seasonID int64, key string) (value string, exists bool, err error)
 }

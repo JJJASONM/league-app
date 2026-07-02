@@ -87,6 +87,15 @@ func (s *stubRuleStore) DeleteByID(_ context.Context, ruleID int64) error {
 	return nil
 }
 
+func (s *stubRuleStore) GetValue(_ context.Context, seasonID int64, key string) (string, bool, error) {
+	for _, r := range s.rows {
+		if r.SeasonID == seasonID && r.RuleKey == key {
+			return r.RuleValue, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // --- Upsert ---
 
 func TestRuleService_Upsert_AutogeneratesKeyWhenBlank(t *testing.T) {

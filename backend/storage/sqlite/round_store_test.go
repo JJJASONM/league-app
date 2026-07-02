@@ -81,48 +81,6 @@ func TestRoundStore_IsWeekClosed_TrueAfterSet(t *testing.T) {
 	}
 }
 
-// ─── SeasonRoundConfig ───────────────────────────────────────────────────────
-
-func TestRoundStore_SeasonRoundConfig_Defaults(t *testing.T) {
-	s := newRoundStore(t)
-	_, _, _, seasonID, _, _ := seedRoundTestData(t)
-	cfg, err := s.SeasonRoundConfig(context.Background(), seasonID)
-	if err != nil {
-		t.Fatalf("SeasonRoundConfig: %v", err)
-	}
-	if cfg.Multiplier != 2.55 {
-		t.Errorf("want default multiplier 2.55, got %v", cfg.Multiplier)
-	}
-	if cfg.MinBallHC != 0 {
-		t.Errorf("want default MinBallHC 0, got %d", cfg.MinBallHC)
-	}
-}
-
-func TestRoundStore_SeasonRoundConfig_ReadsStoredMultiplier(t *testing.T) {
-	s := newRoundStore(t)
-	_, _, _, seasonID, _, _ := seedRoundTestData(t)
-	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`,
-		seasonID, "handicap_multiplier", "Multiplier", "3.00")
-	cfg, err := s.SeasonRoundConfig(context.Background(), seasonID)
-	if err != nil {
-		t.Fatalf("SeasonRoundConfig: %v", err)
-	}
-	if cfg.Multiplier != 3.00 {
-		t.Errorf("want multiplier 3.00, got %v", cfg.Multiplier)
-	}
-}
-
-func TestRoundStore_SeasonRoundConfig_InvalidMultiplier_ReturnsError(t *testing.T) {
-	s := newRoundStore(t)
-	_, _, _, seasonID, _, _ := seedRoundTestData(t)
-	db.DB.Exec(`INSERT INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`,
-		seasonID, "handicap_multiplier", "Multiplier", "not-a-number")
-	_, err := s.SeasonRoundConfig(context.Background(), seasonID)
-	if err == nil {
-		t.Error("want error for invalid multiplier, got nil")
-	}
-}
-
 // ─── RunTx rollback ──────────────────────────────────────────────────────────
 
 func TestRoundStore_RunTx_RollbackOnError(t *testing.T) {

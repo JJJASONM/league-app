@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"league_app/backend/domainerr"
+	"league_app/backend/domains/rules"
 	"league_app/logic"
 	"league_app/models"
 )
@@ -22,12 +23,13 @@ func (e *RoundValidationError) Error() string {
 // RoundService orchestrates scoresheet save/read, standings, and player stats
 // for the matches domain.
 type RoundService struct {
-	store RoundStore
+	store     RoundStore
+	ruleStore rules.RuleStore
 }
 
-// NewRoundService returns a RoundService backed by the given store.
-func NewRoundService(store RoundStore) *RoundService {
-	return &RoundService{store: store}
+// NewRoundService returns a RoundService backed by the given store and rule store.
+func NewRoundService(store RoundStore, ruleStore rules.RuleStore) *RoundService {
+	return &RoundService{store: store, ruleStore: ruleStore}
 }
 
 // SaveRounds validates and persists one match's round results inside a single transaction.
@@ -50,7 +52,7 @@ func (s *RoundService) SaveRounds(ctx context.Context, input SaveRoundsInput) er
 			return fmt.Errorf("save rounds: load match context: %w", err)
 		}
 
-		cfg, err := tx.SeasonRoundConfig(ctx, mc.SeasonID)
+		cfg, err := ResolveRoundConfig(ctx, s.ruleStore, mc.SeasonID)
 		if err != nil {
 			return fmt.Errorf("save rounds: season %d round config: %w", mc.SeasonID, err)
 		}
@@ -265,7 +267,7 @@ func (s *RoundService) SaveRounds(ctx context.Context, input SaveRoundsInput) er
 func (s *RoundService) GetRounds(ctx context.Context, matchID int64) ([]models.RoundResult, error) {
 	cfg := RoundConfig{Multiplier: logic.Multiplier}
 	if mc, err := s.store.LoadMatchContext(ctx, matchID); err == nil {
-		if cfg2, err2 := s.store.SeasonRoundConfig(ctx, mc.SeasonID); err2 == nil {
+		if cfg2, err2 := ResolveRoundConfig(ctx, s.ruleStore, mc.SeasonID); err2 == nil {
 			cfg = cfg2
 		}
 	}

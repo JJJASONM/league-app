@@ -92,10 +92,10 @@ func main() {
 	hcStore := sqlite.NewHandicapStore(db.DB)
 	hcSvc := handicaps.NewService(hcStore)
 	weekStore := sqlite.NewWeekStore(db.DB)
-	weekSvc := matches.NewWeekService(weekStore, hcSvc)
-	roundStore := sqlite.NewRoundStore(db.DB)
-	roundSvc := matches.NewRoundService(roundStore)
 	ruleStore := sqlite.NewRuleStore(db.DB)
+	weekSvc := matches.NewWeekService(weekStore, hcSvc, ruleStore)
+	roundStore := sqlite.NewRoundStore(db.DB)
+	roundSvc := matches.NewRoundService(roundStore, ruleStore)
 	ruleSvc := rules.NewRuleService(ruleStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,

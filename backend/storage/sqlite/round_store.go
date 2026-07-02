@@ -3,13 +3,9 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"math"
-	"strconv"
 
 	"league_app/backend/domains/matches"
-	"league_app/logic"
 	"league_app/models"
 )
 
@@ -59,47 +55,6 @@ func (s *RoundStore) IsWeekClosed(ctx context.Context, matchID int64) (bool, err
 	var wc int
 	s.q.QueryRowContext(ctx, `SELECT week_closed FROM matches WHERE id=?`, matchID).Scan(&wc)
 	return wc == 1, nil
-}
-
-// SeasonRoundConfig reads handicap_multiplier and min_ball_handicap from season_rules.
-// Returns documented defaults when rules are absent. Returns an error when a stored
-// value is present but malformed (non-positive multiplier, non-integer min_ball_handicap).
-func (s *RoundStore) SeasonRoundConfig(ctx context.Context, seasonID int64) (matches.RoundConfig, error) {
-	var multStr string
-	err := s.q.QueryRowContext(ctx,
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='handicap_multiplier'`,
-		seasonID).Scan(&multStr)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return matches.RoundConfig{}, fmt.Errorf("season %d: handicap_multiplier: %w", seasonID, err)
-	}
-	mult := logic.Multiplier
-	if multStr != "" {
-		f, parseErr := strconv.ParseFloat(multStr, 64)
-		if parseErr != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
-			return matches.RoundConfig{}, fmt.Errorf("season %d: handicap_multiplier %q is not a positive finite number", seasonID, multStr)
-		}
-		mult = f
-	}
-
-	var minBallStr string
-	err = s.q.QueryRowContext(ctx,
-		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key='min_ball_handicap'`,
-		seasonID).Scan(&minBallStr)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap: %w", seasonID, err)
-	}
-	minBallHC := 0
-	if minBallStr != "" {
-		n, parseErr := strconv.Atoi(minBallStr)
-		if parseErr != nil {
-			return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap %q is not an integer", seasonID, minBallStr)
-		}
-		if n < 0 {
-			return matches.RoundConfig{}, fmt.Errorf("season %d: min_ball_handicap %d must be >= 0", seasonID, n)
-		}
-		minBallHC = n
-	}
-	return matches.RoundConfig{Multiplier: mult, MinBallHC: minBallHC}, nil
 }
 
 // LoadMatchContext returns season_id, home_team_id, and away_team_id for a match.

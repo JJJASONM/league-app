@@ -90,3 +90,17 @@ func (s *RuleStore) DeleteByID(ctx context.Context, ruleID int64) error {
 	}
 	return nil
 }
+
+func (s *RuleStore) GetValue(ctx context.Context, seasonID int64, key string) (string, bool, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT rule_value FROM season_rules WHERE season_id=? AND rule_key=?`,
+		seasonID, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("get rule value %q season %d: %w", key, seasonID, err)
+	}
+	return value, true, nil
+}
