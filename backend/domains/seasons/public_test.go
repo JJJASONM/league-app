@@ -1,11 +1,13 @@
 package seasons_test
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
 
 	"league_app/backend/domains/seasons"
+	"league_app/backend/storage/sqlite"
 	"league_app/db"
 	"league_app/models"
 )
@@ -19,6 +21,11 @@ func setupDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.DB.Close() })
 	return db.DB
+}
+
+// makeSvc builds a SeasonService backed by a real sqlite store.
+func makeSvc(d *sql.DB) *seasons.SeasonService {
+	return seasons.NewSeasonService(sqlite.NewSeasonStore(d))
 }
 
 // seed helpers ─────────────────────────────────────────────────────────────────
@@ -132,7 +139,7 @@ func TestChecklist_LegacySeason_CanActivate(t *testing.T) {
 	// seedSeason inserts without teams_managed → DEFAULT 0 → legacy mode.
 	sid := seedSeason(t, d, lid, "Draft", "2026-09-01", "")
 
-	c, err := seasons.Checklist(d, sid)
+	c, err := makeSvc(d).Checklist(context.Background(), sid)
 	if err != nil {
 		t.Fatalf("Checklist: %v", err)
 	}
@@ -144,15 +151,14 @@ func TestChecklist_LegacySeason_CanActivate(t *testing.T) {
 	}
 }
 
-// TestChecklist_ManagedSeason_NoTeams_BlocksTooFew verifies correction 1:
-// a managed season (teams_managed=1) with no teams gets TEAMS_TOO_FEW and
-// cannot activate, unlike legacy seasons which bypass enforcement.
+// TestChecklist_ManagedSeason_NoTeams_BlocksTooFew verifies that a managed season
+// (teams_managed=1) with no teams gets TEAMS_TOO_FEW and cannot activate.
 func TestChecklist_ManagedSeason_NoTeams_BlocksTooFew(t *testing.T) {
 	d := setupDB(t)
 	lid := seedLeague(t, d)
 	sid := seedManagedSeason(t, d, lid, "Draft", "2026-09-01", "")
 
-	c, err := seasons.Checklist(d, sid)
+	c, err := makeSvc(d).Checklist(context.Background(), sid)
 	if err != nil {
 		t.Fatalf("Checklist: %v", err)
 	}
@@ -169,7 +175,7 @@ func TestChecklist_OnlyOneTeam_BlocksTooFew(t *testing.T) {
 	sid := seedManagedSeason(t, d, lid, "Draft", "2026-09-01", "")
 	addSeasonTeam(t, d, sid, tid, nil)
 
-	c, _ := seasons.Checklist(d, sid)
+	c, _ := makeSvc(d).Checklist(context.Background(), sid)
 	assertCode(t, c.Blockers, "TEAMS_TOO_FEW")
 	assertCode(t, c.Blockers, "TEAM_NO_CAPTAIN")
 	assertCode(t, c.Blockers, "TEAM_NO_PLAYERS")
@@ -184,7 +190,7 @@ func TestChecklist_TeamNoPlayers_Blocker(t *testing.T) {
 	addSeasonTeam(t, d, sid, t1, nil)
 	addSeasonTeam(t, d, sid, t2, nil)
 
-	c, _ := seasons.Checklist(d, sid)
+	c, _ := makeSvc(d).Checklist(context.Background(), sid)
 	assertCode(t, c.Blockers, "TEAM_NO_PLAYERS")
 }
 
@@ -211,7 +217,7 @@ func TestChecklist_TeamFewPlayers_Warning(t *testing.T) {
 
 	seedMatch(t, d, sid, t1, t2)
 
-	c, _ := seasons.Checklist(d, sid)
+	c, _ := makeSvc(d).Checklist(context.Background(), sid)
 	assertCode(t, c.Warnings, "TEAM_FEW_PLAYERS")
 	// TEAM_NO_PLAYERS should NOT appear (team has players)
 	assertNotCode(t, c.Blockers, "TEAM_NO_PLAYERS")
@@ -244,7 +250,7 @@ func TestChecklist_CaptainNotOnRoster_Blocker(t *testing.T) {
 
 	seedMatch(t, d, sid, t1, t2)
 
-	c, _ := seasons.Checklist(d, sid)
+	c, _ := makeSvc(d).Checklist(context.Background(), sid)
 	assertCode(t, c.Blockers, "CAPTAIN_NOT_ON_ROSTER")
 }
 
@@ -271,7 +277,7 @@ func TestChecklist_NoSchedule_Blocker(t *testing.T) {
 	addRosterPlayer(t, d, sid, t2, p6)
 	// no match inserted → NO_SCHEDULE blocker
 
-	c, _ := seasons.Checklist(d, sid)
+	c, _ := makeSvc(d).Checklist(context.Background(), sid)
 	assertCode(t, c.Blockers, "NO_SCHEDULE")
 	if c.CanActivate {
 		t.Error("want CanActivate=false when no schedule")
@@ -303,7 +309,7 @@ func TestChecklist_StaleSchedule_Blocker(t *testing.T) {
 
 	d.Exec(`UPDATE seasons SET schedule_stale=1 WHERE id=?`, sid)
 
-	c, _ := seasons.Checklist(d, sid)
+	c, _ := makeSvc(d).Checklist(context.Background(), sid)
 	assertCode(t, c.Blockers, "SCHEDULE_STALE")
 }
 
@@ -330,7 +336,7 @@ func TestChecklist_AllGood_CanActivate(t *testing.T) {
 	addRosterPlayer(t, d, sid, t2, p6)
 	seedMatch(t, d, sid, t1, t2)
 
-	c, err := seasons.Checklist(d, sid)
+	c, err := makeSvc(d).Checklist(context.Background(), sid)
 	if err != nil {
 		t.Fatalf("Checklist: %v", err)
 	}
@@ -346,19 +352,18 @@ func TestPreviousSeason_ByStartDate(t *testing.T) {
 	lid := seedLeague(t, d)
 	// Previous (ended before draft start)
 	prevID := seedSeason(t, d, lid, "Fall 2025", "2025-09-01", "2025-12-15")
-	// Draft (no end date)
+	// Draft (start_date stored in DB; service reads it via GetMeta)
 	draftID := seedSeason(t, d, lid, "Spring 2026", "2026-02-01", "")
 
-	start := "2026-02-01"
-	prev, err := seasons.PreviousSeason(d, draftID, lid, &start)
+	result, err := makeSvc(d).PreviousSeason(context.Background(), draftID)
 	if err != nil {
 		t.Fatalf("PreviousSeason: %v", err)
 	}
-	if prev == nil {
+	if result.Season == nil {
 		t.Fatal("want previous season, got nil")
 	}
-	if prev.ID != prevID {
-		t.Errorf("want prevID=%d, got %d", prevID, prev.ID)
+	if result.Season.ID != prevID {
+		t.Errorf("want prevID=%d, got %d", prevID, result.Season.ID)
 	}
 }
 
@@ -369,15 +374,15 @@ func TestPreviousSeason_NoStartDate_MostRecent(t *testing.T) {
 	recentID := seedSeason(t, d, lid, "Recent", "2025-09-01", "2025-12-15")
 	draftID := seedSeason(t, d, lid, "Draft", "", "")
 
-	prev, err := seasons.PreviousSeason(d, draftID, lid, nil)
+	result, err := makeSvc(d).PreviousSeason(context.Background(), draftID)
 	if err != nil {
 		t.Fatalf("PreviousSeason: %v", err)
 	}
-	if prev == nil {
+	if result.Season == nil {
 		t.Fatal("want previous season")
 	}
-	if prev.ID != recentID {
-		t.Errorf("want recentID=%d, got %d", recentID, prev.ID)
+	if result.Season.ID != recentID {
+		t.Errorf("want recentID=%d, got %d", recentID, result.Season.ID)
 	}
 }
 
@@ -386,18 +391,17 @@ func TestPreviousSeason_NoneExists_ReturnsNil(t *testing.T) {
 	lid := seedLeague(t, d)
 	draftID := seedSeason(t, d, lid, "Draft", "2026-09-01", "")
 
-	prev, err := seasons.PreviousSeason(d, draftID, lid, nil)
+	result, err := makeSvc(d).PreviousSeason(context.Background(), draftID)
 	if err != nil {
 		t.Fatalf("PreviousSeason: %v", err)
 	}
-	if prev != nil {
-		t.Errorf("want nil, got %+v", prev)
+	if result.Season != nil {
+		t.Errorf("want nil season, got %+v", result.Season)
 	}
 }
 
-// TestPreviousSeason_PrefersActiveSeasonWithNoEndDate verifies correction 6:
-// an active season with no end_date is returned before a completed season,
-// because it represents the "currently running" season being superseded.
+// TestPreviousSeason_PrefersActiveSeasonWithNoEndDate verifies that an active
+// season with no end_date is returned before a completed season.
 func TestPreviousSeason_PrefersActiveSeasonWithNoEndDate(t *testing.T) {
 	d := setupDB(t)
 	lid := seedLeague(t, d)
@@ -409,16 +413,15 @@ func TestPreviousSeason_PrefersActiveSeasonWithNoEndDate(t *testing.T) {
 	// The draft season being set up.
 	draftID := seedSeason(t, d, lid, "Draft", "2026-09-01", "")
 
-	start := "2026-09-01"
-	prev, err := seasons.PreviousSeason(d, draftID, lid, &start)
+	result, err := makeSvc(d).PreviousSeason(context.Background(), draftID)
 	if err != nil {
 		t.Fatalf("PreviousSeason: %v", err)
 	}
-	if prev == nil {
+	if result.Season == nil {
 		t.Fatal("want a previous season, got nil")
 	}
-	if prev.ID != activeID {
-		t.Errorf("want active season (id=%d), got id=%d", activeID, prev.ID)
+	if result.Season.ID != activeID {
+		t.Errorf("want active season (id=%d), got id=%d", activeID, result.Season.ID)
 	}
 }
 
@@ -435,8 +438,8 @@ func TestPreviousSeason_NotFromOtherLeague(t *testing.T) {
 	seedSeason(t, d, lid2, "Other League Season", "2025-01-01", "2025-06-01")
 	draftID := seedSeason(t, d, lid1, "Draft", "2026-09-01", "")
 
-	prev, _ := seasons.PreviousSeason(d, draftID, lid1, nil)
-	if prev != nil {
+	result, _ := makeSvc(d).PreviousSeason(context.Background(), draftID)
+	if result.Season != nil {
 		t.Error("should not return seasons from a different league")
 	}
 }

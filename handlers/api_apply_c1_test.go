@@ -14,6 +14,7 @@ import (
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
+	"league_app/backend/domains/seasons"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
 	"league_app/handlers"
@@ -42,6 +43,8 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 	roundStore := sqlite.NewRoundStore(db.DB)
 	roundSvc := matches.NewRoundService(roundStore, ruleStore)
 	ruleSvc := rules.NewRuleService(ruleStore)
+	seasonStore := sqlite.NewSeasonStore(db.DB)
+	seasonSvc := seasons.NewSeasonService(seasonStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
@@ -50,6 +53,7 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 		WeekMgr:         weekSvc,
 		RoundMgr:        roundSvc,
 		RuleMgr:         ruleSvc,
+		SeasonMgr:       seasonSvc,
 	}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)

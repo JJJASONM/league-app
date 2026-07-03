@@ -5,6 +5,7 @@ import (
 
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/matches"
+	"league_app/backend/domains/seasons"
 	"league_app/backend/validation"
 	"league_app/models"
 )
@@ -70,6 +71,16 @@ type RoundManager interface {
 	ClearResults(ctx context.Context, matchID int64) error
 }
 
+// SeasonManager handles season lifecycle: activation, checklist evaluation,
+// previous-season lookup, and draft/stale checks for team and roster mutations.
+type SeasonManager interface {
+	Activate(ctx context.Context, seasonID int64) error
+	Checklist(ctx context.Context, seasonID int64) (models.SetupChecklist, error)
+	PreviousSeason(ctx context.Context, seasonID int64) (seasons.PreviousSeasonResult, error)
+	IsDraft(ctx context.Context, seasonID int64) (bool, error)
+	MarkStaleIfScheduled(ctx context.Context, seasonID int64) error
+}
+
 // Dependencies holds domain services injected into handlers at startup.
 // Add new service fields here as additional domains are migrated.
 type Dependencies struct {
@@ -91,4 +102,7 @@ type Dependencies struct {
 	// RuleMgr handles per-season rule CRUD.
 	// Required: Register panics if nil.
 	RuleMgr RuleManager
+	// SeasonMgr handles season lifecycle: activation, checklist, previous-season.
+	// Required: Register panics if nil.
+	SeasonMgr SeasonManager
 }
