@@ -47,6 +47,19 @@ func (n *noopSeasonMgr) PreviousSeason(_ context.Context, _ int64) (seasons.Prev
 }
 func (n *noopSeasonMgr) IsDraft(_ context.Context, _ int64) (bool, error) { return true, nil }
 func (n *noopSeasonMgr) MarkStaleIfScheduled(_ context.Context, _ int64) error { return nil }
+func (n *noopSeasonMgr) AddTeam(_ context.Context, _ int64, _ seasons.AddTeamRequest) (models.SeasonTeam, error) {
+	return models.SeasonTeam{}, nil
+}
+func (n *noopSeasonMgr) RemoveTeam(_ context.Context, _, _ int64) error { return nil }
+func (n *noopSeasonMgr) UpdateTeam(_ context.Context, _, _ int64, _ seasons.UpdateTeamRequest) (models.SeasonTeam, error) {
+	return models.SeasonTeam{}, nil
+}
+func (n *noopSeasonMgr) CreateByeRequest(_ context.Context, _ int64, _ seasons.CreateByeRequestInput) (models.ByeRequest, error) {
+	return models.ByeRequest{}, nil
+}
+func (n *noopSeasonMgr) UpdateByeRequest(_ context.Context, _, _ int64, _ bool) (models.ByeRequest, error) {
+	return models.ByeRequest{}, nil
+}
 
 // stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.
 // ResolveKey maps a cleartext key to a user; zero-value returns nil (no match).

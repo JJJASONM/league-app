@@ -111,8 +111,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	mux.HandleFunc("DELETE /api/seasons/{id}/skipped-weeks/{sid}", deleteSkippedWeek)
 
 	mux.HandleFunc("GET /api/seasons/{id}/bye-requests", listByeRequests)
-	mux.HandleFunc("POST /api/seasons/{id}/bye-requests", createByeRequest)
-	mux.HandleFunc("PUT /api/seasons/{id}/bye-requests/{bid}", updateByeRequest)
+	mux.HandleFunc("POST /api/seasons/{id}/bye-requests", func(w http.ResponseWriter, r *http.Request) {
+		createByeRequest(w, r, seasonMgr)
+	})
+	mux.HandleFunc("PUT /api/seasons/{id}/bye-requests/{bid}", func(w http.ResponseWriter, r *http.Request) {
+		updateByeRequest(w, r, seasonMgr)
+	})
 	mux.HandleFunc("DELETE /api/seasons/{id}/bye-requests/{bid}", deleteByeRequest)
 
 	// Season teams and rosters
@@ -1373,84 +1377,27 @@ func listByeRequests(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, byes)
 }
 
-func createByeRequest(w http.ResponseWriter, r *http.Request) {
+func createByeRequest(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var b models.ByeRequest
-	if err := decode(r, &b); err != nil {
+	var req seasons.CreateByeRequestInput
+	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	b.SeasonID = sid
-
-	// Resolve the league for this season.
-	var leagueID int64
-	if err := db.DB.QueryRow(`SELECT league_id FROM seasons WHERE id=?`, sid).Scan(&leagueID); err != nil {
-		jsonError(w, "season not found", 404)
-		return
-	}
-
-	// Bye requests only make sense for seasons with an odd number of participating teams.
-	// Managed seasons use season_teams count exclusively; legacy seasons fall back to all league teams.
-	var byeTeamsManaged int
-	db.DB.QueryRow(`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, sid).Scan(&byeTeamsManaged)
-	var teamCount int
-	var stCount int
-	db.DB.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=?`, sid).Scan(&stCount)
-	if byeTeamsManaged == 1 {
-		teamCount = stCount
-	} else if stCount > 0 {
-		teamCount = stCount
-	} else {
-		db.DB.QueryRow(`SELECT COUNT(*) FROM teams WHERE league_id=?`, leagueID).Scan(&teamCount)
-	}
-	if teamCount%2 == 0 {
-		jsonError(w, fmt.Sprintf("bye requests require an odd number of teams (%d teams — even)", teamCount), 400)
-		return
-	}
-
-	// Ensure the requested team belongs to this season's league.
-	var teamLeagueID int64
-	if err := db.DB.QueryRow(`SELECT league_id FROM teams WHERE id=?`, b.TeamID).Scan(&teamLeagueID); err != nil || teamLeagueID != leagueID {
-		jsonError(w, "team does not belong to this season's league", 400)
-		return
-	}
-
-	// For managed seasons, the team must also be registered in season_teams.
-	if byeTeamsManaged == 1 {
-		var inSeason int
-		db.DB.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=? AND team_id=?`, sid, b.TeamID).Scan(&inSeason)
-		if inSeason == 0 {
-			jsonError(w, "team is not registered in this season", 400)
-			return
-		}
-	}
-
-	// Reject duplicates with a clear message instead of silently ignoring.
-	var dup int
-	db.DB.QueryRow(`SELECT COUNT(*) FROM bye_requests WHERE season_id=? AND team_id=? AND week_number=?`,
-		sid, b.TeamID, b.WeekNumber).Scan(&dup)
-	if dup > 0 {
-		jsonError(w, "a bye request already exists for this team and week", 400)
-		return
-	}
-
-	res, err := db.DB.Exec(
-		`INSERT INTO bye_requests (season_id, team_id, week_number, reason) VALUES (?,?,?,?)`,
-		sid, b.TeamID, b.WeekNumber, b.Reason)
+	b, err := mgr.CreateByeRequest(r.Context(), sid, req)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
 	}
-	b.ID, _ = res.LastInsertId()
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, b)
 }
 
-func updateByeRequest(w http.ResponseWriter, r *http.Request) {
+func updateByeRequest(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid season id", 400)
@@ -1461,58 +1408,18 @@ func updateByeRequest(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid bye id", 400)
 		return
 	}
-	var b models.ByeRequest
-	if err := decode(r, &b); err != nil {
+	var body struct {
+		Approved bool `json:"approved"`
+	}
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-
-	// Load stored week_number to validate before changing approved status.
-	// Also enforces season scope — returns 404 if the request belongs to another season.
-	var weekNum int
-	switch err := db.DB.QueryRow(
-		`SELECT week_number FROM bye_requests WHERE id=? AND season_id=?`, bid, sid).Scan(&weekNum); err {
-	case nil:
-	case sql.ErrNoRows:
-		jsonError(w, "bye request not found", 404)
-		return
-	default:
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	approved := 0
-	if b.Approved {
-		approved = 1
-	}
-
-	if approved == 1 {
-		// Week 0 (TBD) requests cannot be approved — a specific week is required.
-		if weekNum == 0 {
-			jsonError(w, "cannot approve a TBD (week 0) request; set a specific week first", 400)
-			return
-		}
-		// Only one approved bye per season+week to match the single natural bye slot.
-		var conflict int
-		db.DB.QueryRow(
-			`SELECT COUNT(*) FROM bye_requests WHERE season_id=? AND week_number=? AND approved=1 AND id!=?`,
-			sid, weekNum, bid).Scan(&conflict)
-		if conflict > 0 {
-			jsonError(w, fmt.Sprintf("another team already has an approved bye for week %d; unapprove it first", weekNum), 400)
-			return
-		}
-	}
-
-	res, err := db.DB.Exec(`UPDATE bye_requests SET approved=? WHERE id=? AND season_id=?`, approved, bid, sid)
+	b, err := mgr.UpdateByeRequest(r.Context(), sid, bid, body.Approved)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		jsonError(w, "bye request not found", 404)
-		return
-	}
-	b.ID = bid
 	jsonOK(w, b)
 }
 
@@ -2258,190 +2165,24 @@ func listSeasonTeams(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
-// addSeasonTeamRequest is the POST body for adding a team to a draft season.
-// Exactly one of (FromTeamID+FromSeasonID) or Name must be set.
-type addSeasonTeamRequest struct {
-	FromTeamID   int64  `json:"from_team_id"`   // copy existing team from a prior season
-	FromSeasonID int64  `json:"from_season_id"` // season the team last played in (0 = use team.players)
-	Name         string `json:"name"`           // new team name (creates a teams record)
-}
-
 func addSeasonTeam(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	draft, err := mgr.IsDraft(r.Context(), sid)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if !draft {
-		jsonError(w, "cannot modify teams in an active season", 422)
-		return
-	}
-
-	var req addSeasonTeamRequest
+	var req seasons.AddTeamRequest
 	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-
-	var leagueID int64
-	var draftTeamsManaged int
-	if err := db.DB.QueryRow(`SELECT league_id, COALESCE(teams_managed,0) FROM seasons WHERE id=?`, sid).Scan(&leagueID, &draftTeamsManaged); err != nil {
-		jsonError(w, "season not found", 404)
-		return
-	}
-
-	// For managed seasons, from_team_id always requires from_season_id.
-	// New teams must be created via the name path; from_team_id copies from a prior season only.
-	if draftTeamsManaged == 1 && req.FromTeamID > 0 && req.FromSeasonID == 0 {
-		jsonError(w, "managed seasons require from_season_id with from_team_id; use name to create a new team", 400)
-		return
-	}
-
-	// When from_season_id is provided, it must be the immediately previous season.
-	if req.FromTeamID > 0 && req.FromSeasonID > 0 {
-		prevResult, prevErr := mgr.PreviousSeason(r.Context(), sid)
-		if prevErr != nil {
-			jsonError(w, prevErr.Error(), 500)
-			return
-		}
-		if prevResult.Season == nil || prevResult.Season.ID != req.FromSeasonID {
-			jsonError(w, "from_season_id must be the immediately previous season", 400)
-			return
-		}
-	}
-
-	tx, err := db.DB.Begin()
+	st, err := mgr.AddTeam(r.Context(), sid, req)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
 	}
-	defer tx.Rollback()
-
-	var teamID int64
-	var seasonName string
-	var captainID *int64
-
-	if req.FromTeamID > 0 {
-		// ── Copy from a prior season ──────────────────────────────────────────
-		// Verify the team belongs to this league.
-		var tLID int64
-		if err := tx.QueryRow(`SELECT league_id FROM teams WHERE id=?`, req.FromTeamID).Scan(&tLID); err != nil || tLID != leagueID {
-			jsonError(w, "team not found in this league", 400)
-			return
-		}
-		teamID = req.FromTeamID
-
-		// Prefer name/captain from prior season_teams; fall back to teams row.
-		if req.FromSeasonID > 0 {
-			// Verify team participated in the previous season when it was managed.
-			var prevManaged int
-			tx.QueryRow(`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, req.FromSeasonID).Scan(&prevManaged)
-			if prevManaged == 1 {
-				var inPrev int
-				tx.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=? AND team_id=?`,
-					req.FromSeasonID, teamID).Scan(&inPrev)
-				if inPrev == 0 {
-					jsonError(w, "team did not participate in the previous season", 400)
-					return
-				}
-			}
-			tx.QueryRow(
-				`SELECT CASE WHEN season_name != '' THEN season_name ELSE t.name END, captain_id
-				 FROM season_teams st JOIN teams t ON t.id=st.team_id
-				 WHERE st.season_id=? AND st.team_id=?`,
-				req.FromSeasonID, teamID).Scan(&seasonName, &captainID)
-		}
-		if seasonName == "" {
-			tx.QueryRow(`SELECT name FROM teams WHERE id=?`, teamID).Scan(&seasonName)
-		}
-
-		// Insert season_teams row.
-		res, err := tx.Exec(
-			`INSERT OR IGNORE INTO season_teams (season_id, team_id, season_name, captain_id)
-			 VALUES (?,?,?,?)`, sid, teamID, seasonName, captainID)
-		if err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			jsonError(w, "team is already in this season", 400)
-			return
-		}
-
-		// Copy roster from prior season_rosters; fall back to players.team_id.
-		var copiedFromRoster bool
-		if req.FromSeasonID > 0 {
-			rr, _ := tx.Query(
-				`SELECT player_id FROM season_rosters WHERE season_id=? AND team_id=?`,
-				req.FromSeasonID, teamID)
-			if rr != nil {
-				for rr.Next() {
-					var pid int64
-					rr.Scan(&pid)
-					tx.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
-						sid, teamID, pid)
-					copiedFromRoster = true
-				}
-				rr.Close()
-			}
-		}
-		if !copiedFromRoster && draftTeamsManaged == 0 {
-			// Legacy fallback: copy all active players currently on this team.
-			pr, _ := tx.Query(`SELECT id FROM players WHERE team_id=? AND COALESCE(active,1)=1`, teamID)
-			if pr != nil {
-				for pr.Next() {
-					var pid int64
-					pr.Scan(&pid)
-					tx.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
-						sid, teamID, pid)
-				}
-				pr.Close()
-			}
-		}
-
-	} else if strings.TrimSpace(req.Name) != "" {
-		// ── Create a brand-new team ───────────────────────────────────────────
-		res, err := tx.Exec(`INSERT INTO teams (league_id, name) VALUES (?,?)`, leagueID, req.Name)
-		if err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		teamID, _ = res.LastInsertId()
-		seasonName = req.Name
-
-		if _, err := tx.Exec(
-			`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,?)`,
-			sid, teamID, seasonName); err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-	} else {
-		jsonError(w, "provide from_team_id (copy) or name (new team)", 400)
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	_ = mgr.MarkStaleIfScheduled(r.Context(), sid)
-
-	row := db.DB.QueryRow(seasonTeamSelect+` WHERE st.season_id=? AND st.team_id=?`, sid, teamID)
-	st, _ := scanSeasonTeam(row)
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, st)
-}
-
-// updateSeasonTeamRequest is the PUT body for season team metadata.
-type updateSeasonTeamRequest struct {
-	SeasonName string `json:"season_name"`
-	CaptainID  *int64 `json:"captain_id"`
 }
 
 func updateSeasonTeam(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
@@ -2455,49 +2196,16 @@ func updateSeasonTeam(w http.ResponseWriter, r *http.Request, mgr SeasonManager)
 		jsonError(w, "invalid team id", 400)
 		return
 	}
-	draft, err := mgr.IsDraft(r.Context(), sid)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if !draft {
-		jsonError(w, "cannot modify teams in an active season", 422)
-		return
-	}
-	var req updateSeasonTeamRequest
+	var req seasons.UpdateTeamRequest
 	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	req.SeasonName = strings.TrimSpace(req.SeasonName)
-	if req.SeasonName == "" {
-		jsonError(w, "season_name is required", 400)
-		return
-	}
-	// If captain is being set, verify they are on the season roster.
-	if req.CaptainID != nil {
-		var onRoster int
-		db.DB.QueryRow(
-			`SELECT COUNT(*) FROM season_rosters WHERE season_id=? AND team_id=? AND player_id=?`,
-			sid, tid, *req.CaptainID).Scan(&onRoster)
-		if onRoster == 0 {
-			jsonError(w, "captain must be on this team's season roster", 400)
-			return
-		}
-	}
-	res, err := db.DB.Exec(
-		`UPDATE season_teams SET season_name=?, captain_id=? WHERE season_id=? AND team_id=?`,
-		req.SeasonName, req.CaptainID, sid, tid)
+	st, err := mgr.UpdateTeam(r.Context(), sid, tid, req)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		jsonError(w, "team not found in this season", 404)
-		return
-	}
-	row := db.DB.QueryRow(seasonTeamSelect+` WHERE st.season_id=? AND st.team_id=?`, sid, tid)
-	st, _ := scanSeasonTeam(row)
 	jsonOK(w, st)
 }
 
@@ -2512,57 +2220,33 @@ func removeSeasonTeam(w http.ResponseWriter, r *http.Request, mgr SeasonManager)
 		jsonError(w, "invalid team id", 400)
 		return
 	}
-	draft, err := mgr.IsDraft(r.Context(), sid)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.RemoveTeam(r.Context(), sid, tid); err != nil {
+		mapSeasonErr(w, err)
 		return
 	}
-	if !draft {
-		jsonError(w, "cannot modify teams in an active season", 422)
-		return
-	}
-
-	tx, err := db.DB.Begin()
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer tx.Rollback()
-
-	// Remove from season_rosters first (cascade would handle ON DELETE CASCADE
-	// from seasons, but here we delete from season_teams which doesn't cascade).
-	tx.Exec(`DELETE FROM season_rosters WHERE season_id=? AND team_id=?`, sid, tid)
-	res, err := tx.Exec(`DELETE FROM season_teams WHERE season_id=? AND team_id=?`, sid, tid)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		jsonError(w, "team not found in this season", 404)
-		return
-	}
-
-	// Delete the teams record only when the team has never appeared in any match.
-	var matchCount int
-	tx.QueryRow(
-		`SELECT COUNT(*) FROM matches WHERE home_team_id=? OR away_team_id=?`, tid, tid,
-	).Scan(&matchCount)
-	if matchCount == 0 {
-		// Also check other seasons' season_teams (team may exist in another draft).
-		var otherSeason int
-		tx.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE team_id=?`, tid).Scan(&otherSeason)
-		if otherSeason == 0 {
-			tx.Exec(`UPDATE players SET team_id=NULL WHERE team_id=?`, tid)
-			tx.Exec(`DELETE FROM teams WHERE id=?`, tid)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	_ = mgr.MarkStaleIfScheduled(r.Context(), sid)
 	jsonOK(w, map[string]string{"status": "removed"})
+}
+
+// mapSeasonErr translates seasons domain errors to HTTP responses.
+func mapSeasonErr(w http.ResponseWriter, err error) {
+	var de *domainerr.Err
+	switch {
+	case errors.Is(err, seasons.ErrNotFound):
+		jsonError(w, "season not found", http.StatusNotFound)
+	case errors.As(err, &de):
+		switch de.Category {
+		case domainerr.NotFound:
+			jsonError(w, de.Message, http.StatusNotFound)
+		case domainerr.InvalidInput:
+			jsonError(w, de.Message, http.StatusBadRequest)
+		case domainerr.Unprocessable:
+			jsonError(w, de.Message, http.StatusUnprocessableEntity)
+		default:
+			jsonError(w, de.Message, http.StatusInternalServerError)
+		}
+	default:
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // ── Season Rosters ─────────────────────────────────────────────────────────────

@@ -72,13 +72,18 @@ type RoundManager interface {
 }
 
 // SeasonManager handles season lifecycle: activation, checklist evaluation,
-// previous-season lookup, and draft/stale checks for team and roster mutations.
+// previous-season lookup, draft/stale checks, team management, and bye requests.
 type SeasonManager interface {
 	Activate(ctx context.Context, seasonID int64) error
 	Checklist(ctx context.Context, seasonID int64) (models.SetupChecklist, error)
 	PreviousSeason(ctx context.Context, seasonID int64) (seasons.PreviousSeasonResult, error)
 	IsDraft(ctx context.Context, seasonID int64) (bool, error)
 	MarkStaleIfScheduled(ctx context.Context, seasonID int64) error
+	AddTeam(ctx context.Context, seasonID int64, req seasons.AddTeamRequest) (models.SeasonTeam, error)
+	RemoveTeam(ctx context.Context, seasonID, teamID int64) error
+	UpdateTeam(ctx context.Context, seasonID, teamID int64, req seasons.UpdateTeamRequest) (models.SeasonTeam, error)
+	CreateByeRequest(ctx context.Context, seasonID int64, req seasons.CreateByeRequestInput) (models.ByeRequest, error)
+	UpdateByeRequest(ctx context.Context, seasonID, byeID int64, approve bool) (models.ByeRequest, error)
 }
 
 // Dependencies holds domain services injected into handlers at startup.

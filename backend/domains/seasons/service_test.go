@@ -3,8 +3,10 @@ package seasons_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	"league_app/backend/domainerr"
 	"league_app/backend/domains/seasons"
 	"league_app/models"
 )
@@ -32,6 +34,35 @@ type stubSeasonStore struct {
 	seasonTeamsErr error
 	matchTeams    []seasons.SeasonTeamEntry
 	matchTeamsErr  error
+
+	// team management stubs
+	teamLeagueID    int64
+	teamLeagueIDErr error
+	seasonTeam      models.SeasonTeam
+	seasonTeamErr   error
+	addCopyErr      error
+	addNewID        int64
+	addNewErr       error
+	onRoster        bool
+	onRosterErr     error
+	updateMetaErr   error
+	removeTeamErr   error
+
+	// bye request stubs
+	participatingCount    int
+	participatingCountErr error
+	teamInSeason          bool
+	teamInSeasonErr       error
+	dupBye                bool
+	dupByeErr             error
+	insertedBye           models.ByeRequest
+	insertByeErr          error
+	gotBye                models.ByeRequest
+	getByeErr             error
+	byeConflict           bool
+	byeConflictErr        error
+	setBye                models.ByeRequest
+	setByeErr             error
 }
 
 func (s *stubSeasonStore) IsDraft(_ context.Context, _ int64) (bool, error) {
@@ -71,6 +102,54 @@ func (s *stubSeasonStore) GetMatchTeams(_ context.Context, _ int64) ([]seasons.S
 		return []seasons.SeasonTeamEntry{}, s.matchTeamsErr
 	}
 	return s.matchTeams, s.matchTeamsErr
+}
+
+// ── team management stubs ──────────────────────────────────────────────────
+
+func (s *stubSeasonStore) GetTeamLeagueID(_ context.Context, _ int64) (int64, error) {
+	return s.teamLeagueID, s.teamLeagueIDErr
+}
+func (s *stubSeasonStore) GetSeasonTeam(_ context.Context, _, _ int64) (models.SeasonTeam, error) {
+	return s.seasonTeam, s.seasonTeamErr
+}
+func (s *stubSeasonStore) AddSeasonTeamCopy(_ context.Context, _, _, _ int64, _ bool) error {
+	return s.addCopyErr
+}
+func (s *stubSeasonStore) AddSeasonTeamNew(_ context.Context, _, _ int64, _ string) (int64, error) {
+	return s.addNewID, s.addNewErr
+}
+func (s *stubSeasonStore) CheckPlayerOnSeasonRoster(_ context.Context, _, _, _ int64) (bool, error) {
+	return s.onRoster, s.onRosterErr
+}
+func (s *stubSeasonStore) UpdateSeasonTeamMeta(_ context.Context, _, _ int64, _ string, _ *int64) error {
+	return s.updateMetaErr
+}
+func (s *stubSeasonStore) RemoveSeasonTeam(_ context.Context, _, _ int64) error {
+	return s.removeTeamErr
+}
+
+// ── bye request stubs ──────────────────────────────────────────────────────
+
+func (s *stubSeasonStore) CountParticipatingTeams(_ context.Context, _, _ int64, _ bool) (int, error) {
+	return s.participatingCount, s.participatingCountErr
+}
+func (s *stubSeasonStore) CheckTeamInSeason(_ context.Context, _, _ int64) (bool, error) {
+	return s.teamInSeason, s.teamInSeasonErr
+}
+func (s *stubSeasonStore) HasDuplicateBye(_ context.Context, _, _ int64, _ int) (bool, error) {
+	return s.dupBye, s.dupByeErr
+}
+func (s *stubSeasonStore) InsertByeRequest(_ context.Context, _, _ int64, _ int, _ string) (models.ByeRequest, error) {
+	return s.insertedBye, s.insertByeErr
+}
+func (s *stubSeasonStore) GetByeRequest(_ context.Context, _, _ int64) (models.ByeRequest, error) {
+	return s.gotBye, s.getByeErr
+}
+func (s *stubSeasonStore) HasByeConflict(_ context.Context, _ int64, _ int, _ int64) (bool, error) {
+	return s.byeConflict, s.byeConflictErr
+}
+func (s *stubSeasonStore) SetByeApproval(_ context.Context, _, _ int64, _ bool) (models.ByeRequest, error) {
+	return s.setBye, s.setByeErr
 }
 
 func newSvc(store *stubSeasonStore) *seasons.SeasonService {
@@ -352,6 +431,318 @@ func TestSeasonService_PreviousSeason_FallsBackToMatchTeams(t *testing.T) {
 	}
 	if len(result.Teams) != 1 || result.Teams[0].TeamID != 7 {
 		t.Errorf("want match-teams fallback, got %v", result.Teams)
+	}
+}
+
+// ── AddTeam ───────────────────────────────────────────────────────────────────
+
+func TestSeasonService_AddTeam_ActiveSeason_Returns422(t *testing.T) {
+	store := &stubSeasonStore{isDraftResult: false}
+	_, err := newSvc(store).AddTeam(context.Background(), 1, seasons.AddTeamRequest{Name: "X"})
+	if !domainerr.IsCategory(err, domainerr.Unprocessable) {
+		t.Errorf("want Unprocessable, got %v", err)
+	}
+}
+
+func TestSeasonService_AddTeam_ManagedNoFromSeason_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		isDraftResult: true,
+		meta:          seasons.SeasonMeta{TeamsManaged: true, LeagueID: 1},
+	}
+	_, err := newSvc(store).AddTeam(context.Background(), 1, seasons.AddTeamRequest{FromTeamID: 5})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput, got %v", err)
+	}
+}
+
+func TestSeasonService_AddTeam_WrongPriorSeason_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		isDraftResult: true,
+		meta:          seasons.SeasonMeta{LeagueID: 1},
+		findActive:    &models.Season{ID: 99}, // prior season id=99
+	}
+	_, err := newSvc(store).AddTeam(context.Background(), 1, seasons.AddTeamRequest{
+		FromTeamID:   5,
+		FromSeasonID: 42, // wrong — prior is 99
+	})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for wrong prior season, got %v", err)
+	}
+}
+
+func TestSeasonService_AddTeam_TeamNotInLeague_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		isDraftResult:   true,
+		meta:            seasons.SeasonMeta{LeagueID: 1},
+		teamLeagueID:    2, // different league
+		teamLeagueIDErr: nil,
+	}
+	_, err := newSvc(store).AddTeam(context.Background(), 1, seasons.AddTeamRequest{FromTeamID: 5})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for wrong league, got %v", err)
+	}
+}
+
+func TestSeasonService_AddTeam_AlreadyInSeason_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		isDraftResult: true,
+		meta:          seasons.SeasonMeta{LeagueID: 1},
+		teamLeagueID:  1,
+		addCopyErr:    fmt.Errorf("dup: %w", seasons.ErrTeamAlreadyInSeason),
+	}
+	_, err := newSvc(store).AddTeam(context.Background(), 1, seasons.AddTeamRequest{FromTeamID: 5})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for duplicate team, got %v", err)
+	}
+}
+
+func TestSeasonService_AddTeam_NoNameNoTeamID_Returns400(t *testing.T) {
+	store := &stubSeasonStore{isDraftResult: true, meta: seasons.SeasonMeta{LeagueID: 1}}
+	_, err := newSvc(store).AddTeam(context.Background(), 1, seasons.AddTeamRequest{})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for empty request, got %v", err)
+	}
+}
+
+func TestSeasonService_AddTeam_NewTeam_CallsStoreAndReturns(t *testing.T) {
+	want := models.SeasonTeam{ID: 1, TeamID: 10, SeasonName: "New"}
+	store := &stubSeasonStore{
+		isDraftResult: true,
+		meta:          seasons.SeasonMeta{LeagueID: 1},
+		addNewID:      10,
+		seasonTeam:    want,
+	}
+	got, err := newSvc(store).AddTeam(context.Background(), 1, seasons.AddTeamRequest{Name: "New"})
+	if err != nil {
+		t.Fatalf("AddTeam: %v", err)
+	}
+	if got.ID != want.ID {
+		t.Errorf("want SeasonTeam.ID=%d, got %d", want.ID, got.ID)
+	}
+	if !store.staleCalled {
+		t.Error("want MarkStaleIfScheduled called")
+	}
+}
+
+// ── RemoveTeam ────────────────────────────────────────────────────────────────
+
+func TestSeasonService_RemoveTeam_ActiveSeason_Returns422(t *testing.T) {
+	store := &stubSeasonStore{isDraftResult: false}
+	err := newSvc(store).RemoveTeam(context.Background(), 1, 5)
+	if !domainerr.IsCategory(err, domainerr.Unprocessable) {
+		t.Errorf("want Unprocessable, got %v", err)
+	}
+}
+
+func TestSeasonService_RemoveTeam_NotFound_Returns404(t *testing.T) {
+	store := &stubSeasonStore{
+		isDraftResult: true,
+		removeTeamErr: fmt.Errorf("x: %w", seasons.ErrTeamNotInSeason),
+	}
+	err := newSvc(store).RemoveTeam(context.Background(), 1, 5)
+	if !domainerr.IsCategory(err, domainerr.NotFound) {
+		t.Errorf("want NotFound, got %v", err)
+	}
+}
+
+func TestSeasonService_RemoveTeam_HappyPath_CallsStale(t *testing.T) {
+	store := &stubSeasonStore{isDraftResult: true}
+	if err := newSvc(store).RemoveTeam(context.Background(), 1, 5); err != nil {
+		t.Fatalf("RemoveTeam: %v", err)
+	}
+	if !store.staleCalled {
+		t.Error("want MarkStaleIfScheduled called")
+	}
+}
+
+// ── UpdateTeam ────────────────────────────────────────────────────────────────
+
+func TestSeasonService_UpdateTeam_ActiveSeason_Returns422(t *testing.T) {
+	store := &stubSeasonStore{isDraftResult: false}
+	_, err := newSvc(store).UpdateTeam(context.Background(), 1, 5, seasons.UpdateTeamRequest{SeasonName: "X"})
+	if !domainerr.IsCategory(err, domainerr.Unprocessable) {
+		t.Errorf("want Unprocessable, got %v", err)
+	}
+}
+
+func TestSeasonService_UpdateTeam_EmptyName_Returns400(t *testing.T) {
+	store := &stubSeasonStore{isDraftResult: true}
+	_, err := newSvc(store).UpdateTeam(context.Background(), 1, 5, seasons.UpdateTeamRequest{SeasonName: "  "})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for empty name, got %v", err)
+	}
+}
+
+func TestSeasonService_UpdateTeam_CaptainNotOnRoster_Returns400(t *testing.T) {
+	capID := int64(99)
+	store := &stubSeasonStore{isDraftResult: true, onRoster: false}
+	_, err := newSvc(store).UpdateTeam(context.Background(), 1, 5,
+		seasons.UpdateTeamRequest{SeasonName: "A", CaptainID: &capID})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for captain not on roster, got %v", err)
+	}
+}
+
+func TestSeasonService_UpdateTeam_TeamNotFound_Returns404(t *testing.T) {
+	store := &stubSeasonStore{
+		isDraftResult: true,
+		onRoster:      true,
+		updateMetaErr: fmt.Errorf("x: %w", seasons.ErrTeamNotInSeason),
+	}
+	_, err := newSvc(store).UpdateTeam(context.Background(), 1, 5,
+		seasons.UpdateTeamRequest{SeasonName: "A"})
+	if !domainerr.IsCategory(err, domainerr.NotFound) {
+		t.Errorf("want NotFound, got %v", err)
+	}
+}
+
+func TestSeasonService_UpdateTeam_HappyPath_ReturnsSeasonTeam(t *testing.T) {
+	want := models.SeasonTeam{ID: 2, SeasonName: "Updated"}
+	store := &stubSeasonStore{isDraftResult: true, seasonTeam: want}
+	got, err := newSvc(store).UpdateTeam(context.Background(), 1, 5,
+		seasons.UpdateTeamRequest{SeasonName: "Updated"})
+	if err != nil {
+		t.Fatalf("UpdateTeam: %v", err)
+	}
+	if got.SeasonName != want.SeasonName {
+		t.Errorf("want SeasonName=%q, got %q", want.SeasonName, got.SeasonName)
+	}
+}
+
+// ── CreateByeRequest ──────────────────────────────────────────────────────────
+
+func TestSeasonService_CreateByeRequest_SeasonNotFound(t *testing.T) {
+	store := &stubSeasonStore{metaErr: seasons.ErrNotFound}
+	_, err := newSvc(store).CreateByeRequest(context.Background(), 99, seasons.CreateByeRequestInput{})
+	if !errors.Is(err, seasons.ErrNotFound) {
+		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestSeasonService_CreateByeRequest_EvenTeams_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		meta:               seasons.SeasonMeta{LeagueID: 1},
+		participatingCount: 4, // even
+	}
+	_, err := newSvc(store).CreateByeRequest(context.Background(), 1, seasons.CreateByeRequestInput{TeamID: 5})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for even team count, got %v", err)
+	}
+}
+
+func TestSeasonService_CreateByeRequest_TeamNotInLeague_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		meta:               seasons.SeasonMeta{LeagueID: 1},
+		participatingCount: 3,
+		teamLeagueID:       2, // different league
+	}
+	_, err := newSvc(store).CreateByeRequest(context.Background(), 1, seasons.CreateByeRequestInput{TeamID: 5})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for team not in league, got %v", err)
+	}
+}
+
+func TestSeasonService_CreateByeRequest_ManagedTeamNotInSeason_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		meta:               seasons.SeasonMeta{LeagueID: 1, TeamsManaged: true},
+		participatingCount: 3,
+		teamLeagueID:       1,
+		teamInSeason:       false,
+	}
+	_, err := newSvc(store).CreateByeRequest(context.Background(), 1, seasons.CreateByeRequestInput{TeamID: 5})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for team not in managed season, got %v", err)
+	}
+}
+
+func TestSeasonService_CreateByeRequest_Duplicate_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		meta:               seasons.SeasonMeta{LeagueID: 1},
+		participatingCount: 3,
+		teamLeagueID:       1,
+		dupBye:             true,
+	}
+	_, err := newSvc(store).CreateByeRequest(context.Background(), 1, seasons.CreateByeRequestInput{TeamID: 5})
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for duplicate bye, got %v", err)
+	}
+}
+
+func TestSeasonService_CreateByeRequest_HappyPath_ReturnsInserted(t *testing.T) {
+	want := models.ByeRequest{ID: 7, TeamID: 5, WeekNumber: 3}
+	store := &stubSeasonStore{
+		meta:               seasons.SeasonMeta{LeagueID: 1},
+		participatingCount: 3,
+		teamLeagueID:       1,
+		insertedBye:        want,
+	}
+	got, err := newSvc(store).CreateByeRequest(context.Background(), 1,
+		seasons.CreateByeRequestInput{TeamID: 5, WeekNumber: 3})
+	if err != nil {
+		t.Fatalf("CreateByeRequest: %v", err)
+	}
+	if got.ID != want.ID {
+		t.Errorf("want ID=%d, got %d", want.ID, got.ID)
+	}
+}
+
+// ── UpdateByeRequest ──────────────────────────────────────────────────────────
+
+func TestSeasonService_UpdateByeRequest_NotFound_Returns404(t *testing.T) {
+	store := &stubSeasonStore{getByeErr: fmt.Errorf("x: %w", seasons.ErrByeNotFound)}
+	_, err := newSvc(store).UpdateByeRequest(context.Background(), 1, 99, true)
+	if !domainerr.IsCategory(err, domainerr.NotFound) {
+		t.Errorf("want NotFound, got %v", err)
+	}
+}
+
+func TestSeasonService_UpdateByeRequest_ApproveWeekZero_Returns400(t *testing.T) {
+	store := &stubSeasonStore{gotBye: models.ByeRequest{WeekNumber: 0}}
+	_, err := newSvc(store).UpdateByeRequest(context.Background(), 1, 1, true)
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for week-0 approval, got %v", err)
+	}
+}
+
+func TestSeasonService_UpdateByeRequest_Conflict_Returns400(t *testing.T) {
+	store := &stubSeasonStore{
+		gotBye:      models.ByeRequest{WeekNumber: 3},
+		byeConflict: true,
+	}
+	_, err := newSvc(store).UpdateByeRequest(context.Background(), 1, 1, true)
+	if !domainerr.IsCategory(err, domainerr.InvalidInput) {
+		t.Errorf("want InvalidInput for conflict, got %v", err)
+	}
+}
+
+func TestSeasonService_UpdateByeRequest_HappyPath_ReturnsUpdated(t *testing.T) {
+	want := models.ByeRequest{ID: 1, Approved: true, WeekNumber: 3}
+	store := &stubSeasonStore{
+		gotBye: models.ByeRequest{WeekNumber: 3},
+		setBye: want,
+	}
+	got, err := newSvc(store).UpdateByeRequest(context.Background(), 1, 1, true)
+	if err != nil {
+		t.Fatalf("UpdateByeRequest: %v", err)
+	}
+	if !got.Approved {
+		t.Error("want Approved=true")
+	}
+}
+
+func TestSeasonService_UpdateByeRequest_Unapprove_SkipsConflictCheck(t *testing.T) {
+	want := models.ByeRequest{ID: 1, Approved: false, WeekNumber: 3}
+	store := &stubSeasonStore{
+		gotBye:      models.ByeRequest{WeekNumber: 3, Approved: true},
+		byeConflict: true, // would block approval but not unapproval
+		setBye:      want,
+	}
+	got, err := newSvc(store).UpdateByeRequest(context.Background(), 1, 1, false)
+	if err != nil {
+		t.Fatalf("UpdateByeRequest unapprove: %v", err)
+	}
+	if got.Approved {
+		t.Error("want Approved=false after unapproval")
 	}
 }
 
