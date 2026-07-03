@@ -16,7 +16,7 @@ Handicaps, schedules, and matches apply those values within their own domains.
 Target entry points:
 
 ```text
-web/domains/rules/index.js
+web/domains/rules/rules-domain.js
 backend/domains/rules/public.go
 ```
 

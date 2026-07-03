@@ -45,7 +45,7 @@ league_app/
     handicap.go              — authoritative handicap formula (CalcSpot, CalcSpotM)
     handicap_test.go         — 11 Go tests for handicap functions
   handlers/
-    api.go                   — all HTTP handlers, route registration, seasonMultiplier()
+    api.go                   — all HTTP handlers, route registration, domain service delegation
   web/
     index.html               — HTML skeleton only (~642 lines), references styles.css + app.js
     styles.css               — all CSS (~382 lines), including scoresheet, poster, rules
@@ -166,8 +166,9 @@ type SpotResult struct {
 
 - Result is `math.Round(abs(diff) * multiplier)` — nearest whole ball
 - "home" receives spot when homeHC < awayHC (home is lower-rated)
-- `seasonMultiplier(seasonID int64) float64` in `api.go` reads `handicap_multiplier`
-  from `season_rules`; defaults to `logic.Multiplier` (2.55) if absent or invalid
+- `matches.ResolveRoundConfig` in `backend/domains/matches/round_config.go` reads
+  `handicap_multiplier` from `season_rules` via `rules.RuleStore`; defaults to
+  `logic.Multiplier` (2.55) if absent or invalid
 
 ## 8-Ball Scoring
 
@@ -200,7 +201,7 @@ Defaults are shown by the UI from `SYSTEM_RULES`; no DB row is required.
 the domain-first architecture rebuild. Do not add new frontend-only rule logic.
 
 **Handicap Settings**
-- `handicap_multiplier` — number, default 2.55 — **backend-enforced** (reads `seasonMultiplier()`)
+- `handicap_multiplier` — number, default 2.55 — **backend-enforced** (read by `matches.ResolveRoundConfig` via `rules.RuleStore`)
 - `max_individual_handicap` — number, default 4.5 — backend pending
 - `handicap_rounding` — select: `nearest`|`floor`|`ceiling`, default `nearest` — backend pending
 - `max_pairing_spot` — integer, default 15 — backend pending
@@ -235,6 +236,61 @@ Single-page app — Bootstrap 5, no build step. Three files:
 The target frontend uses native Web Components, ES modules, light DOM, and
 shared CSS organized by domain. `index.html` becomes the app shell. Use small,
 reviewable patches when splitting the current large files.
+
+### Target Frontend Domain Pattern
+
+The frontend must mirror backend domain boundaries without requiring an
+immediate framework migration. The target flow is:
+
+```text
+application shell
+  -> named domain entry point
+      -> domain workflow component
+          -> domain API service
+              -> shared HTTP client
+      -> purpose-specific reusable components
+```
+
+The application shell owns navigation, selected league/season context,
+notifications, and domain mounting. It does not own domain rendering, domain
+API details, or domain-local state. Do not add substantial new workflows to
+`app.js` or `index.html`.
+
+Use descriptive filenames rather than generic entry points:
+
+```text
+web/domains/handicaps/
+  handicaps-domain.js
+  handicap-review-component.js
+  handicap-api-service.js
+
+web/components/input/
+  boolean-choice-input.js
+  controlled-code-select.js
+
+web/components/feedback/
+  validation-message-list.js
+  loading-indicator.js
+```
+
+Every filename must identify its domain or reusable purpose and its
+responsibility. Do not use generic names such as `index.js`, `service.js`,
+`state.js`, `view.js`, `component.js`, `utils.js`, or `helpers.js`.
+
+Domain components own their rendering, interactions, lifecycle, and local
+state. They communicate with the shell through explicit properties, methods,
+and custom events. Domain API calls belong in a named domain API service rather
+than being scattered through rendering code.
+
+Shared UI components must be domain-neutral and must not depend on hidden
+global caches, global event buses, domain editors, or domain APIs. Add shared
+infrastructure such as paging, caching, routing, or state only after at least
+two real consumers demonstrate the same need and semantics.
+
+Native Web Components remain the approved migration path. Handicaps is the
+preferred frontend extraction pilot because its backend boundary and read-only
+API are stable. Vue remains a future evaluation checkpoint if the pilot shows
+that custom lifecycle, event coordination, or shared state is too complex.
 
 Use `node --check web/app.js` (not `new Function(js)`) to verify syntax.
 `new Function` wraps code in a function body and can misdiagnose top-level
@@ -297,7 +353,41 @@ git add <files>
 git commit -m "<message>"
 ```
 
+Branch policy:
+- Keep `main` stable and representative of accepted milestones.
+- Start new implementation work on a feature branch, not directly on `main`.
+- The Project Manager creates and names the branch for the active work item.
+- The Project Manager owns the Git and environment control steps around an
+  approved handoff:
+  - create and switch feature branches
+  - push feature branches and `main`
+  - merge approved work into `main`
+  - deploy to staging and clean up merged branches
+- After a branch is accepted, merged, and pushed to `origin/main`, the Project
+  Manager should delete the merged branch locally and on `origin` unless there
+  is a specific short-term reason to keep it.
+- Use the feature or phase name directly, for example:
+  - `handicap-apply-b3`
+  - `close-week-phase-3c`
+  - `teams-phase-8`
+- Keep incomplete or in-review work on the feature branch until it is accepted.
+- The developer role is to implement, test, document, and provide commit-ready
+  handoff notes. Do not assume push, merge, deploy, or branch-cleanup steps are
+  developer-owned unless the Project Manager explicitly delegates them.
+
 ## Pending / Planned Work
+
+Roadmap direction check:
+- Favor restructuring, domain extraction, and current admin workflow stability
+  before pulling broader auth, audit, or platform work forward.
+- Treat the current Handicap Apply auth model as a bridge, not the final users
+  or roles design.
+- Keep shared audit/history as a later cross-app capability, not an immediate
+  implementation target.
+- Treat browser/mobile scorekeeping as a small future workflow prototype first,
+  not a current client-expansion program.
+- If a proposed phase does not clearly fit the roadmap's Now or Next sections,
+  defer it unless the Project Manager explicitly reprioritizes it.
 
 - **Domain-first migration:** Begin with `rules`; keep frontend/backend domain
   names aligned and expose small public interfaces.

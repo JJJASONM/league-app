@@ -1855,8 +1855,6 @@ func isFiniteFloat(v float64) bool {
 }
 
 // postHandicapApply handles POST /api/seasons/{id}/handicap-apply.
-// This handler is NOT registered in Register() during Phase B1.
-// It will be registered in Phase B2 once route-level auth is in place.
 //
 // Error mapping:
 //   - domainerr.InvalidInput  -> 400
@@ -2758,7 +2756,7 @@ func listAvailablePlayers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Correction 4: return all active system players not already rostered in this
+	// Return all active system players not already rostered in this
 	// season — including players with no team or players from other leagues.
 	rows, err := db.DB.Query(`
 		SELECT p.id, p.player_number, p.first_name, p.last_name,

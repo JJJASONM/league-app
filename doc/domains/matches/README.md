@@ -1280,6 +1280,65 @@ handler:
 - `seasonRoundConfig` / `seasonMultiplier` removal from `handlers/api.go` (B4)
 - Route or JSON shape changes
 
+## Phase B4 — Round Config via RuleStore (implemented 2026-07-02)
+
+### Goal
+
+Remove the last `*sql.DB` fields from `WeekService` and `RoundService` by routing
+round configuration (`handicap_multiplier`, `min_ball_handicap`) through the
+`rules.RuleStore` interface instead of direct DB queries. This completes the B1–B3
+debt accepted earlier.
+
+### New files
+
+| File | Role |
+|------|------|
+| `backend/domains/matches/round_config.go` | `ResolveRoundConfig` pure function; `RoundConfig` type |
+| `backend/domains/matches/round_config_test.go` | Unit tests via `stubRuleStore`; covers defaults, overrides, validation errors |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `backend/domains/rules/store.go` | `GetValue(ctx, seasonID, key)` added to `RuleStore` interface |
+| `backend/storage/sqlite/rule_store.go` | `GetValue` implementation |
+| `backend/storage/sqlite/rule_store_test.go` | `GetValue` tests |
+| `backend/domains/matches/service.go` | `ruleStore rules.RuleStore` field added; `NewWeekService` takes 3-arg; `ValidateWeek` / `CloseWeek` / `roundConfig` use `ResolveRoundConfig`; `db *sql.DB` field removed |
+| `backend/domains/matches/round_service.go` | `ruleStore rules.RuleStore` field added; `NewRoundService` takes 2-arg; `SaveRounds` uses `ResolveRoundConfig`; `SeasonRoundConfig` store call removed |
+| `backend/domains/matches/service_test.go` | Constructor updated to 3-arg; `stubRuleStore` wired |
+| `backend/domains/matches/round_service_test.go` | Constructor updated; `stubRuleStore` wired |
+| `handlers/api_test.go` | `testServer()` updated to 3-arg `NewWeekService` |
+| `handlers/api_apply_c1_test.go` | `testServerWithApplyAuth()` updated to 3-arg `NewWeekService` |
+| `main.go` | `NewWeekService` and `NewRoundService` updated to inject `ruleSvc` |
+
+### Architecture after B4
+
+```
+ValidateWeek handler
+  → deps.WeekMgr.ValidateWeek
+      → matches.WeekService.ValidateWeek
+          → matches.ResolveRoundConfig(ctx, s.ruleStore, seasonID)
+              → rules.RuleStore.GetValue (handicap_multiplier, min_ball_handicap)
+          → store.GetWeekValidationData
+
+saveRounds handler
+  → seasons.RosterEligible (cross-domain pre-TX guard, stays in handler)
+  → deps.RoundMgr.SaveRounds
+      → matches.RoundService.SaveRounds
+          → matches.ResolveRoundConfig(ctx, s.ruleStore, seasonID)
+              → rules.RuleStore.GetValue
+```
+
+`WeekService.db *sql.DB` is fully removed. `SeasonRoundConfig` is gone from
+`WeekStore` and `RoundStore` interfaces and their SQLite implementations.
+
+### Not in B4
+
+- `ValidateWeek` data-loading signature change (store-interface refactor, deferred)
+- The `seasons.RosterEligible` pre-TX guard in `saveRounds` handler (intentional;
+  see B3 decision Q-B3-3)
+- Route or JSON shape changes
+
 ## Decision History
 
 ### 2026-06-08 - Make week close authoritative
