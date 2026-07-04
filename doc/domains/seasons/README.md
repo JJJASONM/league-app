@@ -232,6 +232,58 @@ the service layer uses it.
 `updateByeRequest` — each reduced to ≤10 lines: parse path/body, delegate to
 `mgr`, map error, write response.
 
+### Backend Domain Boundary — Season Roster Phase A (implemented 2026-07-03)
+
+Phase A extracts four roster-related endpoints from `handlers/api.go` into the
+seasons domain boundary.
+
+**Endpoints extracted:**
+
+| Route | Handler |
+|-------|---------|
+| `GET /api/seasons/{id}/teams/{tid}/roster` | `listSeasonRoster` |
+| `POST /api/seasons/{id}/teams/{tid}/roster` | `addRosterPlayer` |
+| `DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}` | `removeRosterPlayer` |
+| `GET /api/seasons/{id}/players/available` | `listAvailablePlayers` |
+
+**New sentinel error:**
+- `ErrRosterEntryNotFound` — returned by `DeleteRosterPlayer` when the entry is absent
+
+**New store methods (SeasonStore interface):**
+
+Roster (5): `ListRoster`, `GetPlayerRosterTeam`, `InsertOrGetRosterPlayer`,
+`DeleteRosterPlayer`, `ListAvailablePlayers`.
+
+**New service methods (SeasonService / SeasonManager interface):**
+
+- **ListRoster** — delegates to store; ensures non-nil slice
+- **AddRosterPlayer** — draft check, team-in-season check, player-on-other-team
+  check, idempotent insert via `InsertOrGetRosterPlayer`
+- **RemoveRosterPlayer** — draft check, delegates to `DeleteRosterPlayer`; maps
+  `ErrRosterEntryNotFound` → `domainerr.NotFound`
+- **ListAvailablePlayers** — delegates to store; ensures non-nil slice; propagates
+  `ErrNotFound` for missing seasons → `mapSeasonErr` returns 404
+
+**New SQLite files:**
+- `backend/storage/sqlite/season_roster_store.go` — 5 store methods
+- `backend/storage/sqlite/season_roster_store_test.go` — 9 integration tests
+
+**New domain test files:**
+- `backend/domains/seasons/roster_service.go` — 4 service methods
+- `backend/domains/seasons/roster_service_test.go` — 13 unit tests
+
+**Behaviour note — idempotent add:** `InsertOrGetRosterPlayer` uses `INSERT OR
+IGNORE` and always re-fetches by `(season_id, team_id, player_id)`. Re-adding a
+player already on the same team returns the existing entry cleanly (201), which
+corrects a silent-empty-body bug in the original handler.
+
+**Accepted debt:**
+- `listAvailablePlayers` previously fetched `league_id` from the seasons table but
+  never used it in the player query; the new store uses it only for season existence
+  verification, which preserves the original behaviour (season not found → 404).
+- `deleteByeRequest` and skipped-week deletion still use direct `db.DB` calls;
+  those belong to a separate bye/skipped-weeks extraction pass.
+
 ### Deferred
 
 Rule snapshot at activation (lock `season_rules` against further changes) is marked

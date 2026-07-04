@@ -63,6 +63,18 @@ type stubSeasonStore struct {
 	byeConflictErr        error
 	setBye                models.ByeRequest
 	setByeErr             error
+
+	// roster stubs
+	rosterEntries         []models.SeasonRosterEntry
+	rosterErr             error
+	playerRosterTeamID    int64
+	playerRosterTeamFound bool
+	playerRosterTeamErr   error
+	insertedRosterEntry   models.SeasonRosterEntry
+	insertRosterErr       error
+	deleteRosterErr       error
+	availablePlayers      []models.Player
+	availablePlayersErr   error
 }
 
 func (s *stubSeasonStore) IsDraft(_ context.Context, _ int64) (bool, error) {
@@ -150,6 +162,24 @@ func (s *stubSeasonStore) HasByeConflict(_ context.Context, _ int64, _ int, _ in
 }
 func (s *stubSeasonStore) SetByeApproval(_ context.Context, _, _ int64, _ bool) (models.ByeRequest, error) {
 	return s.setBye, s.setByeErr
+}
+
+// ── roster stubs ──────────────────────────────────────────────────────────────
+
+func (s *stubSeasonStore) ListRoster(_ context.Context, _, _ int64) ([]models.SeasonRosterEntry, error) {
+	return s.rosterEntries, s.rosterErr
+}
+func (s *stubSeasonStore) GetPlayerRosterTeam(_ context.Context, _, _ int64) (int64, bool, error) {
+	return s.playerRosterTeamID, s.playerRosterTeamFound, s.playerRosterTeamErr
+}
+func (s *stubSeasonStore) InsertOrGetRosterPlayer(_ context.Context, _, _, _ int64) (models.SeasonRosterEntry, error) {
+	return s.insertedRosterEntry, s.insertRosterErr
+}
+func (s *stubSeasonStore) DeleteRosterPlayer(_ context.Context, _, _, _ int64) error {
+	return s.deleteRosterErr
+}
+func (s *stubSeasonStore) ListAvailablePlayers(_ context.Context, _ int64) ([]models.Player, error) {
+	return s.availablePlayers, s.availablePlayersErr
 }
 
 func newSvc(store *stubSeasonStore) *seasons.SeasonService {

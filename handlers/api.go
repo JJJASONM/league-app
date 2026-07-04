@@ -131,14 +131,18 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}", func(w http.ResponseWriter, r *http.Request) {
 		removeSeasonTeam(w, r, seasonMgr)
 	})
-	mux.HandleFunc("GET /api/seasons/{id}/teams/{tid}/roster", listSeasonRoster)
+	mux.HandleFunc("GET /api/seasons/{id}/teams/{tid}/roster", func(w http.ResponseWriter, r *http.Request) {
+		listSeasonRoster(w, r, seasonMgr)
+	})
 	mux.HandleFunc("POST /api/seasons/{id}/teams/{tid}/roster", func(w http.ResponseWriter, r *http.Request) {
 		addRosterPlayer(w, r, seasonMgr)
 	})
 	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}", func(w http.ResponseWriter, r *http.Request) {
 		removeRosterPlayer(w, r, seasonMgr)
 	})
-	mux.HandleFunc("GET /api/seasons/{id}/players/available", listAvailablePlayers)
+	mux.HandleFunc("GET /api/seasons/{id}/players/available", func(w http.ResponseWriter, r *http.Request) {
+		listAvailablePlayers(w, r, seasonMgr)
+	})
 	mux.HandleFunc("GET /api/seasons/{id}/checklist", func(w http.ResponseWriter, r *http.Request) {
 		getSeasonChecklist(w, r, seasonMgr)
 	})
@@ -2042,7 +2046,7 @@ func mapSeasonErr(w http.ResponseWriter, err error) {
 
 // ── Season Rosters ─────────────────────────────────────────────────────────────
 
-func listSeasonRoster(w http.ResponseWriter, r *http.Request) {
+func listSeasonRoster(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -2053,30 +2057,12 @@ func listSeasonRoster(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid team id", 400)
 		return
 	}
-	rows, err := db.DB.Query(`
-		SELECT sr.id, sr.season_id, sr.team_id, t.name,
-		       sr.player_id, p.first_name||' '||p.last_name,
-		       COALESCE(p.player_number,''), p.handicap
-		FROM season_rosters sr
-		JOIN teams t ON t.id = sr.team_id
-		JOIN players p ON p.id = sr.player_id
-		WHERE sr.season_id=? AND sr.team_id=?
-		ORDER BY p.last_name, p.first_name`, sid, tid)
+	entries, err := mgr.ListRoster(r.Context(), sid, tid)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
 	}
-	defer rows.Close()
-	var out []models.SeasonRosterEntry
-	for rows.Next() {
-		var e models.SeasonRosterEntry
-		rows.Scan(&e.ID, &e.SeasonID, &e.TeamID, &e.TeamName, &e.PlayerID, &e.PlayerName, &e.PlayerNumber, &e.Handicap)
-		out = append(out, e)
-	}
-	if out == nil {
-		out = []models.SeasonRosterEntry{}
-	}
-	jsonOK(w, out)
+	jsonOK(w, entries)
 }
 
 type addRosterPlayerRequest struct {
@@ -2094,16 +2080,6 @@ func addRosterPlayer(w http.ResponseWriter, r *http.Request, mgr SeasonManager) 
 		jsonError(w, "invalid team id", 400)
 		return
 	}
-	draft, err := mgr.IsDraft(r.Context(), sid)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if !draft {
-		jsonError(w, "cannot modify rosters in an active season", 422)
-		return
-	}
-
 	var req addRosterPlayerRequest
 	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
@@ -2113,47 +2089,11 @@ func addRosterPlayer(w http.ResponseWriter, r *http.Request, mgr SeasonManager) 
 		jsonError(w, "player_id is required", 400)
 		return
 	}
-
-	// Verify team is in this season.
-	var stID int64
-	if err := db.DB.QueryRow(
-		`SELECT id FROM season_teams WHERE season_id=? AND team_id=?`, sid, tid,
-	).Scan(&stID); err != nil {
-		jsonError(w, "team is not in this season", 400)
-		return
-	}
-
-	// Enforce one team per player per season.
-	var existingTeam int64
-	db.DB.QueryRow(
-		`SELECT COALESCE(team_id,0) FROM season_rosters WHERE season_id=? AND player_id=?`,
-		sid, req.PlayerID).Scan(&existingTeam)
-	if existingTeam != 0 && existingTeam != tid {
-		jsonError(w, "player is already on another team in this season", 400)
-		return
-	}
-
-	res, err := db.DB.Exec(
-		`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
-		sid, tid, req.PlayerID)
+	entry, err := mgr.AddRosterPlayer(r.Context(), sid, tid, req.PlayerID)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
 	}
-	rID, _ := res.LastInsertId()
-
-	var entry models.SeasonRosterEntry
-	db.DB.QueryRow(`
-		SELECT sr.id, sr.season_id, sr.team_id, t.name,
-		       sr.player_id, p.first_name||' '||p.last_name,
-		       COALESCE(p.player_number,''), p.handicap
-		FROM season_rosters sr
-		JOIN teams t ON t.id = sr.team_id
-		JOIN players p ON p.id = sr.player_id
-		WHERE sr.id=?`, rID,
-	).Scan(&entry.ID, &entry.SeasonID, &entry.TeamID, &entry.TeamName,
-		&entry.PlayerID, &entry.PlayerName, &entry.PlayerNumber, &entry.Handicap)
-
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, entry)
 }
@@ -2174,42 +2114,8 @@ func removeRosterPlayer(w http.ResponseWriter, r *http.Request, mgr SeasonManage
 		jsonError(w, "invalid player id", 400)
 		return
 	}
-	draft, err := mgr.IsDraft(r.Context(), sid)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if !draft {
-		jsonError(w, "cannot modify rosters in an active season", 422)
-		return
-	}
-	tx, err := db.DB.Begin()
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer tx.Rollback()
-
-	res, err := tx.Exec(
-		`DELETE FROM season_rosters WHERE season_id=? AND team_id=? AND player_id=?`, sid, tid, pid)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		jsonError(w, "roster entry not found", 404)
-		return
-	}
-	// Clear captain_id when the removed player is the team's current captain.
-	// The UPDATE is a no-op when the removed player is not the captain.
-	if _, err = tx.Exec(
-		`UPDATE season_teams SET captain_id=NULL
-		 WHERE season_id=? AND team_id=? AND captain_id=?`, sid, tid, pid); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if err = tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.RemoveRosterPlayer(r.Context(), sid, tid, pid); err != nil {
+		mapSeasonErr(w, err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "removed"})
@@ -2217,54 +2123,16 @@ func removeRosterPlayer(w http.ResponseWriter, r *http.Request, mgr SeasonManage
 
 // ── Available Players ──────────────────────────────────────────────────────────
 
-func listAvailablePlayers(w http.ResponseWriter, r *http.Request) {
+func listAvailablePlayers(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-
-	// Resolve the league so we know which players to search.
-	var leagueID int64
-	if err := db.DB.QueryRow(`SELECT league_id FROM seasons WHERE id=?`, sid).Scan(&leagueID); err != nil {
-		jsonError(w, "season not found", 404)
-		return
-	}
-
-	// Return all active system players not already rostered in this
-	// season — including players with no team or players from other leagues.
-	rows, err := db.DB.Query(`
-		SELECT p.id, p.player_number, p.first_name, p.last_name,
-		       p.first_name||' '||p.last_name,
-		       COALESCE(p.phone,''), COALESCE(p.email,''),
-		       p.team_id, COALESCE(t.name,''), COALESCE(t.league_id,0),
-		       p.handicap, p.admin_hold, COALESCE(p.active,1), COALESCE(p.note,''),
-		       p.created_at
-		FROM players p
-		LEFT JOIN teams t ON t.id = p.team_id
-		WHERE p.id NOT IN (
-		        SELECT player_id FROM season_rosters WHERE season_id=?
-		      )
-		  AND COALESCE(p.active,1) = 1
-		ORDER BY p.last_name, p.first_name`, sid)
+	players, err := mgr.ListAvailablePlayers(r.Context(), sid)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
-	}
-	defer rows.Close()
-	var players []models.Player
-	for rows.Next() {
-		var p models.Player
-		var adminHold, activeInt int
-		rows.Scan(&p.ID, &p.PlayerNumber, &p.FirstName, &p.LastName, &p.Name,
-			&p.Phone, &p.Email, &p.TeamID, &p.TeamName, &p.LeagueID,
-			&p.Handicap, &adminHold, &activeInt, &p.Note, &p.CreatedAt)
-		p.AdminHold = adminHold == 1
-		p.Active = activeInt == 1
-		players = append(players, p)
-	}
-	if players == nil {
-		players = []models.Player{}
 	}
 	jsonOK(w, players)
 }
