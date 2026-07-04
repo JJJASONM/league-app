@@ -84,6 +84,17 @@ func (n *noopMatchMgr) AssignMatchTeams(_ context.Context, _ int64, _, _ *int64)
 	return nil
 }
 
+// noopLineupMgr satisfies LineupManager for tests that don't exercise lineup routes.
+type noopLineupMgr struct{}
+
+func (n *noopLineupMgr) ListLineupPlans(_ context.Context, _ matches.ListLineupPlansRequest) ([]models.LineupPlan, error) {
+	return []models.LineupPlan{}, nil
+}
+func (n *noopLineupMgr) SaveTeamLineup(_ context.Context, _ matches.SaveLineupRequest) error {
+	return nil
+}
+func (n *noopLineupMgr) DeleteLineupPlan(_ context.Context, _ int64) error { return nil }
+
 // stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.
 // ResolveKey maps a cleartext key to a user; zero-value returns nil (no match).
 type stubApplyAuth struct {

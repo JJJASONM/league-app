@@ -97,6 +97,18 @@ func (n *noopMatchMgr) AssignMatchTeams(_ context.Context, _ int64, _, _ *int64)
 	return nil
 }
 
+// noopLineupMgr satisfies handlers.LineupManager for tests that don't exercise
+// lineup plan routes.
+type noopLineupMgr struct{}
+
+func (n *noopLineupMgr) ListLineupPlans(_ context.Context, _ matches.ListLineupPlansRequest) ([]models.LineupPlan, error) {
+	return []models.LineupPlan{}, nil
+}
+func (n *noopLineupMgr) SaveTeamLineup(_ context.Context, _ matches.SaveLineupRequest) error {
+	return nil
+}
+func (n *noopLineupMgr) DeleteLineupPlan(_ context.Context, _ int64) error { return nil }
+
 // testServer initializes a fresh SQLite database in a temp directory and
 // returns a running test HTTP server with all routes registered.
 // The DB connection and server are closed automatically when the test ends.
@@ -123,7 +135,9 @@ func testServer(t *testing.T) *httptest.Server {
 	scheduleSvc := matches.NewScheduleService(scheduleStore)
 	matchStore := sqlite.NewMatchStore(db.DB)
 	matchSvc := matches.NewMatchService(matchStore)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, SeasonMgr: seasonSvc, ScheduleMgr: scheduleSvc, MatchMgr: matchSvc}
+	lineupStore := sqlite.NewLineupStore(db.DB)
+	lineupSvc := matches.NewLineupService(lineupStore)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, SeasonMgr: seasonSvc, ScheduleMgr: scheduleSvc, MatchMgr: matchSvc, LineupMgr: lineupSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

@@ -84,6 +84,14 @@ type ScheduleManager interface {
 	GenerateSchedule(ctx context.Context, req matches.GenerateRequest) (matches.GenerateResult, error)
 }
 
+// LineupManager handles lineup plan listing, atomic save, and deletion.
+// Routes are registered only when non-nil.
+type LineupManager interface {
+	ListLineupPlans(ctx context.Context, req matches.ListLineupPlansRequest) ([]models.LineupPlan, error)
+	SaveTeamLineup(ctx context.Context, req matches.SaveLineupRequest) error
+	DeleteLineupPlan(ctx context.Context, id int64) error
+}
+
 // SeasonManager handles season lifecycle: activation, checklist evaluation,
 // previous-season lookup, draft/stale checks, team management, and bye requests.
 type SeasonManager interface {
@@ -129,4 +137,7 @@ type Dependencies struct {
 	// ScheduleMgr handles schedule generation.
 	// Routes are registered only when non-nil.
 	ScheduleMgr ScheduleManager
+	// LineupMgr handles lineup plan listing, atomic save, and deletion.
+	// Routes are registered only when non-nil.
+	LineupMgr LineupManager
 }
