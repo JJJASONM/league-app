@@ -1423,6 +1423,95 @@ Replaced by `matches.GenerateRequest` with identical JSON field names — no API
 - Schedule preview / pushback workflow
 - Auth changes
 
+## Phase B — Match Read/Assign Extraction (implemented 2026-07-03)
+
+### Goal
+
+Extract `listMatches`, `getMatch`, and `assignMatchTeams` from `handlers/api.go`
+into a `MatchService` and `MatchStore` domain boundary. No route path, JSON shape,
+or runtime behavior changed. The `matchSelect` constant moved from the handler file
+into the SQLite adapter where it belongs.
+
+### New files
+
+| File | Role |
+|------|------|
+| `backend/domains/matches/match_store.go` | `MatchStore` interface; `ListMatchesRequest`, `ErrMatchNotFound` |
+| `backend/domains/matches/match_service.go` | `MatchService`, `NewMatchService`, `ListMatches`, `GetMatch`, `AssignMatchTeams` |
+| `backend/domains/matches/match_service_test.go` | 9 unit tests with `stubMatchStore` |
+| `backend/storage/sqlite/match_store.go` | SQLite implementation of `MatchStore` (3 methods); owns `matchSelect` constant |
+| `backend/storage/sqlite/match_store_test.go` | 11 integration tests |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `handlers/deps.go` | `MatchManager` interface + `MatchMgr MatchManager` field on `Dependencies` |
+| `handlers/api.go` | Three handlers thinned to delegate; routes conditional on `MatchMgr != nil`; `matchSelect` constant removed; `mapMatchErr` added |
+| `handlers/api_test.go` | `noopMatchMgr` stub; `testServer()` wires real `MatchService` |
+| `handlers/api_apply_auth_test.go` | `noopMatchMgr` stub |
+| `handlers/api_apply_c1_test.go` | `testServerWithApplyAuth()` wires real `MatchService` |
+| `main.go` | `sqlite.NewMatchStore` → `matches.NewMatchService` → `deps.MatchMgr` |
+
+### Architecture
+
+```
+GET /api/matches
+  → listMatches handler (parse query params, delegate, map error)
+      → deps.MatchMgr.ListMatches (MatchManager interface)
+          → matches.MatchService.ListMatches
+              → store.ListMatches (season_id / league_id / all variants)
+
+GET /api/matches/{id}
+  → getMatch handler
+      → deps.MatchMgr.GetMatch
+          → matches.MatchService.GetMatch
+              → store.GetMatch  (ErrMatchNotFound → domainerr.NotFound → 404)
+              → store scans match row + results rows → models.MatchDetail
+
+PATCH /api/matches/{id}/assign
+  → assignMatchTeams handler
+      → deps.MatchMgr.AssignMatchTeams
+          → matches.MatchService.AssignMatchTeams
+              → store.AssignMatchTeams (UPDATE matches SET home_team_id=?, away_team_id=?)
+```
+
+### Key design decisions
+
+**`MatchStore` in `matches` package:** Consistent with `ScheduleStore`, `WeekStore`,
+and `RoundStore`. The match resource is this domain's primary table.
+
+**Store returns `models.Match` and `models.MatchDetail` directly:** `models` is a
+pure data package; importing it from the SQLite adapter is established practice
+(several existing stores do so). The service layer adds error categorization on top;
+no conversion step is needed here because `models.Match` is already the response type.
+
+**`normMatchDatePtr` private helper in SQLite store:** The SQLite driver coerces DATE
+columns to full ISO timestamps. The store applies truncation so callers receive clean
+`YYYY-MM-DD` values. The handler's `normDatePtr` is retained for the `scanSeason`
+helper which still uses it.
+
+**`assignMatchTeams` preserves no-RowsAffected behavior:** The original handler
+returned 200 even when the match ID did not exist (no RowsAffected check). Phase B
+preserves this exactly — the store does a plain UPDATE and the service propagates
+only genuine DB errors.
+
+**Route registered conditionally (`if deps.MatchMgr != nil`):** Matches the pattern
+established by `WeekMgr`, `RoundMgr`, and `ScheduleMgr`.
+
+### Accepted debt
+
+- `normDatePtr` remains in `handlers/api.go` for the `scanSeason` helper (seasons CRUD
+  not yet extracted). `normMatchDatePtr` in the SQLite store is a private copy with the
+  same logic.
+
+### Not in Phase B
+
+- Route or JSON shape changes
+- Match CRUD beyond the three extracted handlers
+- Lineup plans extraction
+- Skipped-weeks or bye-request extraction
+
 ## Decision History
 
 ### 2026-06-08 - Make week close authoritative

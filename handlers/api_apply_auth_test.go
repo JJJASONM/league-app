@@ -70,6 +70,20 @@ func (n *noopScheduleMgr) GenerateSchedule(_ context.Context, _ matches.Generate
 	return matches.GenerateResult{}, nil
 }
 
+// noopMatchMgr satisfies MatchManager for tests that only exercise auth or
+// route-mounting logic and do not exercise match listing or assignment endpoints.
+type noopMatchMgr struct{}
+
+func (n *noopMatchMgr) ListMatches(_ context.Context, _ matches.ListMatchesRequest) ([]models.Match, error) {
+	return []models.Match{}, nil
+}
+func (n *noopMatchMgr) GetMatch(_ context.Context, _ int64) (models.MatchDetail, error) {
+	return models.MatchDetail{}, nil
+}
+func (n *noopMatchMgr) AssignMatchTeams(_ context.Context, _ int64, _, _ *int64) error {
+	return nil
+}
+
 // stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.
 // ResolveKey maps a cleartext key to a user; zero-value returns nil (no match).
 type stubApplyAuth struct {

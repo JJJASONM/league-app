@@ -102,6 +102,8 @@ func main() {
 	seasonSvc := seasons.NewSeasonService(seasonStore)
 	scheduleStore := sqlite.NewScheduleStore(db.DB)
 	scheduleSvc := matches.NewScheduleService(scheduleStore)
+	matchStore := sqlite.NewMatchStore(db.DB)
+	matchSvc := matches.NewMatchService(matchStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
@@ -111,6 +113,7 @@ func main() {
 		RoundMgr:        roundSvc,
 		RuleMgr:         ruleSvc,
 		SeasonMgr:       seasonSvc,
+		MatchMgr:        matchSvc,
 		ScheduleMgr:     scheduleSvc,
 	}
 
