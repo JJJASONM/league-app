@@ -218,4 +218,34 @@ type SeasonStore interface {
 	// ListAvailablePlayers returns active players not already rostered in this
 	// season. Returns ErrNotFound (wrapped) when the season does not exist.
 	ListAvailablePlayers(ctx context.Context, seasonID int64) ([]models.Player, error)
+
+	// ── Season team listing ───────────────────────────────────────────────────────
+
+	// ListSeasonTeams returns all teams registered in a season with full metadata
+	// (season_name, captain, roster_count), ordered by insertion.
+	ListSeasonTeams(ctx context.Context, seasonID int64) ([]models.SeasonTeam, error)
+
+	// ── Skipped weeks ─────────────────────────────────────────────────────────────
+
+	// ListSkippedWeeks returns all skipped weeks for a season, ordered by skip_date.
+	ListSkippedWeeks(ctx context.Context, seasonID int64) ([]models.SkippedWeek, error)
+
+	// CreateSkippedWeek inserts a skipped week (INSERT OR IGNORE on unique
+	// (season_id, skip_date)) and returns the row whether newly inserted or
+	// pre-existing.
+	CreateSkippedWeek(ctx context.Context, seasonID int64, skipDate, reason string) (models.SkippedWeek, error)
+
+	// DeleteSkippedWeek removes a skipped week by id. No error is returned when
+	// the row does not exist.
+	DeleteSkippedWeek(ctx context.Context, id int64) error
+
+	// ── Additional bye request methods ────────────────────────────────────────────
+
+	// ListByeRequests returns all bye requests for a season, ordered by
+	// week_number, team_id. Returns a non-nil empty slice when none exist.
+	ListByeRequests(ctx context.Context, seasonID int64) ([]models.ByeRequest, error)
+
+	// DeleteByeRequest deletes a bye request scoped to the season.
+	// Returns ErrByeNotFound (wrapped) when the request does not exist in the season.
+	DeleteByeRequest(ctx context.Context, seasonID, byeID int64) error
 }

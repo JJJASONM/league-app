@@ -281,8 +281,69 @@ corrects a silent-empty-body bug in the original handler.
 - `listAvailablePlayers` previously fetched `league_id` from the seasons table but
   never used it in the player query; the new store uses it only for season existence
   verification, which preserves the original behaviour (season not found → 404).
-- `deleteByeRequest` and skipped-week deletion still use direct `db.DB` calls;
-  those belong to a separate bye/skipped-weeks extraction pass.
+
+### Backend Domain Boundary — Season Roster Phase B (implemented 2026-07-04)
+
+Phase B extracts the remaining 6 season-adjacent handlers that still used direct
+`db.DB` calls: `listSeasonTeams`, `listSkippedWeeks`, `createSkippedWeek`,
+`deleteSkippedWeek`, `listByeRequests`, and `deleteByeRequest`.
+
+**Endpoints extracted:**
+
+| Route | Handler |
+|-------|---------|
+| `GET /api/seasons/{id}/teams` | `listSeasonTeams` |
+| `GET /api/seasons/{id}/skipped-weeks` | `listSkippedWeeks` |
+| `POST /api/seasons/{id}/skipped-weeks` | `createSkippedWeek` |
+| `DELETE /api/seasons/{id}/skipped-weeks/{sid}` | `deleteSkippedWeek` |
+| `GET /api/seasons/{id}/bye-requests` | `listByeRequests` |
+| `DELETE /api/seasons/{id}/bye-requests/{bid}` | `deleteByeRequest` |
+
+**New store methods (SeasonStore interface):**
+
+- `ListSeasonTeams` — returns season teams with roster counts; uses shared
+  `seasonTeamCols` + `scanSeasonTeamRow` helpers in `season_team_store.go`
+- `ListSkippedWeeks`, `CreateSkippedWeek`, `DeleteSkippedWeek` — in new file
+  `season_skipped_week_store.go`; `CreateSkippedWeek` uses `INSERT OR IGNORE` +
+  re-query for idempotent behaviour
+- `ListByeRequests`, `DeleteByeRequest` — added to `season_bye_store.go`;
+  `DeleteByeRequest` returns `ErrByeNotFound` when 0 rows affected
+
+**New service methods (SeasonService / SeasonManager interface):**
+
+- **ListSeasonTeams** — delegates; ensures non-nil slice
+- **ListSkippedWeeks** — delegates; ensures non-nil slice
+- **CreateSkippedWeek** — delegates directly (no business logic currently needed)
+- **DeleteSkippedWeek** — delegates directly; no error on missing row (preserves
+  original handler behaviour)
+- **ListByeRequests** — delegates; ensures non-nil slice
+- **DeleteByeRequest** — delegates; maps `ErrByeNotFound` → `domainerr.NotFound`
+  → `mapSeasonErr` → HTTP 404
+
+**New SQLite files:**
+- `backend/storage/sqlite/season_skipped_week_store.go` — 3 store methods
+- `backend/storage/sqlite/season_skipped_week_store_test.go` — 7 integration tests
+
+**Appended to existing SQLite files:**
+- `backend/storage/sqlite/season_bye_store.go` — `ListByeRequests`, `DeleteByeRequest`
+- `backend/storage/sqlite/season_team_store.go` — `ListSeasonTeams`
+
+**New domain service files:**
+- `backend/domains/seasons/skipped_week_service.go` — 3 service methods
+- `backend/domains/seasons/skipped_week_service_test.go` — 7 unit tests
+- `backend/domains/seasons/bye_service.go` — `ListByeRequests`, `DeleteByeRequest`
+- `backend/domains/seasons/bye_service_test.go` — 7 unit tests + 2 `ListSeasonTeams` tests
+
+**Behaviour notes:**
+- `listByeRequests` previously used `JOIN teams` (not LEFT JOIN); new store uses
+  `LEFT JOIN` with `COALESCE` for defensive robustness, matching the existing
+  `InsertByeRequest`/`GetByeRequest` pattern already in the store.
+- `deleteSkippedWeek` previously ignored all errors and always returned 200. The
+  new handler propagates genuine DB errors as 500; missing row returns 200
+  (no change in observable behaviour for callers).
+- `deleteByeRequest` previously returned 404 on missing row (direct Exec check).
+  The new path uses `mgr.DeleteByeRequest` → `domainerr.NotFound` → `mapSeasonErr`
+  → 404. Behaviour is preserved.
 
 ### Deferred
 

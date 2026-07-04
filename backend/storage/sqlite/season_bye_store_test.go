@@ -280,3 +280,94 @@ func TestSeasonStore_SetByeApproval_NotFound(t *testing.T) {
 		t.Errorf("want ErrByeNotFound, got %v", err)
 	}
 }
+
+// ── ListByeRequests ───────────────────────────────────────────────────────────
+
+func TestSeasonStore_ListByeRequests_ReturnsByes(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "Alpha")
+	sseedSeasonTeam(t, sid, tid, nil)
+	sseedBye(t, sid, tid, 2, false)
+
+	byes, err := store.ListByeRequests(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListByeRequests: %v", err)
+	}
+	if len(byes) != 1 {
+		t.Fatalf("want 1 bye, got %d", len(byes))
+	}
+	if byes[0].TeamID != tid {
+		t.Errorf("want TeamID=%d, got %d", tid, byes[0].TeamID)
+	}
+	if byes[0].TeamName == "" {
+		t.Error("want non-empty TeamName from JOIN")
+	}
+}
+
+func TestSeasonStore_ListByeRequests_EmptyWhenNone(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+
+	byes, err := store.ListByeRequests(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListByeRequests: %v", err)
+	}
+	if len(byes) != 0 {
+		t.Errorf("want 0 byes, got %d", len(byes))
+	}
+}
+
+// ── DeleteByeRequest ──────────────────────────────────────────────────────────
+
+func TestSeasonStore_DeleteByeRequest_DeletesRow(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "Bravo")
+	sseedSeasonTeam(t, sid, tid, nil)
+	bid := sseedBye(t, sid, tid, 1, false)
+
+	if err := store.DeleteByeRequest(ctx, sid, bid); err != nil {
+		t.Fatalf("DeleteByeRequest: %v", err)
+	}
+	var n int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM bye_requests WHERE id=?`, bid).Scan(&n)
+	if n != 0 {
+		t.Errorf("want 0 rows after delete, got %d", n)
+	}
+}
+
+func TestSeasonStore_DeleteByeRequest_NotFoundReturnsError(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+
+	err := store.DeleteByeRequest(ctx, sid, 9999)
+	if !errors.Is(err, seasons.ErrByeNotFound) {
+		t.Errorf("want ErrByeNotFound, got %v", err)
+	}
+}
+
+func TestSeasonStore_DeleteByeRequest_ScopedToSeason(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid1 := sseedSeason(t, lid, "S1", "", "", true)
+	sid2 := sseedSeason(t, lid, "S2", "", "", true)
+	tid := sseedTeam(t, lid, "Charlie")
+	sseedSeasonTeam(t, sid1, tid, nil)
+	bid := sseedBye(t, sid1, tid, 3, false)
+
+	// Deleting with wrong season should fail.
+	err := store.DeleteByeRequest(ctx, sid2, bid)
+	if !errors.Is(err, seasons.ErrByeNotFound) {
+		t.Errorf("want ErrByeNotFound for wrong season, got %v", err)
+	}
+}

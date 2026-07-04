@@ -31,6 +31,26 @@ func scanSeasonTeamRow(row interface{ Scan(...any) error }) (models.SeasonTeam, 
 	return st, err
 }
 
+// ListSeasonTeams returns all teams registered in a season with full metadata,
+// ordered by insertion.
+func (s *SeasonStore) ListSeasonTeams(ctx context.Context, seasonID int64) ([]models.SeasonTeam, error) {
+	rows, err := s.db.QueryContext(ctx,
+		seasonTeamCols+` WHERE st.season_id=? ORDER BY st.id`, seasonID)
+	if err != nil {
+		return nil, fmt.Errorf("list season teams %d: %w", seasonID, err)
+	}
+	defer rows.Close()
+	var out []models.SeasonTeam
+	for rows.Next() {
+		st, err := scanSeasonTeamRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan season team: %w", err)
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
 // GetTeamLeagueID returns the league_id for the given team.
 // Returns ErrNotFound (wrapped) when the team does not exist.
 func (s *SeasonStore) GetTeamLeagueID(ctx context.Context, teamID int64) (int64, error) {

@@ -10,6 +10,46 @@ import (
 	"league_app/models"
 )
 
+// ListByeRequests returns all bye requests for a season, ordered by week_number, team_id.
+func (s *SeasonStore) ListByeRequests(ctx context.Context, seasonID int64) ([]models.ByeRequest, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT br.id, br.season_id, br.team_id, COALESCE(t.name,''),
+		       br.week_number, br.reason, br.approved
+		FROM bye_requests br
+		LEFT JOIN teams t ON t.id = br.team_id
+		WHERE br.season_id=? ORDER BY br.week_number, br.team_id`, seasonID)
+	if err != nil {
+		return nil, fmt.Errorf("list bye requests %d: %w", seasonID, err)
+	}
+	defer rows.Close()
+	var out []models.ByeRequest
+	for rows.Next() {
+		var b models.ByeRequest
+		var approved int
+		if err := rows.Scan(&b.ID, &b.SeasonID, &b.TeamID, &b.TeamName,
+			&b.WeekNumber, &b.Reason, &approved); err != nil {
+			return nil, fmt.Errorf("scan bye request: %w", err)
+		}
+		b.Approved = approved == 1
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// DeleteByeRequest deletes a bye request scoped to the season.
+// Returns ErrByeNotFound (wrapped) when the request does not exist in the season.
+func (s *SeasonStore) DeleteByeRequest(ctx context.Context, seasonID, byeID int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM bye_requests WHERE id=? AND season_id=?`, byeID, seasonID)
+	if err != nil {
+		return fmt.Errorf("delete bye request %d/%d: %w", seasonID, byeID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("bye %d season %d: %w", byeID, seasonID, seasons.ErrByeNotFound)
+	}
+	return nil
+}
+
 // CountParticipatingTeams returns the effective team count for bye-request validation.
 // For managed seasons (or legacy seasons with season_teams rows), uses season_teams count.
 // Falls back to league team count for legacy seasons with no season_teams rows.

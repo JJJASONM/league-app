@@ -234,6 +234,18 @@ func (s *SeasonService) UpdateTeam(ctx context.Context, seasonID, teamID int64, 
 	return s.store.GetSeasonTeam(ctx, seasonID, teamID)
 }
 
+// ListSeasonTeams returns all teams registered in a season with full metadata.
+func (s *SeasonService) ListSeasonTeams(ctx context.Context, seasonID int64) ([]models.SeasonTeam, error) {
+	teams, err := s.store.ListSeasonTeams(ctx, seasonID)
+	if err != nil {
+		return nil, err
+	}
+	if teams == nil {
+		teams = []models.SeasonTeam{}
+	}
+	return teams, nil
+}
+
 // CreateByeRequest validates and inserts a bye request for the season.
 // Returns ErrNotFound (wrapped) when the season does not exist.
 // Returns domainerr.InvalidInput for validation failures.

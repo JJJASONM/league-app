@@ -104,21 +104,33 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		deleteSeasonRule(w, r, ruleMgr)
 	})
 
-	mux.HandleFunc("GET /api/seasons/{id}/skipped-weeks", listSkippedWeeks)
-	mux.HandleFunc("POST /api/seasons/{id}/skipped-weeks", createSkippedWeek)
-	mux.HandleFunc("DELETE /api/seasons/{id}/skipped-weeks/{sid}", deleteSkippedWeek)
+	mux.HandleFunc("GET /api/seasons/{id}/skipped-weeks", func(w http.ResponseWriter, r *http.Request) {
+		listSkippedWeeks(w, r, seasonMgr)
+	})
+	mux.HandleFunc("POST /api/seasons/{id}/skipped-weeks", func(w http.ResponseWriter, r *http.Request) {
+		createSkippedWeek(w, r, seasonMgr)
+	})
+	mux.HandleFunc("DELETE /api/seasons/{id}/skipped-weeks/{sid}", func(w http.ResponseWriter, r *http.Request) {
+		deleteSkippedWeek(w, r, seasonMgr)
+	})
 
-	mux.HandleFunc("GET /api/seasons/{id}/bye-requests", listByeRequests)
+	mux.HandleFunc("GET /api/seasons/{id}/bye-requests", func(w http.ResponseWriter, r *http.Request) {
+		listByeRequests(w, r, seasonMgr)
+	})
 	mux.HandleFunc("POST /api/seasons/{id}/bye-requests", func(w http.ResponseWriter, r *http.Request) {
 		createByeRequest(w, r, seasonMgr)
 	})
 	mux.HandleFunc("PUT /api/seasons/{id}/bye-requests/{bid}", func(w http.ResponseWriter, r *http.Request) {
 		updateByeRequest(w, r, seasonMgr)
 	})
-	mux.HandleFunc("DELETE /api/seasons/{id}/bye-requests/{bid}", deleteByeRequest)
+	mux.HandleFunc("DELETE /api/seasons/{id}/bye-requests/{bid}", func(w http.ResponseWriter, r *http.Request) {
+		deleteByeRequest(w, r, seasonMgr)
+	})
 
 	// Season teams and rosters
-	mux.HandleFunc("GET /api/seasons/{id}/teams", listSeasonTeams)
+	mux.HandleFunc("GET /api/seasons/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
+		listSeasonTeams(w, r, seasonMgr)
+	})
 	mux.HandleFunc("POST /api/seasons/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
 		addSeasonTeam(w, r, seasonMgr)
 	})
@@ -1126,33 +1138,21 @@ func deleteSeasonRule(w http.ResponseWriter, r *http.Request, mgr RuleManager) {
 
 // ─── Skipped Weeks ────────────────────────────────────────────────────────────
 
-func listSkippedWeeks(w http.ResponseWriter, r *http.Request) {
+func listSkippedWeeks(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	rows, err := db.DB.Query(
-		`SELECT id, season_id, skip_date, reason FROM skipped_weeks WHERE season_id=? ORDER BY skip_date`, sid)
+	weeks, err := mgr.ListSkippedWeeks(r.Context(), sid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var weeks []models.SkippedWeek
-	for rows.Next() {
-		var sw models.SkippedWeek
-		rows.Scan(&sw.ID, &sw.SeasonID, &sw.SkipDate, &sw.Reason)
-		sw.SkipDate = normDateStr(sw.SkipDate)
-		weeks = append(weeks, sw)
-	}
-	if weeks == nil {
-		weeks = []models.SkippedWeek{}
-	}
 	jsonOK(w, weeks)
 }
 
-func createSkippedWeek(w http.ResponseWriter, r *http.Request) {
+func createSkippedWeek(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -1163,57 +1163,40 @@ func createSkippedWeek(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	sw.SeasonID = sid
-	res, err := db.DB.Exec(
-		`INSERT OR IGNORE INTO skipped_weeks (season_id, skip_date, reason) VALUES (?,?,?)`,
-		sw.SeasonID, sw.SkipDate, sw.Reason)
+	created, err := mgr.CreateSkippedWeek(r.Context(), sid, sw.SkipDate, sw.Reason)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	sw.ID, _ = res.LastInsertId()
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, sw)
+	jsonOK(w, created)
 }
 
-func deleteSkippedWeek(w http.ResponseWriter, r *http.Request) {
+func deleteSkippedWeek(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	swid, err := pathID(r, "sid")
 	if err != nil {
 		jsonError(w, "invalid skip id", 400)
 		return
 	}
-	db.DB.Exec(`DELETE FROM skipped_weeks WHERE id=?`, swid)
+	if err := mgr.DeleteSkippedWeek(r.Context(), swid); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
 // ─── Bye Requests ─────────────────────────────────────────────────────────────
 
-func listByeRequests(w http.ResponseWriter, r *http.Request) {
+func listByeRequests(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	rows, err := db.DB.Query(`
-		SELECT br.id, br.season_id, br.team_id, t.name, br.week_number, br.reason, br.approved
-		FROM bye_requests br
-		JOIN teams t ON t.id = br.team_id
-		WHERE br.season_id=? ORDER BY br.week_number, br.team_id`, sid)
+	byes, err := mgr.ListByeRequests(r.Context(), sid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
-	}
-	defer rows.Close()
-	var byes []models.ByeRequest
-	for rows.Next() {
-		var b models.ByeRequest
-		var approved int
-		rows.Scan(&b.ID, &b.SeasonID, &b.TeamID, &b.TeamName, &b.WeekNumber, &b.Reason, &approved)
-		b.Approved = approved == 1
-		byes = append(byes, b)
-	}
-	if byes == nil {
-		byes = []models.ByeRequest{}
 	}
 	jsonOK(w, byes)
 }
@@ -1264,7 +1247,7 @@ func updateByeRequest(w http.ResponseWriter, r *http.Request, mgr SeasonManager)
 	jsonOK(w, b)
 }
 
-func deleteByeRequest(w http.ResponseWriter, r *http.Request) {
+func deleteByeRequest(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid season id", 400)
@@ -1275,13 +1258,8 @@ func deleteByeRequest(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid bye id", 400)
 		return
 	}
-	res, err := db.DB.Exec(`DELETE FROM bye_requests WHERE id=? AND season_id=?`, bid, sid)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		jsonError(w, "bye request not found", 404)
+	if err := mgr.DeleteByeRequest(r.Context(), sid, bid); err != nil {
+		mapSeasonErr(w, err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
@@ -1936,28 +1914,18 @@ func scanSeasonTeam(row interface{ Scan(...any) error }) (models.SeasonTeam, err
 	return st, err
 }
 
-func listSeasonTeams(w http.ResponseWriter, r *http.Request) {
+func listSeasonTeams(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	rows, err := db.DB.Query(seasonTeamSelect+` WHERE st.season_id=? ORDER BY st.id`, sid)
+	teams, err := mgr.ListSeasonTeams(r.Context(), sid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var out []models.SeasonTeam
-	for rows.Next() {
-		if st, err := scanSeasonTeam(rows); err == nil {
-			out = append(out, st)
-		}
-	}
-	if out == nil {
-		out = []models.SeasonTeam{}
-	}
-	jsonOK(w, out)
+	jsonOK(w, teams)
 }
 
 func addSeasonTeam(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
