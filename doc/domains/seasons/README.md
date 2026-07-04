@@ -4,8 +4,8 @@
 
 **Owner:** `seasons`
 **Status:** `draft`
-**Current version:** `0.1`
-**Last reviewed:** `2026-06-17`
+**Current version:** `0.2`
+**Last reviewed:** `2026-07-02`
 
 The Seasons domain owns setup, activation, league-week workflow, closing,
 reopening, and final standings snapshots.
@@ -178,6 +178,59 @@ Logic removed from `handlers/api.go`:
 Handlers thinned: `activateSeason`, `getSeasonChecklist`, `getPreviousSeasonTeams`,
 `addSeasonTeam`, `updateSeasonTeam`, `removeSeasonTeam`, `addRosterPlayer`,
 `removeRosterPlayer` — all now take a `SeasonManager` parameter injected via closure.
+
+### Backend Domain Boundary (Phase B)
+
+Phase B moves the remaining business logic out of three team-management handlers
+and two bye-request handlers into the domain layer.
+
+**New store methods (SeasonStore interface):**
+
+Team management (7): `GetTeamLeagueID`, `GetSeasonTeam`, `AddSeasonTeamCopy`,
+`AddSeasonTeamNew`, `CheckPlayerOnSeasonRoster`, `UpdateSeasonTeamMeta`,
+`RemoveSeasonTeam`.
+
+Bye requests (7): `CountParticipatingTeams`, `CheckTeamInSeason`, `HasDuplicateBye`,
+`InsertByeRequest`, `GetByeRequest`, `HasByeConflict`, `SetByeApproval`.
+
+**New service methods (SeasonService / SeasonManager interface):**
+
+- **AddTeam** — checks draft, validates managed constraint and prior-season
+  membership, delegates to `AddSeasonTeamCopy` or `AddSeasonTeamNew`, calls
+  `MarkStaleIfScheduled`, returns `GetSeasonTeam`
+- **RemoveTeam** — checks draft, delegates to `RemoveSeasonTeam`, calls
+  `MarkStaleIfScheduled`
+- **UpdateTeam** — checks draft, validates name, validates captain on roster,
+  delegates to `UpdateSeasonTeamMeta`, returns `GetSeasonTeam`
+- **CreateByeRequest** — gets meta, checks odd team count, validates league/season
+  membership, checks duplicate, delegates to `InsertByeRequest`
+- **UpdateByeRequest** — gets existing bye, checks week-0 guard, checks conflict,
+  delegates to `SetByeApproval`
+
+**Error translation pattern:**
+
+Store methods return typed sentinel errors (`ErrTeamAlreadyInSeason`,
+`ErrTeamNotInSeason`, `ErrByeNotFound`, `ErrTeamNotInPriorSeason`). The service
+translates these into `domainerr.Err` with categories (`InvalidInput`,
+`Unprocessable`, `NotFound`, `Internal`). The handler calls `mapSeasonErr` which
+maps `domainerr.Err` categories to HTTP status codes (400/404/422/500).
+
+SQLite adapters (`backend/storage/sqlite/`) must NOT import `domainerr`; only
+the service layer uses it.
+
+**New SQLite files:**
+- `backend/storage/sqlite/season_team_store.go` — 7 team methods
+- `backend/storage/sqlite/season_bye_store.go` — 7 bye methods
+
+**Local types removed from `handlers/api.go`:**
+- `addSeasonTeamRequest` — replaced by `seasons.AddTeamRequest`
+- `updateSeasonTeamRequest` — replaced by `seasons.UpdateTeamRequest`
+
+**Handler thinning (Phase B):**
+
+`addSeasonTeam`, `updateSeasonTeam`, `removeSeasonTeam`, `createByeRequest`,
+`updateByeRequest` — each reduced to ≤10 lines: parse path/body, delegate to
+`mgr`, map error, write response.
 
 ### Deferred
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	"league_app/backend/domainerr"
 	"league_app/models"
 )
 
@@ -100,6 +102,222 @@ func (s *SeasonService) PreviousSeason(ctx context.Context, seasonID int64) (Pre
 		}
 	}
 	return PreviousSeasonResult{Season: prev, Teams: teams}, nil
+}
+
+// AddTeam adds a team to a draft season. When FromTeamID is set, the team is
+// copied from a prior season (roster included). When Name is set, a brand-new
+// team is created. Returns domainerr.Unprocessable when the season is active,
+// domainerr.InvalidInput for validation failures.
+func (s *SeasonService) AddTeam(ctx context.Context, seasonID int64, req AddTeamRequest) (models.SeasonTeam, error) {
+	draft, err := s.store.IsDraft(ctx, seasonID)
+	if err != nil {
+		return models.SeasonTeam{}, err
+	}
+	if !draft {
+		return models.SeasonTeam{}, domainerr.New("SEASON_NOT_DRAFT", domainerr.Unprocessable,
+			"cannot modify teams in an active season")
+	}
+
+	meta, err := s.getMeta(ctx, seasonID)
+	if err != nil {
+		return models.SeasonTeam{}, err
+	}
+
+	if meta.TeamsManaged && req.FromTeamID > 0 && req.FromSeasonID == 0 {
+		return models.SeasonTeam{}, domainerr.New("SEASON_MANAGED_FROM_REQUIRED", domainerr.InvalidInput,
+			"managed seasons require from_season_id with from_team_id; use name to create a new team")
+	}
+
+	if req.FromTeamID > 0 && req.FromSeasonID > 0 {
+		prev, err := s.PreviousSeason(ctx, seasonID)
+		if err != nil {
+			return models.SeasonTeam{}, err
+		}
+		if prev.Season == nil || prev.Season.ID != req.FromSeasonID {
+			return models.SeasonTeam{}, domainerr.New("SEASON_WRONG_PRIOR", domainerr.InvalidInput,
+				"from_season_id must be the immediately previous season")
+		}
+	}
+
+	var teamID int64
+	if req.FromTeamID > 0 {
+		teamLeagueID, err := s.store.GetTeamLeagueID(ctx, req.FromTeamID)
+		if err != nil || teamLeagueID != meta.LeagueID {
+			return models.SeasonTeam{}, domainerr.New("SEASON_TEAM_NOT_IN_LEAGUE", domainerr.InvalidInput,
+				"team not found in this league")
+		}
+		teamID = req.FromTeamID
+		if err := s.store.AddSeasonTeamCopy(ctx, seasonID, teamID, req.FromSeasonID, meta.TeamsManaged); err != nil {
+			if errors.Is(err, ErrTeamAlreadyInSeason) {
+				return models.SeasonTeam{}, domainerr.New("SEASON_TEAM_DUPLICATE", domainerr.InvalidInput, err.Error())
+			}
+			if errors.Is(err, ErrTeamNotInPriorSeason) {
+				return models.SeasonTeam{}, domainerr.New("SEASON_TEAM_NOT_IN_PRIOR", domainerr.InvalidInput, err.Error())
+			}
+			return models.SeasonTeam{}, err
+		}
+	} else if strings.TrimSpace(req.Name) != "" {
+		newID, err := s.store.AddSeasonTeamNew(ctx, seasonID, meta.LeagueID, req.Name)
+		if err != nil {
+			return models.SeasonTeam{}, err
+		}
+		teamID = newID
+	} else {
+		return models.SeasonTeam{}, domainerr.New("SEASON_TEAM_BAD_REQUEST", domainerr.InvalidInput,
+			"provide from_team_id (copy) or name (new team)")
+	}
+
+	_ = s.store.MarkStaleIfScheduled(ctx, seasonID)
+	return s.store.GetSeasonTeam(ctx, seasonID, teamID)
+}
+
+// RemoveTeam removes a team from a draft season, cleaning up roster and team
+// record when the team has no match history and no other season registrations.
+// Returns domainerr.Unprocessable when the season is active.
+// Returns domainerr.NotFound when the team is not in the season.
+func (s *SeasonService) RemoveTeam(ctx context.Context, seasonID, teamID int64) error {
+	draft, err := s.store.IsDraft(ctx, seasonID)
+	if err != nil {
+		return err
+	}
+	if !draft {
+		return domainerr.New("SEASON_NOT_DRAFT", domainerr.Unprocessable,
+			"cannot modify teams in an active season")
+	}
+	if err := s.store.RemoveSeasonTeam(ctx, seasonID, teamID); err != nil {
+		if errors.Is(err, ErrTeamNotInSeason) {
+			return domainerr.New("SEASON_TEAM_NOT_FOUND", domainerr.NotFound, err.Error())
+		}
+		return err
+	}
+	_ = s.store.MarkStaleIfScheduled(ctx, seasonID)
+	return nil
+}
+
+// UpdateTeam updates the season_name and captain_id for a team in a draft season.
+// Returns domainerr.Unprocessable when the season is active.
+// Returns domainerr.InvalidInput for validation failures (missing name, captain not on roster).
+// Returns domainerr.NotFound when the team is not registered.
+func (s *SeasonService) UpdateTeam(ctx context.Context, seasonID, teamID int64, req UpdateTeamRequest) (models.SeasonTeam, error) {
+	draft, err := s.store.IsDraft(ctx, seasonID)
+	if err != nil {
+		return models.SeasonTeam{}, err
+	}
+	if !draft {
+		return models.SeasonTeam{}, domainerr.New("SEASON_NOT_DRAFT", domainerr.Unprocessable,
+			"cannot modify teams in an active season")
+	}
+
+	req.SeasonName = strings.TrimSpace(req.SeasonName)
+	if req.SeasonName == "" {
+		return models.SeasonTeam{}, domainerr.New("SEASON_NAME_REQUIRED", domainerr.InvalidInput,
+			"season_name is required")
+	}
+
+	if req.CaptainID != nil {
+		onRoster, err := s.store.CheckPlayerOnSeasonRoster(ctx, seasonID, teamID, *req.CaptainID)
+		if err != nil {
+			return models.SeasonTeam{}, err
+		}
+		if !onRoster {
+			return models.SeasonTeam{}, domainerr.New("CAPTAIN_NOT_ON_ROSTER", domainerr.InvalidInput,
+				"captain must be on this team's season roster")
+		}
+	}
+
+	if err := s.store.UpdateSeasonTeamMeta(ctx, seasonID, teamID, req.SeasonName, req.CaptainID); err != nil {
+		if errors.Is(err, ErrTeamNotInSeason) {
+			return models.SeasonTeam{}, domainerr.New("SEASON_TEAM_NOT_FOUND", domainerr.NotFound, err.Error())
+		}
+		return models.SeasonTeam{}, err
+	}
+	return s.store.GetSeasonTeam(ctx, seasonID, teamID)
+}
+
+// CreateByeRequest validates and inserts a bye request for the season.
+// Returns ErrNotFound (wrapped) when the season does not exist.
+// Returns domainerr.InvalidInput for validation failures.
+func (s *SeasonService) CreateByeRequest(ctx context.Context, seasonID int64, req CreateByeRequestInput) (models.ByeRequest, error) {
+	meta, err := s.getMeta(ctx, seasonID)
+	if err != nil {
+		return models.ByeRequest{}, err
+	}
+
+	count, err := s.store.CountParticipatingTeams(ctx, seasonID, meta.LeagueID, meta.TeamsManaged)
+	if err != nil {
+		return models.ByeRequest{}, err
+	}
+	if count%2 == 0 {
+		return models.ByeRequest{}, domainerr.New("BYE_EVEN_TEAMS", domainerr.InvalidInput,
+			fmt.Sprintf("bye requests require an odd number of teams (%d teams — even)", count))
+	}
+
+	teamLeagueID, err := s.store.GetTeamLeagueID(ctx, req.TeamID)
+	if err != nil || teamLeagueID != meta.LeagueID {
+		return models.ByeRequest{}, domainerr.New("BYE_TEAM_NOT_IN_LEAGUE", domainerr.InvalidInput,
+			"team does not belong to this season's league")
+	}
+
+	if meta.TeamsManaged {
+		inSeason, err := s.store.CheckTeamInSeason(ctx, seasonID, req.TeamID)
+		if err != nil {
+			return models.ByeRequest{}, err
+		}
+		if !inSeason {
+			return models.ByeRequest{}, domainerr.New("BYE_TEAM_NOT_IN_SEASON", domainerr.InvalidInput,
+				"team is not registered in this season")
+		}
+	}
+
+	dup, err := s.store.HasDuplicateBye(ctx, seasonID, req.TeamID, req.WeekNumber)
+	if err != nil {
+		return models.ByeRequest{}, err
+	}
+	if dup {
+		return models.ByeRequest{}, domainerr.New("BYE_DUPLICATE", domainerr.InvalidInput,
+			"a bye request already exists for this team and week")
+	}
+
+	return s.store.InsertByeRequest(ctx, seasonID, req.TeamID, req.WeekNumber, req.Reason)
+}
+
+// UpdateByeRequest sets the approved flag on a bye request.
+// Returns domainerr.NotFound when the bye does not exist in the season.
+// Returns domainerr.InvalidInput when approving a week-0 (TBD) request or
+// when another team already has an approved bye for the same week.
+func (s *SeasonService) UpdateByeRequest(ctx context.Context, seasonID, byeID int64, approve bool) (models.ByeRequest, error) {
+	bye, err := s.store.GetByeRequest(ctx, seasonID, byeID)
+	if err != nil {
+		if errors.Is(err, ErrByeNotFound) {
+			return models.ByeRequest{}, domainerr.New("BYE_NOT_FOUND", domainerr.NotFound, "bye request not found")
+		}
+		return models.ByeRequest{}, err
+	}
+
+	if approve && bye.WeekNumber == 0 {
+		return models.ByeRequest{}, domainerr.New("BYE_WEEK_ZERO", domainerr.InvalidInput,
+			"cannot approve a TBD (week 0) request; set a specific week first")
+	}
+
+	if approve {
+		conflict, err := s.store.HasByeConflict(ctx, seasonID, bye.WeekNumber, byeID)
+		if err != nil {
+			return models.ByeRequest{}, err
+		}
+		if conflict {
+			return models.ByeRequest{}, domainerr.New("BYE_CONFLICT", domainerr.InvalidInput,
+				fmt.Sprintf("another team already has an approved bye for week %d; unapprove it first", bye.WeekNumber))
+		}
+	}
+
+	updated, err := s.store.SetByeApproval(ctx, seasonID, byeID, approve)
+	if err != nil {
+		if errors.Is(err, ErrByeNotFound) {
+			return models.ByeRequest{}, domainerr.New("BYE_NOT_FOUND", domainerr.NotFound, "bye request not found")
+		}
+		return models.ByeRequest{}, err
+	}
+	return updated, nil
 }
 
 // getMeta fetches the season meta and converts sql.ErrNoRows to ErrNotFound.
