@@ -71,6 +71,14 @@ type RoundManager interface {
 	ClearResults(ctx context.Context, matchID int64) error
 }
 
+// MatchManager handles match listing, detail retrieval, and team assignment.
+// Routes are registered only when non-nil.
+type MatchManager interface {
+	ListMatches(ctx context.Context, req matches.ListMatchesRequest) ([]models.Match, error)
+	GetMatch(ctx context.Context, id int64) (models.MatchDetail, error)
+	AssignMatchTeams(ctx context.Context, id int64, homeTeamID, awayTeamID *int64) error
+}
+
 // ScheduleManager handles schedule generation for a season.
 type ScheduleManager interface {
 	GenerateSchedule(ctx context.Context, req matches.GenerateRequest) (matches.GenerateResult, error)
@@ -115,6 +123,9 @@ type Dependencies struct {
 	// SeasonMgr handles season lifecycle: activation, checklist, previous-season.
 	// Required: Register panics if nil.
 	SeasonMgr SeasonManager
+	// MatchMgr handles match listing, detail retrieval, and team assignment.
+	// Routes are registered only when non-nil.
+	MatchMgr MatchManager
 	// ScheduleMgr handles schedule generation.
 	// Routes are registered only when non-nil.
 	ScheduleMgr ScheduleManager

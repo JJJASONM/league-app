@@ -144,15 +144,24 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	})
 
 	// Matches — scoped to ?season_id= (season implies league)
-	mux.HandleFunc("GET /api/matches", listMatches)
+	if deps.MatchMgr != nil {
+		matchMgr := deps.MatchMgr
+		mux.HandleFunc("GET /api/matches", func(w http.ResponseWriter, r *http.Request) {
+			listMatches(w, r, matchMgr)
+		})
+		mux.HandleFunc("GET /api/matches/{id}", func(w http.ResponseWriter, r *http.Request) {
+			getMatch(w, r, matchMgr)
+		})
+		mux.HandleFunc("PATCH /api/matches/{id}/assign", func(w http.ResponseWriter, r *http.Request) {
+			assignMatchTeams(w, r, matchMgr)
+		})
+	}
 	if deps.ScheduleMgr != nil {
 		scheduleMgr := deps.ScheduleMgr
 		mux.HandleFunc("POST /api/matches/generate", func(w http.ResponseWriter, r *http.Request) {
 			generateSchedule(w, r, scheduleMgr)
 		})
 	}
-	mux.HandleFunc("GET /api/matches/{id}", getMatch)
-	mux.HandleFunc("PATCH /api/matches/{id}/assign", assignMatchTeams)
 
 	// Lineup plans — pre-game slot assignments per team/week
 	mux.HandleFunc("GET /api/lineup-plans", listLineupPlans)
@@ -927,52 +936,20 @@ func activateSeason(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 
 // ─── Matches ─────────────────────────────────────────────────────────────────
 
-// matchSelectCols is the standard column list for match queries.
-// Uses LEFT JOIN so unassigned (blanket) slots with NULL team IDs are included.
-const matchSelect = `
-	SELECT m.id, m.season_id,
-	       COALESCE(m.home_team_id,0), COALESCE(ht.name,'(unassigned)'),
-	       COALESCE(m.away_team_id,0), COALESCE(at.name,'(unassigned)'),
-	       m.match_date, m.week_number, m.completed, m.created_at
-	FROM matches m
-	LEFT JOIN teams ht ON ht.id = m.home_team_id
-	LEFT JOIN teams at ON at.id = m.away_team_id`
-
-func listMatches(w http.ResponseWriter, r *http.Request) {
-	seasonID := qparam(r, "season_id")
-	leagueID := qparam(r, "league_id")
-
-	var rows *sql.Rows
-	var err error
-	switch {
-	case seasonID != "":
-		rows, err = db.DB.Query(matchSelect+` WHERE m.season_id=? ORDER BY m.week_number, m.id`, seasonID)
-	case leagueID != "":
-		rows, err = db.DB.Query(matchSelect+`
-			JOIN seasons s ON s.id = m.season_id
-			WHERE s.league_id=? ORDER BY m.week_number, m.id`, leagueID)
-	default:
-		rows, err = db.DB.Query(matchSelect + ` ORDER BY m.week_number, m.id`)
+func listMatches(w http.ResponseWriter, r *http.Request, mgr MatchManager) {
+	req := matches.ListMatchesRequest{}
+	if v, ok := qparamInt(r, "season_id"); ok {
+		req.SeasonID = v
 	}
+	if v, ok := qparamInt(r, "league_id"); ok {
+		req.LeagueID = v
+	}
+	ms, err := mgr.ListMatches(r.Context(), req)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapMatchErr(w, err)
 		return
 	}
-	defer rows.Close()
-	var matches []models.Match
-	for rows.Next() {
-		var m models.Match
-		var completed int
-		rows.Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
-			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt)
-		m.Completed = completed == 1
-		m.MatchDate = normDatePtr(m.MatchDate)
-		matches = append(matches, m)
-	}
-	if matches == nil {
-		matches = []models.Match{}
-	}
-	jsonOK(w, matches)
+	jsonOK(w, ms)
 }
 
 func generateSchedule(w http.ResponseWriter, r *http.Request, mgr ScheduleManager) {
@@ -1007,7 +984,7 @@ func mapScheduleErr(w http.ResponseWriter, err error) {
 }
 
 // assignMatchTeams assigns home/away teams to a blanket (unassigned) match slot.
-func assignMatchTeams(w http.ResponseWriter, r *http.Request) {
+func assignMatchTeams(w http.ResponseWriter, r *http.Request, mgr MatchManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -1018,13 +995,28 @@ func assignMatchTeams(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	_, err = db.DB.Exec(`UPDATE matches SET home_team_id=?, away_team_id=? WHERE id=?`,
-		req.HomeTeamID, req.AwayTeamID, id)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.AssignMatchTeams(r.Context(), id, req.HomeTeamID, req.AwayTeamID); err != nil {
+		mapMatchErr(w, err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "assigned"})
+}
+
+// mapMatchErr translates match domain errors to HTTP responses.
+func mapMatchErr(w http.ResponseWriter, err error) {
+	var de *domainerr.Err
+	if errors.As(err, &de) {
+		switch de.Category {
+		case domainerr.NotFound:
+			jsonError(w, de.Message, http.StatusNotFound)
+		case domainerr.InvalidInput:
+			jsonError(w, de.Message, http.StatusBadRequest)
+		default:
+			jsonError(w, de.Message, http.StatusInternalServerError)
+		}
+		return
+	}
+	jsonError(w, err.Error(), http.StatusInternalServerError)
 }
 
 // ─── Rule Definitions ─────────────────────────────────────────────────────────
@@ -1282,44 +1274,18 @@ func deleteByeRequest(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
-func getMatch(w http.ResponseWriter, r *http.Request) {
+func getMatch(w http.ResponseWriter, r *http.Request, mgr MatchManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var m models.Match
-	var completed int
-	err = db.DB.QueryRow(matchSelect+` WHERE m.id=?`, id).Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
-		&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt)
+	detail, err := mgr.GetMatch(r.Context(), id)
 	if err != nil {
-		jsonError(w, "match not found", 404)
+		mapMatchErr(w, err)
 		return
 	}
-	m.Completed = completed == 1
-	m.MatchDate = normDatePtr(m.MatchDate)
-	resRows, err := db.DB.Query(`
-		SELECT mr.id, mr.match_id, mr.player_id,
-		       p.first_name || ' ' || p.last_name, mr.team_id,
-		       mr.sets_won, mr.sets_lost, mr.games_won, mr.games_lost, mr.diff, mr.created_at
-		FROM match_results mr JOIN players p ON p.id = mr.player_id
-		WHERE mr.match_id=?`, id)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer resRows.Close()
-	var results []models.MatchResult
-	for resRows.Next() {
-		var res models.MatchResult
-		resRows.Scan(&res.ID, &res.MatchID, &res.PlayerID, &res.PlayerName, &res.TeamID,
-			&res.SetsWon, &res.SetsLost, &res.GamesWon, &res.GamesLost, &res.Diff, &res.CreatedAt)
-		results = append(results, res)
-	}
-	if results == nil {
-		results = []models.MatchResult{}
-	}
-	jsonOK(w, models.MatchDetail{Match: m, Results: results})
+	jsonOK(w, detail)
 }
 
 func submitResults(w http.ResponseWriter, r *http.Request, mgr RoundManager) {

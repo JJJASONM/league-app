@@ -83,6 +83,20 @@ func (n *noopScheduleMgr) GenerateSchedule(_ context.Context, _ matches.Generate
 	return matches.GenerateResult{}, nil
 }
 
+// noopMatchMgr satisfies handlers.MatchManager for tests that don't exercise
+// match listing, detail, or team assignment.
+type noopMatchMgr struct{}
+
+func (n *noopMatchMgr) ListMatches(_ context.Context, _ matches.ListMatchesRequest) ([]models.Match, error) {
+	return []models.Match{}, nil
+}
+func (n *noopMatchMgr) GetMatch(_ context.Context, _ int64) (models.MatchDetail, error) {
+	return models.MatchDetail{}, nil
+}
+func (n *noopMatchMgr) AssignMatchTeams(_ context.Context, _ int64, _, _ *int64) error {
+	return nil
+}
+
 // testServer initializes a fresh SQLite database in a temp directory and
 // returns a running test HTTP server with all routes registered.
 // The DB connection and server are closed automatically when the test ends.
@@ -107,7 +121,9 @@ func testServer(t *testing.T) *httptest.Server {
 	seasonSvc := seasons.NewSeasonService(seasonStore)
 	scheduleStore := sqlite.NewScheduleStore(db.DB)
 	scheduleSvc := matches.NewScheduleService(scheduleStore)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, SeasonMgr: seasonSvc, ScheduleMgr: scheduleSvc}
+	matchStore := sqlite.NewMatchStore(db.DB)
+	matchSvc := matches.NewMatchService(matchStore)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, SeasonMgr: seasonSvc, ScheduleMgr: scheduleSvc, MatchMgr: matchSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
