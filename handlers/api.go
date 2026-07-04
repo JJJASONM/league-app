@@ -17,14 +17,12 @@ import (
 	"league_app/backend/domains/seasons"
 	"league_app/backend/validation"
 	"league_app/db"
-	"league_app/logic"
 	"league_app/models"
 	"log"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Register mounts all API routes onto mux.
@@ -147,7 +145,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 
 	// Matches — scoped to ?season_id= (season implies league)
 	mux.HandleFunc("GET /api/matches", listMatches)
-	mux.HandleFunc("POST /api/matches/generate", generateSchedule)
+	if deps.ScheduleMgr != nil {
+		scheduleMgr := deps.ScheduleMgr
+		mux.HandleFunc("POST /api/matches/generate", func(w http.ResponseWriter, r *http.Request) {
+			generateSchedule(w, r, scheduleMgr)
+		})
+	}
 	mux.HandleFunc("GET /api/matches/{id}", getMatch)
 	mux.HandleFunc("PATCH /api/matches/{id}/assign", assignMatchTeams)
 
@@ -972,202 +975,35 @@ func listMatches(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, matches)
 }
 
-func generateSchedule(w http.ResponseWriter, r *http.Request) {
-	var req models.GenerateScheduleRequest
+func generateSchedule(w http.ResponseWriter, r *http.Request, mgr ScheduleManager) {
+	var req matches.GenerateRequest
 	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	if req.ScheduleType == "" {
-		req.ScheduleType = "double_rr"
-	}
-
-	// Parse start date
-	startDate, _ := time.Parse("2006-01-02", req.StartDate)
-
-	// Parse skip dates — accept YYYY-MM-DD or ISO timestamp (driver may return either)
-	var skipDates []time.Time
-	for _, ds := range req.SkipDates {
-		ds = normDateStr(ds)
-		if t, err := time.Parse("2006-01-02", ds); err == nil {
-			skipDates = append(skipDates, t)
-		}
-	}
-	// Load approved bye requests (specific week only) to influence team rotation.
-	byeByWeek := make(map[int]int64)
-	byeRows, _ := db.DB.Query(
-		`SELECT team_id, week_number FROM bye_requests WHERE season_id=? AND approved=1 AND week_number > 0`,
-		req.SeasonID)
-	if byeRows != nil {
-		for byeRows.Next() {
-			var tid int64
-			var wn int
-			byeRows.Scan(&tid, &wn)
-			byeByWeek[wn] = tid
-		}
-		byeRows.Close()
-	}
-
-	opts := logic.ScheduleOptions{
-		StartDate: startDate,
-		SkipDates: skipDates,
-		NumWeeks:  req.NumWeeks,
-		ByeByWeek: byeByWeek,
-	}
-
-	var entries []logic.ScheduleEntry
-	var genErr error
-
-	if req.ScheduleType == "blanket" {
-		// Blank template — no teams assigned yet
-		mpw := req.MatchesPerWeek
-		if mpw < 1 {
-			mpw = 1
-		}
-		entries, genErr = logic.BlanketTemplate(req.NumWeeks, mpw, opts)
-	} else {
-		// Collect team IDs
-		var teamIDs []int64
-		if req.FromSeasonID > 0 {
-			// Prior-season schedule inference is legacy-only; managed seasons always use season_teams.
-			var genTeamsManaged int
-			db.DB.QueryRow(`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, req.SeasonID).Scan(&genTeamsManaged)
-			if genTeamsManaged == 1 {
-				jsonError(w, "managed seasons generate from season_teams; from_season_id is not supported", 400)
-				return
-			}
-			// Legacy: use teams that appeared in a prior season's schedule.
-			rows, err := db.DB.Query(`
-				SELECT DISTINCT home_team_id FROM matches WHERE season_id=? AND home_team_id IS NOT NULL
-				UNION
-				SELECT DISTINCT away_team_id FROM matches WHERE season_id=? AND away_team_id IS NOT NULL`,
-				req.FromSeasonID, req.FromSeasonID)
-			if err != nil {
-				jsonError(w, err.Error(), 500)
-				return
-			}
-			for rows.Next() {
-				var id int64
-				rows.Scan(&id)
-				teamIDs = append(teamIDs, id)
-			}
-			rows.Close()
-		} else {
-			// Managed seasons always use season_teams; legacy seasons fall back to all league teams.
-			var teamsManaged int
-			db.DB.QueryRow(`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, req.SeasonID).Scan(&teamsManaged)
-			var stRows *sql.Rows
-			var stErr error
-			var stCount int
-			db.DB.QueryRow(`SELECT COUNT(*) FROM season_teams WHERE season_id=?`, req.SeasonID).Scan(&stCount)
-			if teamsManaged == 1 {
-				if stCount == 0 {
-					jsonError(w, "no teams registered in this season; add teams before generating a schedule", 400)
-					return
-				}
-				stRows, stErr = db.DB.Query(
-					`SELECT team_id FROM season_teams WHERE season_id=? ORDER BY id`, req.SeasonID)
-			} else if stCount > 0 {
-				stRows, stErr = db.DB.Query(
-					`SELECT team_id FROM season_teams WHERE season_id=? ORDER BY id`, req.SeasonID)
-			} else {
-				stRows, stErr = db.DB.Query(`
-					SELECT t.id FROM teams t
-					JOIN seasons s ON s.league_id = t.league_id
-					WHERE s.id=? ORDER BY t.id`, req.SeasonID)
-			}
-			if stErr != nil {
-				jsonError(w, stErr.Error(), 500)
-				return
-			}
-			for stRows.Next() {
-				var id int64
-				stRows.Scan(&id)
-				teamIDs = append(teamIDs, id)
-			}
-			stRows.Close()
-		}
-		if len(teamIDs) < 2 {
-			jsonError(w, "need at least 2 teams in this league to generate a schedule", 400)
-			return
-		}
-
-		switch req.ScheduleType {
-		case "single_rr":
-			entries, genErr = logic.SingleRoundRobin(teamIDs, opts)
-		case "split":
-			entries, genErr = logic.SplitSeason(teamIDs, opts)
-		case "custom":
-			if req.NumWeeks < 1 {
-				jsonError(w, "num_weeks is required for custom schedule", 400)
-				return
-			}
-			entries, genErr = logic.CustomSchedule(teamIDs, opts)
-		default: // "double_rr"
-			entries, genErr = logic.DoubleRoundRobin(teamIDs, opts)
-		}
-	}
-
-	if genErr != nil {
-		jsonError(w, genErr.Error(), 400)
-		return
-	}
-
-	tx, err := db.DB.Begin()
+	result, err := mgr.GenerateSchedule(r.Context(), req)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapScheduleErr(w, err)
 		return
 	}
-	defer tx.Rollback()
-
-	// Delete only unplayed matches so completed results are preserved
-	tx.Exec(`DELETE FROM matches WHERE season_id=? AND completed=0`, req.SeasonID)
-
-	stmt, err := tx.Prepare(
-		`INSERT INTO matches (season_id, home_team_id, away_team_id, match_date, week_number) VALUES (?,?,?,?,?)`)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer stmt.Close()
-
-	var lastDate string
-	for _, e := range entries {
-		var hid, aid any
-		if e.HomeTeamID != 0 {
-			hid = e.HomeTeamID
-		}
-		if e.AwayTeamID != 0 {
-			aid = e.AwayTeamID
-		}
-		if _, err := stmt.Exec(req.SeasonID, hid, aid, nullStr(e.MatchDate), e.WeekNumber); err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		if e.MatchDate > lastDate {
-			lastDate = e.MatchDate
-		}
-	}
-
-	// Update season: schedule_type, num_weeks, end_date; reset stale flag
-	tx.Exec(`UPDATE seasons SET schedule_type=?, num_weeks=?, end_date=?, schedule_stale=0 WHERE id=?`,
-		req.ScheduleType, req.NumWeeks, nullStr(lastDate), req.SeasonID)
-
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	jsonOK(w, map[string]any{
-		"matches_created": len(entries),
-		"end_date":        lastDate,
-	})
+	jsonOK(w, result)
 }
 
-func nullStr(s string) any {
-	if s == "" {
-		return nil
+// mapScheduleErr translates schedule domain errors to HTTP responses.
+func mapScheduleErr(w http.ResponseWriter, err error) {
+	var de *domainerr.Err
+	if errors.As(err, &de) {
+		switch de.Category {
+		case domainerr.NotFound:
+			jsonError(w, de.Message, http.StatusNotFound)
+		case domainerr.InvalidInput:
+			jsonError(w, de.Message, http.StatusBadRequest)
+		default:
+			jsonError(w, de.Message, http.StatusInternalServerError)
+		}
+		return
 	}
-	return s
+	jsonError(w, err.Error(), http.StatusInternalServerError)
 }
 
 // assignMatchTeams assigns home/away teams to a blanket (unassigned) match slot.

@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.3`
-**Last reviewed:** `2026-07-01`
+**Current version:** `0.4`
+**Last reviewed:** `2026-07-03`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -1338,6 +1338,90 @@ saveRounds handler
 - The `seasons.RosterEligible` pre-TX guard in `saveRounds` handler (intentional;
   see B3 decision Q-B3-3)
 - Route or JSON shape changes
+
+## Phase A — Schedule Generation Extraction (implemented 2026-07-03)
+
+### Goal
+
+Extract the `generateSchedule` handler from `handlers/api.go` into a dedicated
+`ScheduleService` and `ScheduleStore` domain boundary within the `matches` package.
+No route path, JSON shape, or runtime behavior changed.
+
+### New files
+
+| File | Role |
+|------|------|
+| `backend/domains/matches/schedule_store.go` | `ScheduleStore` interface; `ScheduleSeasonMeta`, `MatchEntry`, `SaveScheduleRequest`, `ErrSeasonNotFound` types |
+| `backend/domains/matches/schedule_service.go` | `ScheduleService`, `GenerateRequest`, `GenerateResult`, `NewScheduleService` |
+| `backend/domains/matches/schedule_service_test.go` | 10 unit tests with `stubScheduleStore` |
+| `backend/storage/sqlite/schedule_store.go` | SQLite implementation of `ScheduleStore` (5 methods) |
+| `backend/storage/sqlite/schedule_store_test.go` | 10 integration tests |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `handlers/deps.go` | `ScheduleManager` interface + `ScheduleMgr ScheduleManager` field on `Dependencies` |
+| `handlers/api.go` | `generateSchedule` replaced with ≤10-line thin wrapper; route closure added; `mapScheduleErr` added; `logic` and `time` imports removed; ~190 lines removed |
+| `handlers/api_test.go` | `noopScheduleMgr` stub; `testServer()` wires real `ScheduleService` |
+| `handlers/api_apply_auth_test.go` | `noopScheduleMgr` stub; `matches` import added |
+| `handlers/api_apply_c1_test.go` | `testServerWithApplyAuth()` wires real `ScheduleService` |
+| `main.go` | `sqlite.NewScheduleStore` → `matches.NewScheduleService` → `deps.ScheduleMgr` |
+| `models/models.go` | `GenerateScheduleRequest` removed (replaced by `matches.GenerateRequest`) |
+
+### Architecture
+
+```
+POST /api/matches/generate
+  → generateSchedule handler (parse body, delegate, map error)
+      → deps.ScheduleMgr.GenerateSchedule (ScheduleManager interface)
+          → matches.ScheduleService.GenerateSchedule
+              → store.GetScheduleSeasonMeta  (season exists + managed flag)
+              → store.LoadByeRequests        (approved byes with specific weeks)
+              → store.LoadTeamIDsFromHistory (legacy from_season_id path)
+              → store.LoadTeamIDsForSchedule (season_teams or league fallback)
+              → logic.BlanketTemplate / SingleRoundRobin / DoubleRoundRobin /
+                       SplitSeason / CustomSchedule  (pure functions)
+              → store.SaveGeneratedSchedule  (TX: delete unplayed, insert, update season)
+```
+
+### Key design decisions
+
+**ScheduleStore in `matches` package, not `seasons`:** The primary output is
+`matches` records. The route is `POST /api/matches/generate`. This keeps the
+domain boundary consistent with `WeekStore` and `RoundStore`.
+
+**`MatchEntry` domain type:** The store interface uses `matches.MatchEntry` rather
+than `logic.ScheduleEntry` to keep the SQLite adapter free of `logic` imports.
+The service converts between the two — the conversion is trivial (identical fields).
+
+**`ErrSeasonNotFound` sentinel:** Defined in the `matches` package (not `seasons`)
+to keep packages independent. The service translates it to `domainerr.NotFound`.
+
+**`normDate` private helper in service:** The SQLite driver sometimes returns DATE
+columns as full ISO timestamps. `normDate` (same logic as handler's `normDateStr`)
+is a package-private helper in `schedule_service.go`. The handler's `normDateStr`
+is retained for the `listSkippedWeeks` handler which still uses it.
+
+**Route registered conditionally (`if deps.ScheduleMgr != nil`):** Matches the
+pattern established by `WeekMgr` and `RoundMgr`. Always wired in production
+(`main.go`) and in the two full test servers (`testServer`, `testServerWithApplyAuth`).
+
+**`models.GenerateScheduleRequest` removed:** Was only referenced by the old handler.
+Replaced by `matches.GenerateRequest` with identical JSON field names — no API break.
+
+### Accepted debt
+
+- `logic` and `time` were removed from `handlers/api.go` imports as they were
+  exclusively used by the old handler body.
+- `nullStr` helper (previously used only by `generateSchedule`) was removed with
+  the handler. The SQLite store inlines the equivalent `nil`-or-value logic directly.
+
+### Not in Phase A
+
+- Route or JSON shape changes
+- Schedule preview / pushback workflow
+- Auth changes
 
 ## Decision History
 

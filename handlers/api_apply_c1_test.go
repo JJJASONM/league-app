@@ -45,6 +45,8 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 	ruleSvc := rules.NewRuleService(ruleStore)
 	seasonStore := sqlite.NewSeasonStore(db.DB)
 	seasonSvc := seasons.NewSeasonService(seasonStore)
+	scheduleStore := sqlite.NewScheduleStore(db.DB)
+	scheduleSvc := matches.NewScheduleService(scheduleStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
@@ -54,6 +56,7 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 		RoundMgr:        roundSvc,
 		RuleMgr:         ruleSvc,
 		SeasonMgr:       seasonSvc,
+		ScheduleMgr:     scheduleSvc,
 	}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)

@@ -399,17 +399,6 @@ type SaveRoundsRequest struct {
 	Rounds []RoundResult `json:"rounds"`
 }
 
-// GenerateScheduleRequest is the body for POST /api/matches/generate.
-type GenerateScheduleRequest struct {
-	SeasonID     int64    `json:"season_id"`
-	StartDate    string   `json:"start_date"`    // YYYY-MM-DD
-	ScheduleType string   `json:"schedule_type"` // "single_rr"|"double_rr"|"split"|"custom"|"blanket"
-	NumWeeks     int      `json:"num_weeks"`     // for "custom" and "blanket"
-	MatchesPerWeek int    `json:"matches_per_week"` // for "blanket" only
-	SkipDates    []string `json:"skip_dates"`    // YYYY-MM-DD dates to skip
-	FromSeasonID int64    `json:"from_season_id"` // use teams from this season's schedule (0 = all league teams)
-}
-
 // AssignMatchTeamsRequest is the body for PATCH /api/matches/{id}/assign.
 type AssignMatchTeamsRequest struct {
 	HomeTeamID *int64 `json:"home_team_id"` // nil clears the assignment
