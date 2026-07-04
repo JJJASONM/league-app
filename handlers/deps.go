@@ -111,6 +111,11 @@ type SeasonManager interface {
 	RemoveRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) error
 	ListAvailablePlayers(ctx context.Context, seasonID int64) ([]models.Player, error)
 	ListSeasonTeams(ctx context.Context, seasonID int64) ([]models.SeasonTeam, error)
+	ListSeasons(ctx context.Context, leagueID *int64) ([]models.Season, error)
+	GetSeason(ctx context.Context, seasonID int64) (models.Season, error)
+	CreateSeason(ctx context.Context, input seasons.CreateSeasonInput) (models.Season, error)
+	UpdateSeason(ctx context.Context, seasonID int64, input seasons.UpdateSeasonInput) (models.Season, error)
+	DeleteSeason(ctx context.Context, seasonID int64) error
 	ListSkippedWeeks(ctx context.Context, seasonID int64) ([]models.SkippedWeek, error)
 	CreateSkippedWeek(ctx context.Context, seasonID int64, skipDate, reason string) (models.SkippedWeek, error)
 	DeleteSkippedWeek(ctx context.Context, id int64) error

@@ -248,4 +248,42 @@ type SeasonStore interface {
 	// DeleteByeRequest deletes a bye request scoped to the season.
 	// Returns ErrByeNotFound (wrapped) when the request does not exist in the season.
 	DeleteByeRequest(ctx context.Context, seasonID, byeID int64) error
+
+	// ── Season CRUD ───────────────────────────────────────────────────────────────
+
+	// ListSeasons returns all seasons, optionally filtered by leagueID.
+	// Returns a non-nil empty slice when none exist.
+	ListSeasons(ctx context.Context, leagueID *int64) ([]models.Season, error)
+
+	// GetSeason returns the season by ID.
+	// Returns ErrNotFound (wrapped) when no row exists.
+	GetSeason(ctx context.Context, seasonID int64) (models.Season, error)
+
+	// CreateSeason inserts a new season record and returns it with all stored fields.
+	CreateSeason(ctx context.Context, input CreateSeasonInput) (models.Season, error)
+
+	// UpdateSeason updates mutable season fields and returns the full stored row.
+	// Returns ErrNotFound (wrapped) when no row exists.
+	UpdateSeason(ctx context.Context, seasonID int64, input UpdateSeasonInput) (models.Season, error)
+
+	// DeleteSeason removes the season record by ID. No error is returned when the
+	// row does not exist (cascading deletes handle child rows).
+	DeleteSeason(ctx context.Context, seasonID int64) error
+}
+
+// CreateSeasonInput carries the user-supplied fields for season creation.
+type CreateSeasonInput struct {
+	LeagueID     int64
+	Name         string
+	StartDate    *string
+	ScheduleType string
+	NumWeeks     int
+}
+
+// UpdateSeasonInput carries the mutable fields for a season update.
+type UpdateSeasonInput struct {
+	Name         string
+	StartDate    *string
+	ScheduleType string
+	NumWeeks     int
 }

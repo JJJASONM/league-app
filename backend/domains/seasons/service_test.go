@@ -91,6 +91,20 @@ type stubSeasonStore struct {
 	byeList       []models.ByeRequest
 	byeListErr    error
 	deleteByeErr  error
+
+	// season CRUD stubs
+	seasonList         []models.Season
+	seasonListErr      error
+	season             models.Season
+	seasonErr          error
+	createdSeason      models.Season
+	createSeasonErr    error
+	createSeasonFn     func(seasons.CreateSeasonInput) (models.Season, error)
+	updatedSeason      models.Season
+	updateSeasonErr    error
+	updateSeasonFn     func(seasons.UpdateSeasonInput) (models.Season, error)
+	deleteSeasonCalled bool
+	deleteSeasonErr    error
 }
 
 func (s *stubSeasonStore) IsDraft(_ context.Context, _ int64) (bool, error) {
@@ -223,6 +237,31 @@ func (s *stubSeasonStore) ListByeRequests(_ context.Context, _ int64) ([]models.
 }
 func (s *stubSeasonStore) DeleteByeRequest(_ context.Context, _, _ int64) error {
 	return s.deleteByeErr
+}
+
+// ── season CRUD stubs ─────────────────────────────────────────────────────────
+
+func (s *stubSeasonStore) ListSeasons(_ context.Context, _ *int64) ([]models.Season, error) {
+	return s.seasonList, s.seasonListErr
+}
+func (s *stubSeasonStore) GetSeason(_ context.Context, _ int64) (models.Season, error) {
+	return s.season, s.seasonErr
+}
+func (s *stubSeasonStore) CreateSeason(_ context.Context, input seasons.CreateSeasonInput) (models.Season, error) {
+	if s.createSeasonFn != nil {
+		return s.createSeasonFn(input)
+	}
+	return s.createdSeason, s.createSeasonErr
+}
+func (s *stubSeasonStore) UpdateSeason(_ context.Context, _ int64, input seasons.UpdateSeasonInput) (models.Season, error) {
+	if s.updateSeasonFn != nil {
+		return s.updateSeasonFn(input)
+	}
+	return s.updatedSeason, s.updateSeasonErr
+}
+func (s *stubSeasonStore) DeleteSeason(_ context.Context, _ int64) error {
+	s.deleteSeasonCalled = true
+	return s.deleteSeasonErr
 }
 
 func newSvc(store *stubSeasonStore) *seasons.SeasonService {

@@ -79,12 +79,22 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	mux.HandleFunc("DELETE /api/teams/{id}", deleteTeam)
 
 	// Seasons — scoped to ?league_id=
-	mux.HandleFunc("GET /api/seasons", listSeasons)
-	mux.HandleFunc("POST /api/seasons", createSeason)
-	mux.HandleFunc("GET /api/seasons/{id}", getSeason)
-	mux.HandleFunc("PUT /api/seasons/{id}", updateSeason)
-	mux.HandleFunc("DELETE /api/seasons/{id}", deleteSeason)
 	seasonMgr := deps.SeasonMgr
+	mux.HandleFunc("GET /api/seasons", func(w http.ResponseWriter, r *http.Request) {
+		listSeasons(w, r, seasonMgr)
+	})
+	mux.HandleFunc("POST /api/seasons", func(w http.ResponseWriter, r *http.Request) {
+		createSeason(w, r, seasonMgr)
+	})
+	mux.HandleFunc("GET /api/seasons/{id}", func(w http.ResponseWriter, r *http.Request) {
+		getSeason(w, r, seasonMgr)
+	})
+	mux.HandleFunc("PUT /api/seasons/{id}", func(w http.ResponseWriter, r *http.Request) {
+		updateSeason(w, r, seasonMgr)
+	})
+	mux.HandleFunc("DELETE /api/seasons/{id}", func(w http.ResponseWriter, r *http.Request) {
+		deleteSeason(w, r, seasonMgr)
+	})
 	mux.HandleFunc("POST /api/seasons/{id}/activate", func(w http.ResponseWriter, r *http.Request) {
 		activateSeason(w, r, seasonMgr)
 	})
@@ -782,151 +792,97 @@ func deleteTeam(w http.ResponseWriter, r *http.Request) {
 
 // ─── Seasons — scoped to league_id ───────────────────────────────────────────
 
-const seasonCols = `id, league_id, name, start_date, end_date, active, schedule_type, num_weeks, COALESCE(schedule_stale,0), COALESCE(teams_managed,0), activated_at, created_at`
-
-func scanSeason(row interface{ Scan(...any) error }) (models.Season, error) {
-	var s models.Season
-	var active, stale, managed int
-	err := row.Scan(&s.ID, &s.LeagueID, &s.Name, &s.StartDate, &s.EndDate,
-		&active, &s.ScheduleType, &s.NumWeeks, &stale, &managed, &s.ActivatedAt, &s.CreatedAt)
-	s.Active = active == 1
-	s.ScheduleStale = stale == 1
-	s.TeamsManaged = managed == 1
-	if s.ScheduleType == "" {
-		s.ScheduleType = "double_rr"
-	}
-	// modernc.org/sqlite converts DATE columns to time.Time, which serialises to
-	// a full ISO-8601 timestamp. Trim to YYYY-MM-DD so date inputs work correctly.
-	s.StartDate = normDatePtr(s.StartDate)
-	s.EndDate = normDatePtr(s.EndDate)
-	return s, err
-}
-
-// normDatePtr trims a date pointer to YYYY-MM-DD, discarding any time component
-// added by the SQLite driver when it coerces DATE columns to time.Time.
-func normDatePtr(s *string) *string {
-	if s == nil || len(*s) <= 10 {
-		return s
-	}
-	v := (*s)[:10]
-	return &v
-}
-
-// normDateStr trims a date string to YYYY-MM-DD, discarding any time component.
-func normDateStr(s string) string {
-	if len(s) <= 10 {
-		return s
-	}
-	return s[:10]
-}
-
-func listSeasons(w http.ResponseWriter, r *http.Request) {
+func listSeasons(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	leagueID, hasLeague := qparamInt(r, "league_id")
-	var rows *sql.Rows
-	var err error
-	q := `SELECT ` + seasonCols + ` FROM seasons`
+	var lid *int64
 	if hasLeague {
-		rows, err = db.DB.Query(q+` WHERE league_id=? ORDER BY id DESC`, leagueID)
-	} else {
-		rows, err = db.DB.Query(q + ` ORDER BY league_id, id DESC`)
+		lid = &leagueID
 	}
+	seasons, err := mgr.ListSeasons(r.Context(), lid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
-	}
-	defer rows.Close()
-	var seasons []models.Season
-	for rows.Next() {
-		s, err := scanSeason(rows)
-		if err != nil {
-			continue
-		}
-		seasons = append(seasons, s)
-	}
-	if seasons == nil {
-		seasons = []models.Season{}
 	}
 	jsonOK(w, seasons)
 }
 
-func createSeason(w http.ResponseWriter, r *http.Request) {
-	var s models.Season
-	if err := decode(r, &s); err != nil {
+func createSeason(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
+	var body struct {
+		LeagueID     int64   `json:"league_id"`
+		Name         string  `json:"name"`
+		StartDate    *string `json:"start_date"`
+		ScheduleType string  `json:"schedule_type"`
+		NumWeeks     int     `json:"num_weeks"`
+	}
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	if strings.TrimSpace(s.Name) == "" {
-		jsonError(w, "name is required", 400)
-		return
-	}
-	if s.LeagueID == 0 {
-		jsonError(w, "league_id is required", 400)
-		return
-	}
-	if s.ScheduleType == "" {
-		s.ScheduleType = "double_rr"
-	}
-	res, err := db.DB.Exec(
-		`INSERT INTO seasons (league_id, name, start_date, schedule_type, num_weeks, teams_managed) VALUES (?,?,?,?,?,1)`,
-		s.LeagueID, s.Name, s.StartDate, s.ScheduleType, s.NumWeeks)
+	s, err := mgr.CreateSeason(r.Context(), seasons.CreateSeasonInput{
+		LeagueID:     body.LeagueID,
+		Name:         body.Name,
+		StartDate:    body.StartDate,
+		ScheduleType: body.ScheduleType,
+		NumWeeks:     body.NumWeeks,
+	})
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
 	}
-	s.ID, _ = res.LastInsertId()
-	s.TeamsManaged = true
-
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, s)
 }
 
-func getSeason(w http.ResponseWriter, r *http.Request) {
+func getSeason(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	row := db.DB.QueryRow(`SELECT `+seasonCols+` FROM seasons WHERE id=?`, id)
-	s, err := scanSeason(row)
+	s, err := mgr.GetSeason(r.Context(), id)
 	if err != nil {
-		jsonError(w, "season not found", 404)
+		mapSeasonErr(w, err)
 		return
 	}
 	jsonOK(w, s)
 }
 
-func updateSeason(w http.ResponseWriter, r *http.Request) {
+func updateSeason(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var s models.Season
-	if err := decode(r, &s); err != nil {
+	var body struct {
+		Name         string  `json:"name"`
+		StartDate    *string `json:"start_date"`
+		ScheduleType string  `json:"schedule_type"`
+		NumWeeks     int     `json:"num_weeks"`
+	}
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	if s.ScheduleType == "" {
-		s.ScheduleType = "double_rr"
-	}
-	_, err = db.DB.Exec(
-		`UPDATE seasons SET name=?, start_date=?, schedule_type=?, num_weeks=? WHERE id=?`,
-		s.Name, s.StartDate, s.ScheduleType, s.NumWeeks, id)
+	s, err := mgr.UpdateSeason(r.Context(), id, seasons.UpdateSeasonInput{
+		Name:         body.Name,
+		StartDate:    body.StartDate,
+		ScheduleType: body.ScheduleType,
+		NumWeeks:     body.NumWeeks,
+	})
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapSeasonErr(w, err)
 		return
 	}
-	s.ID = id
 	jsonOK(w, s)
 }
 
-func deleteSeason(w http.ResponseWriter, r *http.Request) {
+func deleteSeason(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	if _, err := db.DB.Exec(`DELETE FROM seasons WHERE id=?`, id); err != nil {
+	if err := mgr.DeleteSeason(r.Context(), id); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
@@ -1893,26 +1849,6 @@ func mapLineupErr(w http.ResponseWriter, err error) {
 }
 
 // ─── Season Teams ──────────────────────────────────────────────────────────────
-
-// seasonTeamRow scans one row from season_teams into a SeasonTeam.
-const seasonTeamSelect = `
-	SELECT st.id, st.season_id, st.team_id, t.name,
-	       COALESCE(t.team_number,''),
-	       CASE WHEN st.season_name != '' THEN st.season_name ELSE t.name END,
-	       st.captain_id,
-	       COALESCE(cp.first_name||' '||cp.last_name, ''),
-	       (SELECT COUNT(*) FROM season_rosters sr
-	        WHERE sr.season_id = st.season_id AND sr.team_id = st.team_id)
-	FROM season_teams st
-	JOIN teams t ON t.id = st.team_id
-	LEFT JOIN players cp ON cp.id = st.captain_id`
-
-func scanSeasonTeam(row interface{ Scan(...any) error }) (models.SeasonTeam, error) {
-	var st models.SeasonTeam
-	err := row.Scan(&st.ID, &st.SeasonID, &st.TeamID, &st.TeamName, &st.TeamNumber,
-		&st.SeasonName, &st.CaptainID, &st.CaptainName, &st.RosterCount)
-	return st, err
-}
 
 func listSeasonTeams(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
 	sid, err := pathID(r, "id")

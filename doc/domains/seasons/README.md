@@ -4,8 +4,8 @@
 
 **Owner:** `seasons`
 **Status:** `draft`
-**Current version:** `0.2`
-**Last reviewed:** `2026-07-02`
+**Current version:** `0.3`
+**Last reviewed:** `2026-07-04`
 
 The Seasons domain owns setup, activation, league-week workflow, closing,
 reopening, and final standings snapshots.
@@ -344,6 +344,90 @@ Phase B extracts the remaining 6 season-adjacent handlers that still used direct
 - `deleteByeRequest` previously returned 404 on missing row (direct Exec check).
   The new path uses `mgr.DeleteByeRequest` → `domainerr.NotFound` → `mapSeasonErr`
   → 404. Behaviour is preserved.
+
+### Backend Domain Boundary — Season CRUD Phase C (implemented 2026-07-04)
+
+Phase C extracts the five season CRUD handlers (`listSeasons`, `getSeason`,
+`createSeason`, `updateSeason`, `deleteSeason`) from `handlers/api.go` into the
+domain layer and deletes dead handler code that accumulated over earlier phases.
+
+**Endpoints extracted:**
+
+| Route | Handler |
+|-------|---------|
+| `GET /api/seasons` | `listSeasons` |
+| `GET /api/seasons/{id}` | `getSeason` |
+| `POST /api/seasons` | `createSeason` |
+| `PUT /api/seasons/{id}` | `updateSeason` |
+| `DELETE /api/seasons/{id}` | `deleteSeason` |
+
+**New store methods (SeasonStore interface):**
+
+- `ListSeasons(ctx, leagueID *int64)` — optional league filter; ordered by id DESC
+- `GetSeason(ctx, seasonID)` — full row; returns `ErrNotFound` (wrapped) for absent rows
+- `CreateSeason(ctx, CreateSeasonInput)` — inserts with `teams_managed=1`; returns stored row
+- `UpdateSeason(ctx, seasonID, UpdateSeasonInput)` — updates mutable fields; re-fetches and
+  returns full stored row; returns `ErrNotFound` (via `GetSeason`) when row absent
+- `DeleteSeason(ctx, seasonID)` — no error when row is absent
+
+**Input types (seasons package):**
+
+```go
+type CreateSeasonInput struct {
+    LeagueID     int64
+    Name         string
+    StartDate    *string
+    ScheduleType string
+    NumWeeks     int
+}
+
+type UpdateSeasonInput struct {
+    Name         string
+    StartDate    *string
+    ScheduleType string
+    NumWeeks     int
+}
+```
+
+**New service methods (SeasonService / SeasonManager interface):**
+
+- **ListSeasons** — delegates; ensures non-nil slice
+- **GetSeason** — propagates `ErrNotFound`
+- **CreateSeason** — validates name (non-empty) and `league_id` (non-zero); defaults
+  `schedule_type` to `"double_rr"` when blank
+- **UpdateSeason** — defaults `schedule_type` to `"double_rr"` when blank; delegates
+- **DeleteSeason** — delegates directly
+
+**Dead code deleted from `handlers/api.go`:**
+
+- `seasonCols` const — replaced by `seasonFullCols` in `backend/storage/sqlite/season_crud_store.go`
+- `scanSeason` func — replaced by `scanFullSeason` in the sqlite layer
+- `normDatePtr` func — no longer needed (callers pass `*string` directly)
+- `normDateStr` func — no longer needed
+- `seasonTeamSelect` const — moved into `season_team_store.go` in an earlier phase
+- `scanSeasonTeam` func — moved into `season_team_store.go` in an earlier phase
+
+**Bug fixed — `updateSeason` response:**
+
+The original handler responded with 200 and an empty body after updating. The new
+handler reads back the full stored row via `mgr.UpdateSeason` and returns it as JSON,
+matching the behaviour of `createSeason` and all other mutation endpoints.
+
+**SQLite constant note (`seasonFullCols`):**
+
+The column list is a Go string constant (compile-time concatenation with `+`) with
+a leading and trailing space, so it can be concatenated as:
+`"SELECT" + seasonFullCols + "FROM seasons"` without risking missing whitespace at
+the boundary. The list uses `strftime('%Y-%m-%d', col)` for `start_date`, `end_date`,
+and `activated_at` to prevent the driver from converting DATE text to `time.Time`.
+
+**New SQLite files:**
+- `backend/storage/sqlite/season_crud_store.go` — 5 store methods + `scanFullSeason`
+- `backend/storage/sqlite/season_crud_store_test.go` — 11 integration tests
+
+**New domain service files:**
+- `backend/domains/seasons/crud_service.go` — 5 service methods
+- `backend/domains/seasons/crud_service_test.go` — 13 unit tests using functional stubs
 
 ### Deferred
 
