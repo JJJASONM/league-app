@@ -87,6 +87,19 @@ func (n *noopSeasonMgr) ListAvailablePlayers(_ context.Context, _ int64) ([]mode
 func (n *noopSeasonMgr) ListSeasonTeams(_ context.Context, _ int64) ([]models.SeasonTeam, error) {
 	return []models.SeasonTeam{}, nil
 }
+func (n *noopSeasonMgr) ListSeasons(_ context.Context, _ *int64) ([]models.Season, error) {
+	return []models.Season{}, nil
+}
+func (n *noopSeasonMgr) GetSeason(_ context.Context, _ int64) (models.Season, error) {
+	return models.Season{}, nil
+}
+func (n *noopSeasonMgr) CreateSeason(_ context.Context, _ seasons.CreateSeasonInput) (models.Season, error) {
+	return models.Season{}, nil
+}
+func (n *noopSeasonMgr) UpdateSeason(_ context.Context, _ int64, _ seasons.UpdateSeasonInput) (models.Season, error) {
+	return models.Season{}, nil
+}
+func (n *noopSeasonMgr) DeleteSeason(_ context.Context, _ int64) error { return nil }
 func (n *noopSeasonMgr) ListSkippedWeeks(_ context.Context, _ int64) ([]models.SkippedWeek, error) {
 	return []models.SkippedWeek{}, nil
 }
