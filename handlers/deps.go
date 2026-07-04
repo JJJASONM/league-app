@@ -93,7 +93,8 @@ type LineupManager interface {
 }
 
 // SeasonManager handles season lifecycle: activation, checklist evaluation,
-// previous-season lookup, draft/stale checks, team management, and bye requests.
+// previous-season lookup, draft/stale checks, team management, bye requests,
+// and season roster operations.
 type SeasonManager interface {
 	Activate(ctx context.Context, seasonID int64) error
 	Checklist(ctx context.Context, seasonID int64) (models.SetupChecklist, error)
@@ -105,6 +106,10 @@ type SeasonManager interface {
 	UpdateTeam(ctx context.Context, seasonID, teamID int64, req seasons.UpdateTeamRequest) (models.SeasonTeam, error)
 	CreateByeRequest(ctx context.Context, seasonID int64, req seasons.CreateByeRequestInput) (models.ByeRequest, error)
 	UpdateByeRequest(ctx context.Context, seasonID, byeID int64, approve bool) (models.ByeRequest, error)
+	ListRoster(ctx context.Context, seasonID, teamID int64) ([]models.SeasonRosterEntry, error)
+	AddRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) (models.SeasonRosterEntry, error)
+	RemoveRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) error
+	ListAvailablePlayers(ctx context.Context, seasonID int64) ([]models.Player, error)
 }
 
 // Dependencies holds domain services injected into handlers at startup.

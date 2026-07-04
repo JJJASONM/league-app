@@ -23,6 +23,9 @@ var ErrByeNotFound = errors.New("bye request not found")
 // managed but the team was not registered in it.
 var ErrTeamNotInPriorSeason = errors.New("team did not participate in the previous season")
 
+// ErrRosterEntryNotFound is returned by DeleteRosterPlayer when the entry does not exist.
+var ErrRosterEntryNotFound = errors.New("roster entry not found")
+
 // SeasonMeta holds the season-level columns needed for lifecycle decisions.
 type SeasonMeta struct {
 	LeagueID      int64
@@ -191,4 +194,28 @@ type SeasonStore interface {
 	// SetByeApproval updates the approved flag on a bye request and returns the
 	// updated record. Returns ErrByeNotFound (wrapped) when not found in the season.
 	SetByeApproval(ctx context.Context, seasonID, byeID int64, approved bool) (models.ByeRequest, error)
+
+	// ── Roster management ────────────────────────────────────────────────────────
+
+	// ListRoster returns all players on a team's season roster, ordered by
+	// player last_name, first_name. Returns a non-nil empty slice when none exist.
+	ListRoster(ctx context.Context, seasonID, teamID int64) ([]models.SeasonRosterEntry, error)
+
+	// GetPlayerRosterTeam returns the team_id the player is currently rostered on
+	// in this season. found=false when the player is not rostered anywhere.
+	GetPlayerRosterTeam(ctx context.Context, seasonID, playerID int64) (teamID int64, found bool, err error)
+
+	// InsertOrGetRosterPlayer inserts the player into the team's season roster
+	// (INSERT OR IGNORE) and returns the full entry whether newly inserted or
+	// pre-existing.
+	InsertOrGetRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) (models.SeasonRosterEntry, error)
+
+	// DeleteRosterPlayer removes a player from a team's season roster and clears
+	// captain_id in season_teams if that player was captain. Returns
+	// ErrRosterEntryNotFound (wrapped) when the entry does not exist.
+	DeleteRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) error
+
+	// ListAvailablePlayers returns active players not already rostered in this
+	// season. Returns ErrNotFound (wrapped) when the season does not exist.
+	ListAvailablePlayers(ctx context.Context, seasonID int64) ([]models.Player, error)
 }
