@@ -3,7 +3,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/players"
 	"league_app/backend/domains/rules"
+	"league_app/backend/domains/teams"
 	"league_app/backend/domains/seasons"
 	"league_app/backend/validation"
 	"league_app/db"
@@ -71,6 +71,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	if v := reflect.ValueOf(deps.PlayerMgr); v.Kind() == reflect.Ptr && v.IsNil() {
 		panic("handlers.Register: deps.PlayerMgr must not be a typed nil")
 	}
+	if deps.TeamMgr == nil {
+		panic("handlers.Register: deps.TeamMgr must not be nil")
+	}
+	if v := reflect.ValueOf(deps.TeamMgr); v.Kind() == reflect.Ptr && v.IsNil() {
+		panic("handlers.Register: deps.TeamMgr must not be a typed nil")
+	}
 	// Leagues
 	leagueMgr := deps.LeagueMgr
 	mux.HandleFunc("GET /api/leagues", func(w http.ResponseWriter, r *http.Request) {
@@ -108,11 +114,22 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	})
 
 	// Teams — scoped to ?league_id=
-	mux.HandleFunc("GET /api/teams", listTeams)
-	mux.HandleFunc("POST /api/teams", createTeam)
-	mux.HandleFunc("GET /api/teams/{id}", getTeam)
-	mux.HandleFunc("PUT /api/teams/{id}", updateTeam)
-	mux.HandleFunc("DELETE /api/teams/{id}", deleteTeam)
+	teamMgr := deps.TeamMgr
+	mux.HandleFunc("GET /api/teams", func(w http.ResponseWriter, r *http.Request) {
+		listTeams(w, r, teamMgr)
+	})
+	mux.HandleFunc("POST /api/teams", func(w http.ResponseWriter, r *http.Request) {
+		createTeam(w, r, teamMgr)
+	})
+	mux.HandleFunc("GET /api/teams/{id}", func(w http.ResponseWriter, r *http.Request) {
+		getTeam(w, r, teamMgr)
+	})
+	mux.HandleFunc("PUT /api/teams/{id}", func(w http.ResponseWriter, r *http.Request) {
+		updateTeam(w, r, teamMgr)
+	})
+	mux.HandleFunc("DELETE /api/teams/{id}", func(w http.ResponseWriter, r *http.Request) {
+		deleteTeam(w, r, teamMgr)
+	})
 
 	// Seasons — scoped to ?league_id=
 	seasonMgr := deps.SeasonMgr
@@ -686,122 +703,107 @@ func mapPlayerErr(w http.ResponseWriter, err error) {
 
 // ─── Teams — scoped to league_id ─────────────────────────────────────────────
 
-func listTeams(w http.ResponseWriter, r *http.Request) {
+func listTeams(w http.ResponseWriter, r *http.Request, mgr TeamManager) {
 	leagueID, hasLeague := qparamInt(r, "league_id")
-	var rows *sql.Rows
-	var err error
+	var filter *int64
 	if hasLeague {
-		rows, err = db.DB.Query(
-			`SELECT id, league_id, name, COALESCE(team_number,''), captain_id, created_at FROM teams WHERE league_id=? ORDER BY name`,
-			leagueID)
-	} else {
-		rows, err = db.DB.Query(
-			`SELECT id, league_id, name, COALESCE(team_number,''), captain_id, created_at FROM teams ORDER BY league_id, name`)
+		filter = &leagueID
 	}
+	ts, err := mgr.ListTeams(r.Context(), filter)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var teams []models.Team
-	for rows.Next() {
-		var t models.Team
-		rows.Scan(&t.ID, &t.LeagueID, &t.Name, &t.TeamNumber, &t.CaptainID, &t.CreatedAt)
-		teams = append(teams, t)
-	}
-	if teams == nil {
-		teams = []models.Team{}
-	}
-	jsonOK(w, teams)
+	jsonOK(w, ts)
 }
 
-func createTeam(w http.ResponseWriter, r *http.Request) {
-	var t models.Team
-	if err := decode(r, &t); err != nil {
+func createTeam(w http.ResponseWriter, r *http.Request, mgr TeamManager) {
+	var body models.Team
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	if strings.TrimSpace(t.Name) == "" {
-		jsonError(w, "name is required", 400)
-		return
-	}
-	if t.LeagueID == 0 {
-		jsonError(w, "league_id is required", 400)
-		return
-	}
-	res, err := db.DB.Exec(`INSERT INTO teams (league_id, name) VALUES (?,?)`, t.LeagueID, t.Name)
+	created, err := mgr.CreateTeam(r.Context(), teams.CreateTeamInput{
+		Name:     body.Name,
+		LeagueID: body.LeagueID,
+	})
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapTeamErr(w, err)
 		return
 	}
-	t.ID, _ = res.LastInsertId()
+	body.ID = created.ID
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, t)
+	jsonOK(w, body)
 }
 
-func getTeam(w http.ResponseWriter, r *http.Request) {
+func getTeam(w http.ResponseWriter, r *http.Request, mgr TeamManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var t models.Team
-	err = db.DB.QueryRow(
-		`SELECT id, league_id, name, COALESCE(team_number,''), captain_id, created_at FROM teams WHERE id=?`, id,
-	).Scan(&t.ID, &t.LeagueID, &t.Name, &t.TeamNumber, &t.CaptainID, &t.CreatedAt)
+	t, err := mgr.GetTeam(r.Context(), id)
 	if err != nil {
-		jsonError(w, "team not found", 404)
+		mapTeamErr(w, err)
 		return
-	}
-	rows, _ := db.DB.Query(
-		`SELECT id, player_number, first_name, last_name,
-		        first_name || ' ' || last_name, handicap
-		 FROM players WHERE team_id=? ORDER BY player_number`, id)
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var p models.Player
-			rows.Scan(&p.ID, &p.PlayerNumber, &p.FirstName, &p.LastName, &p.Name, &p.Handicap)
-			p.TeamID = &t.ID
-			p.LeagueID = t.LeagueID
-			t.Players = append(t.Players, p)
-		}
 	}
 	jsonOK(w, t)
 }
 
-func updateTeam(w http.ResponseWriter, r *http.Request) {
+func updateTeam(w http.ResponseWriter, r *http.Request, mgr TeamManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var t models.Team
-	if err := decode(r, &t); err != nil {
+	var body models.Team
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	_, err = db.DB.Exec(`UPDATE teams SET name=?, captain_id=? WHERE id=?`, t.Name, t.CaptainID, id)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.UpdateTeam(r.Context(), id, teams.UpdateTeamInput{
+		Name:      body.Name,
+		CaptainID: body.CaptainID,
+	}); err != nil {
+		mapTeamErr(w, err)
 		return
 	}
-	t.ID = id
-	jsonOK(w, t)
+	body.ID = id
+	jsonOK(w, body)
 }
 
-func deleteTeam(w http.ResponseWriter, r *http.Request) {
+func deleteTeam(w http.ResponseWriter, r *http.Request, mgr TeamManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	db.DB.Exec(`UPDATE players SET team_id=NULL WHERE team_id=?`, id)
-	if _, err := db.DB.Exec(`DELETE FROM teams WHERE id=?`, id); err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.DeleteTeam(r.Context(), id); err != nil {
+		mapTeamErr(w, err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+func mapTeamErr(w http.ResponseWriter, err error) {
+	var de *domainerr.Err
+	switch {
+	case errors.Is(err, teams.ErrNotFound):
+		jsonError(w, "team not found", http.StatusNotFound)
+	case errors.As(err, &de):
+		switch de.Category {
+		case domainerr.NotFound:
+			jsonError(w, de.Message, http.StatusNotFound)
+		case domainerr.InvalidInput:
+			jsonError(w, de.Message, http.StatusBadRequest)
+		case domainerr.Conflict:
+			jsonError(w, de.Message, http.StatusConflict)
+		default:
+			jsonError(w, de.Message, http.StatusInternalServerError)
+		}
+	default:
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // ─── Seasons — scoped to league_id ───────────────────────────────────────────

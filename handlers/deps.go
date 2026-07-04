@@ -8,6 +8,7 @@ import (
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/players"
 	"league_app/backend/domains/seasons"
+	"league_app/backend/domains/teams"
 	"league_app/backend/validation"
 	"league_app/models"
 )
@@ -114,6 +115,16 @@ type PlayerManager interface {
 	DeletePlayer(ctx context.Context, id int64) error
 }
 
+// TeamManager handles team CRUD operations.
+// Required: Register panics if nil.
+type TeamManager interface {
+	ListTeams(ctx context.Context, leagueID *int64) ([]models.Team, error)
+	GetTeam(ctx context.Context, id int64) (models.Team, error)
+	CreateTeam(ctx context.Context, input teams.CreateTeamInput) (models.Team, error)
+	UpdateTeam(ctx context.Context, id int64, input teams.UpdateTeamInput) error
+	DeleteTeam(ctx context.Context, id int64) error
+}
+
 // SeasonManager handles season lifecycle: activation, checklist evaluation,
 // previous-season lookup, draft/stale checks, team management, bye requests,
 // and season roster operations.
@@ -172,6 +183,9 @@ type Dependencies struct {
 	// PlayerMgr handles player CRUD.
 	// Required: Register panics if nil.
 	PlayerMgr PlayerManager
+	// TeamMgr handles team CRUD.
+	// Required: Register panics if nil.
+	TeamMgr TeamManager
 	// SeasonMgr handles season lifecycle: activation, checklist, previous-season.
 	// Required: Register panics if nil.
 	SeasonMgr SeasonManager

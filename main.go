@@ -18,6 +18,7 @@ import (
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/players"
 	"league_app/backend/domains/rules"
+	"league_app/backend/domains/teams"
 	"league_app/backend/domains/seasons"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
@@ -106,6 +107,8 @@ func main() {
 	leagueSvc := leagues.NewLeagueService(leagueStore)
 	playerStore := sqlite.NewPlayerStore(db.DB)
 	playerSvc := players.NewPlayerService(playerStore)
+	teamStore := sqlite.NewTeamStore(db.DB)
+	teamSvc := teams.NewTeamService(teamStore)
 	scheduleStore := sqlite.NewScheduleStore(db.DB)
 	scheduleSvc := matches.NewScheduleService(scheduleStore)
 	matchStore := sqlite.NewMatchStore(db.DB)
@@ -122,6 +125,7 @@ func main() {
 		RuleMgr:         ruleSvc,
 		LeagueMgr:       leagueSvc,
 		PlayerMgr:       playerSvc,
+		TeamMgr:         teamSvc,
 		SeasonMgr:       seasonSvc,
 		MatchMgr:        matchSvc,
 		ScheduleMgr:     scheduleSvc,

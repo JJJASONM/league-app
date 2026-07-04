@@ -554,6 +554,42 @@ overwriting newer state:
   increments the counter so that a roster fetch started for the previous team can never
   render after the selection is cleared.
 
+## Backend Domain
+
+**Package:** `backend/domains/teams`
+**Status:** `Phase 1 complete`
+
+### Phase 1 — CRUD extraction
+
+Five team handlers extracted from `handlers/api.go` into the domain layer:
+
+| Route | Handler | Notes |
+|---|---|---|
+| `GET /api/teams` | `listTeams` | Optional `?league_id=` filter |
+| `POST /api/teams` | `createTeam` | Validates name and league_id required |
+| `GET /api/teams/{id}` | `getTeam` | Returns team with embedded players |
+| `PUT /api/teams/{id}` | `updateTeam` | Updates name and captain_id only |
+| `DELETE /api/teams/{id}` | `deleteTeam` | Nulls player team assignments before delete |
+
+**Boundary:** handler → `TeamManager` interface → `teams.TeamService` → `teams.TeamStore` → `sqlite.TeamStore`
+
+### Cross-domain store operations (Phase 1, documented)
+
+- `GetTeam` embeds a players sub-query directly in the SQLite store. This is a store-level cross-table read — the same pattern as `player_store.go` joining the teams table for league filtering. No Players domain interface is called.
+- `DeleteTeam` executes `UPDATE players SET team_id=NULL WHERE team_id=?` before the DELETE. This is a store-level side effect — the same pattern as `season_team_store.go` which also writes to the teams table directly. No Players domain interface is called.
+- `season_team_store.go` continues to INSERT and DELETE teams rows as part of the Seasons domain season-team workflow. That ownership is unchanged by this phase.
+
+### Business rules
+
+- `team_number` is not insertable via `POST /api/teams` and not updatable via `PUT /api/teams/{id}`. It is display-only at the team level; the `team_number` column is written only by direct DB operations or the season workflow.
+- `CreateTeamInput` accepts `Name` and `LeagueID`. Validation requires both to be non-empty.
+- `UpdateTeamInput` accepts `Name` and `CaptainID`. `team_number` is intentionally excluded.
+- `getTeam` maps only `sql.ErrNoRows` to 404; other errors return 500 (replaces the original all-errors-to-404 anti-pattern).
+
+### COALESCE guard
+
+The `player_number` column on the `players` table is nullable. The embedded player query in `sqlite.TeamStore.GetTeam` uses `COALESCE(player_number,'')` to prevent NULL scan errors. This mirrors the same fix in `sqlite.PlayerStore`.
+
 ## Decision History
 
 ### 2026-06-08 - Make membership season-specific
