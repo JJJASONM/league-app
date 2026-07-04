@@ -316,3 +316,61 @@ func TestSeasonStore_RemoveSeasonTeam_NotFound(t *testing.T) {
 		t.Errorf("want ErrTeamNotInSeason, got %v", err)
 	}
 }
+
+// ── ListSeasonTeams ───────────────────────────────────────────────────────────
+
+func TestSeasonStore_ListSeasonTeams_ReturnsTeams(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid1 := sseedTeam(t, lid, "Alpha")
+	tid2 := sseedTeam(t, lid, "Bravo")
+	sseedSeasonTeam(t, sid, tid1, nil)
+	sseedSeasonTeam(t, sid, tid2, nil)
+
+	teams, err := store.ListSeasonTeams(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListSeasonTeams: %v", err)
+	}
+	if len(teams) != 2 {
+		t.Fatalf("want 2 teams, got %d", len(teams))
+	}
+	if teams[0].TeamID != tid1 {
+		t.Errorf("want first team=%d, got %d", tid1, teams[0].TeamID)
+	}
+}
+
+func TestSeasonStore_ListSeasonTeams_EmptyWhenNone(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+
+	teams, err := store.ListSeasonTeams(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListSeasonTeams: %v", err)
+	}
+	if len(teams) != 0 {
+		t.Errorf("want 0 teams, got %d", len(teams))
+	}
+}
+
+func TestSeasonStore_ListSeasonTeams_IncludesRosterCount(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "Charlie")
+	pid := sseedPlayer(t, tid)
+	sseedSeasonTeam(t, sid, tid, nil)
+	sseedRoster(t, sid, tid, pid)
+
+	teams, err := store.ListSeasonTeams(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListSeasonTeams: %v", err)
+	}
+	if len(teams) != 1 || teams[0].RosterCount != 1 {
+		t.Errorf("want RosterCount=1, got %+v", teams)
+	}
+}

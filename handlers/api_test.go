@@ -84,6 +84,20 @@ func (n *noopSeasonMgr) RemoveRosterPlayer(_ context.Context, _, _, _ int64) err
 func (n *noopSeasonMgr) ListAvailablePlayers(_ context.Context, _ int64) ([]models.Player, error) {
 	return []models.Player{}, nil
 }
+func (n *noopSeasonMgr) ListSeasonTeams(_ context.Context, _ int64) ([]models.SeasonTeam, error) {
+	return []models.SeasonTeam{}, nil
+}
+func (n *noopSeasonMgr) ListSkippedWeeks(_ context.Context, _ int64) ([]models.SkippedWeek, error) {
+	return []models.SkippedWeek{}, nil
+}
+func (n *noopSeasonMgr) CreateSkippedWeek(_ context.Context, _ int64, _, _ string) (models.SkippedWeek, error) {
+	return models.SkippedWeek{}, nil
+}
+func (n *noopSeasonMgr) DeleteSkippedWeek(_ context.Context, _ int64) error { return nil }
+func (n *noopSeasonMgr) ListByeRequests(_ context.Context, _ int64) ([]models.ByeRequest, error) {
+	return []models.ByeRequest{}, nil
+}
+func (n *noopSeasonMgr) DeleteByeRequest(_ context.Context, _, _ int64) error { return nil }
 
 // noopScheduleMgr satisfies handlers.ScheduleManager for tests that don't
 // exercise schedule generation.

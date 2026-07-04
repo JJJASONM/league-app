@@ -110,6 +110,12 @@ type SeasonManager interface {
 	AddRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) (models.SeasonRosterEntry, error)
 	RemoveRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) error
 	ListAvailablePlayers(ctx context.Context, seasonID int64) ([]models.Player, error)
+	ListSeasonTeams(ctx context.Context, seasonID int64) ([]models.SeasonTeam, error)
+	ListSkippedWeeks(ctx context.Context, seasonID int64) ([]models.SkippedWeek, error)
+	CreateSkippedWeek(ctx context.Context, seasonID int64, skipDate, reason string) (models.SkippedWeek, error)
+	DeleteSkippedWeek(ctx context.Context, id int64) error
+	ListByeRequests(ctx context.Context, seasonID int64) ([]models.ByeRequest, error)
+	DeleteByeRequest(ctx context.Context, seasonID, byeID int64) error
 }
 
 // Dependencies holds domain services injected into handlers at startup.

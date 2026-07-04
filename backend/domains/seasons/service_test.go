@@ -75,6 +75,22 @@ type stubSeasonStore struct {
 	deleteRosterErr       error
 	availablePlayers      []models.Player
 	availablePlayersErr   error
+
+	// season team list stubs
+	seasonTeamList    []models.SeasonTeam
+	seasonTeamListErr error
+
+	// skipped week stubs
+	skippedWeeks      []models.SkippedWeek
+	skippedWeeksErr   error
+	createdSkipWeek   models.SkippedWeek
+	createSkipErr     error
+	deleteSkipErr     error
+
+	// bye list/delete stubs
+	byeList       []models.ByeRequest
+	byeListErr    error
+	deleteByeErr  error
 }
 
 func (s *stubSeasonStore) IsDraft(_ context.Context, _ int64) (bool, error) {
@@ -180,6 +196,33 @@ func (s *stubSeasonStore) DeleteRosterPlayer(_ context.Context, _, _, _ int64) e
 }
 func (s *stubSeasonStore) ListAvailablePlayers(_ context.Context, _ int64) ([]models.Player, error) {
 	return s.availablePlayers, s.availablePlayersErr
+}
+
+// ── season team list stubs ────────────────────────────────────────────────────
+
+func (s *stubSeasonStore) ListSeasonTeams(_ context.Context, _ int64) ([]models.SeasonTeam, error) {
+	return s.seasonTeamList, s.seasonTeamListErr
+}
+
+// ── skipped week stubs ────────────────────────────────────────────────────────
+
+func (s *stubSeasonStore) ListSkippedWeeks(_ context.Context, _ int64) ([]models.SkippedWeek, error) {
+	return s.skippedWeeks, s.skippedWeeksErr
+}
+func (s *stubSeasonStore) CreateSkippedWeek(_ context.Context, _ int64, _, _ string) (models.SkippedWeek, error) {
+	return s.createdSkipWeek, s.createSkipErr
+}
+func (s *stubSeasonStore) DeleteSkippedWeek(_ context.Context, _ int64) error {
+	return s.deleteSkipErr
+}
+
+// ── bye list/delete stubs ─────────────────────────────────────────────────────
+
+func (s *stubSeasonStore) ListByeRequests(_ context.Context, _ int64) ([]models.ByeRequest, error) {
+	return s.byeList, s.byeListErr
+}
+func (s *stubSeasonStore) DeleteByeRequest(_ context.Context, _, _ int64) error {
+	return s.deleteByeErr
 }
 
 func newSvc(store *stubSeasonStore) *seasons.SeasonService {
