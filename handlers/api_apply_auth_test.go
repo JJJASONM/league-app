@@ -11,6 +11,7 @@ import (
 
 	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
+	"league_app/backend/domains/players"
 	"league_app/backend/domains/seasons"
 	"league_app/models"
 )
@@ -104,6 +105,10 @@ func (n *noopSeasonMgr) DeleteByeRequest(_ context.Context, _, _ int64) error { 
 // route-mounting logic and do not exercise league endpoints.
 type noopLeagueMgr struct{}
 
+// noopPlayerMgr satisfies PlayerManager for tests that only exercise auth or
+// route-mounting logic and do not exercise player endpoints.
+type noopPlayerMgr struct{}
+
 func (n *noopLeagueMgr) ListLeagues(_ context.Context) ([]models.League, error) {
 	return []models.League{}, nil
 }
@@ -117,6 +122,20 @@ func (n *noopLeagueMgr) UpdateLeague(_ context.Context, _ int64, _ leagues.Updat
 	return nil
 }
 func (n *noopLeagueMgr) DeleteLeague(_ context.Context, _ int64) error { return nil }
+
+func (n *noopPlayerMgr) ListPlayers(_ context.Context, _ *int64) ([]models.Player, error) {
+	return []models.Player{}, nil
+}
+func (n *noopPlayerMgr) GetPlayer(_ context.Context, _ int64) (models.Player, error) {
+	return models.Player{}, nil
+}
+func (n *noopPlayerMgr) CreatePlayer(_ context.Context, _ players.CreatePlayerInput) (models.Player, error) {
+	return models.Player{}, nil
+}
+func (n *noopPlayerMgr) UpdatePlayer(_ context.Context, _ int64, _ players.UpdatePlayerInput) error {
+	return nil
+}
+func (n *noopPlayerMgr) DeletePlayer(_ context.Context, _ int64) error { return nil }
 
 // noopScheduleMgr satisfies ScheduleManager for tests that only exercise auth
 // or route-mounting logic and do not exercise schedule generation endpoints.
@@ -390,6 +409,7 @@ func TestRegister_ApplyRoute_NotMounted_WhenTokenEmpty(t *testing.T) {
 		AdminToken:      "",
 		RuleMgr:         &noopRuleManager{},
 		LeagueMgr:       &noopLeagueMgr{},
+		PlayerMgr:       &noopPlayerMgr{},
 		SeasonMgr:       &noopSeasonMgr{},
 	}
 	Register(mux, t.TempDir(), deps)
@@ -416,6 +436,7 @@ func TestRegister_ApplyRoute_Mounted_WhenTokenPresent(t *testing.T) {
 		AdminToken:      "test-token",
 		RuleMgr:         &noopRuleManager{},
 		LeagueMgr:       &noopLeagueMgr{},
+		PlayerMgr:       &noopPlayerMgr{},
 		SeasonMgr:       &noopSeasonMgr{},
 	}
 	Register(mux, t.TempDir(), deps)
@@ -443,6 +464,7 @@ func TestRegister_ApplyRoute_CorrectToken_ReachesHandler(t *testing.T) {
 		AdminToken:      "test-token",
 		RuleMgr:         &noopRuleManager{},
 		LeagueMgr:       &noopLeagueMgr{},
+		PlayerMgr:       &noopPlayerMgr{},
 		SeasonMgr:       &noopSeasonMgr{},
 	}
 	Register(mux, t.TempDir(), deps)
@@ -510,6 +532,7 @@ func TestRegister_NilApplier_NoToken_DoesNotPanic(t *testing.T) {
 		AdminToken:      "",
 		RuleMgr:         &noopRuleManager{},
 		LeagueMgr:       &noopLeagueMgr{},
+		PlayerMgr:       &noopPlayerMgr{},
 		SeasonMgr:       &noopSeasonMgr{},
 	})
 }
