@@ -49,6 +49,8 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 	scheduleSvc := matches.NewScheduleService(scheduleStore)
 	matchStore := sqlite.NewMatchStore(db.DB)
 	matchSvc := matches.NewMatchService(matchStore)
+	lineupStore := sqlite.NewLineupStore(db.DB)
+	lineupSvc := matches.NewLineupService(lineupStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
@@ -60,6 +62,7 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 		SeasonMgr:       seasonSvc,
 		ScheduleMgr:     scheduleSvc,
 		MatchMgr:        matchSvc,
+		LineupMgr:       lineupSvc,
 	}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)

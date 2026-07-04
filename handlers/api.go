@@ -164,9 +164,18 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	}
 
 	// Lineup plans — pre-game slot assignments per team/week
-	mux.HandleFunc("GET /api/lineup-plans", listLineupPlans)
-	mux.HandleFunc("POST /api/lineup-plans", saveTeamLineup)
-	mux.HandleFunc("DELETE /api/lineup-plans/{id}", deleteLineupPlan)
+	if deps.LineupMgr != nil {
+		lineupMgr := deps.LineupMgr
+		mux.HandleFunc("GET /api/lineup-plans", func(w http.ResponseWriter, r *http.Request) {
+			listLineupPlans(w, r, lineupMgr)
+		})
+		mux.HandleFunc("POST /api/lineup-plans", func(w http.ResponseWriter, r *http.Request) {
+			saveTeamLineup(w, r, lineupMgr)
+		})
+		mux.HandleFunc("DELETE /api/lineup-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
+			deleteLineupPlan(w, r, lineupMgr)
+		})
+	}
 
 	// Rule definitions — developer-owned, served by the backend
 	mux.HandleFunc("GET /api/rules/definitions", listRuleDefinitions)
@@ -1826,60 +1835,30 @@ func getPlayerStats(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 
 // ─── Lineup Plans ─────────────────────────────────────────────────────────────
 
-func listLineupPlans(w http.ResponseWriter, r *http.Request) {
+func listLineupPlans(w http.ResponseWriter, r *http.Request, mgr LineupManager) {
 	seasonID, hasSeason := qparamInt(r, "season_id")
 	if !hasSeason {
 		jsonError(w, "season_id required", 400)
 		return
 	}
-	weekNum, hasWeek := qparamInt(r, "week_number")
-	teamID, hasTeam := qparamInt(r, "team_id")
-
-	q := `SELECT lp.id, lp.season_id, lp.team_id, t.name,
-	             lp.player_id, p.first_name || ' ' || p.last_name, p.handicap,
-	             lp.week_number, lp.is_sub, lp.sub_for_id
-	      FROM lineup_plans lp
-	      JOIN teams t ON t.id = lp.team_id
-	      JOIN players p ON p.id = lp.player_id
-	      WHERE lp.season_id = ?`
-	args := []any{seasonID}
-	if hasWeek {
-		q += ` AND lp.week_number = ?`
-		args = append(args, weekNum)
+	req := matches.ListLineupPlansRequest{SeasonID: seasonID}
+	if v, ok := qparamInt(r, "week_number"); ok {
+		req.WeekNumber = v
 	}
-	if hasTeam {
-		q += ` AND lp.team_id = ?`
-		args = append(args, teamID)
+	if v, ok := qparamInt(r, "team_id"); ok {
+		req.TeamID = v
 	}
-	q += ` ORDER BY lp.team_id, lp.id`
-
-	rows, err := db.DB.Query(q, args...)
+	plans, err := mgr.ListLineupPlans(r.Context(), req)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapLineupErr(w, err)
 		return
-	}
-	defer rows.Close()
-	var plans []models.LineupPlan
-	for rows.Next() {
-		var lp models.LineupPlan
-		var isSub int
-		if err := rows.Scan(&lp.ID, &lp.SeasonID, &lp.TeamID, &lp.TeamName,
-			&lp.PlayerID, &lp.PlayerName, &lp.Handicap,
-			&lp.WeekNumber, &isSub, &lp.SubForID); err != nil {
-			continue
-		}
-		lp.IsSub = isSub == 1
-		plans = append(plans, lp)
-	}
-	if plans == nil {
-		plans = []models.LineupPlan{}
 	}
 	jsonOK(w, plans)
 }
 
 // saveTeamLineup atomically replaces all lineup slots for one team/week.
 // Body: { season_id, team_id, week_number, player_ids: [id1, id2, id3] }
-func saveTeamLineup(w http.ResponseWriter, r *http.Request) {
+func saveTeamLineup(w http.ResponseWriter, r *http.Request, mgr LineupManager) {
 	var req models.SaveTeamLineupRequest
 	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
@@ -1889,36 +1868,46 @@ func saveTeamLineup(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "season_id and team_id required", 400)
 		return
 	}
-	tx, err := db.DB.Begin()
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer tx.Rollback()
-	tx.Exec(`DELETE FROM lineup_plans WHERE season_id=? AND team_id=? AND week_number=?`,
-		req.SeasonID, req.TeamID, req.WeekNumber)
-	for _, pid := range req.PlayerIDs {
-		if pid == 0 {
-			continue
-		}
-		tx.Exec(`INSERT OR IGNORE INTO lineup_plans (season_id, team_id, week_number, player_id, is_sub) VALUES (?,?,?,?,0)`,
-			req.SeasonID, req.TeamID, req.WeekNumber, pid)
-	}
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.SaveTeamLineup(r.Context(), matches.SaveLineupRequest{
+		SeasonID:   req.SeasonID,
+		TeamID:     req.TeamID,
+		WeekNumber: int64(req.WeekNumber),
+		PlayerIDs:  req.PlayerIDs,
+	}); err != nil {
+		mapLineupErr(w, err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "saved"})
 }
 
-func deleteLineupPlan(w http.ResponseWriter, r *http.Request) {
+func deleteLineupPlan(w http.ResponseWriter, r *http.Request, mgr LineupManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	db.DB.Exec(`DELETE FROM lineup_plans WHERE id=?`, id)
+	if err := mgr.DeleteLineupPlan(r.Context(), id); err != nil {
+		mapLineupErr(w, err)
+		return
+	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// mapLineupErr translates lineup domain errors to HTTP responses.
+func mapLineupErr(w http.ResponseWriter, err error) {
+	var de *domainerr.Err
+	if errors.As(err, &de) {
+		switch de.Category {
+		case domainerr.NotFound:
+			jsonError(w, de.Message, http.StatusNotFound)
+		case domainerr.InvalidInput:
+			jsonError(w, de.Message, http.StatusBadRequest)
+		default:
+			jsonError(w, de.Message, http.StatusInternalServerError)
+		}
+		return
+	}
+	jsonError(w, err.Error(), http.StatusInternalServerError)
 }
 
 // ─── Season Teams ──────────────────────────────────────────────────────────────

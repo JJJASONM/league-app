@@ -1512,6 +1512,83 @@ established by `WeekMgr`, `RoundMgr`, and `ScheduleMgr`.
 - Lineup plans extraction
 - Skipped-weeks or bye-request extraction
 
+## Phase C — Lineup Plans Extraction (implemented 2026-07-03)
+
+### Goal
+
+Extract the three `lineup-plans` endpoints out of the monolithic handler into
+a domain boundary within the `matches` package, making `handlers/api.go` a
+thin delegation layer for this resource.
+
+### Architecture
+
+```
+GET/POST /api/lineup-plans
+DELETE   /api/lineup-plans/{id}
+  → thin handlers (parse, validate, delegate, mapLineupErr)
+      → handlers.LineupManager interface
+          → matches.LineupService
+              → matches.LineupStore interface
+                  ← sqlite.LineupStore
+```
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `backend/domains/matches/lineup_store.go` | `LineupStore` interface, `ListLineupPlansRequest`, `SaveLineupRequest` |
+| `backend/domains/matches/lineup_service.go` | `LineupService`, `NewLineupService`; wraps store errors into `domainerr` |
+| `backend/domains/matches/lineup_service_test.go` | 9 service unit tests using `stubLineupStore` |
+| `backend/storage/sqlite/lineup_store.go` | SQLite implementation; owns dynamic query building and save transaction |
+| `backend/storage/sqlite/lineup_store_test.go` | 9 SQLite integration tests |
+
+### Modified Files
+
+| File | Change |
+|------|--------|
+| `handlers/deps.go` | `LineupManager` interface + `LineupMgr` field on `Dependencies` |
+| `handlers/api.go` | Three handlers accept `LineupManager`; route block conditional on `LineupMgr != nil`; `mapLineupErr` added |
+| `handlers/api_test.go` | `noopLineupMgr` stub; `testServer` wires real `LineupService` |
+| `handlers/api_apply_auth_test.go` | `noopLineupMgr` stub |
+| `handlers/api_apply_c1_test.go` | `testServerWithApplyAuth` wires real `LineupService` |
+| `main.go` | `sqlite.NewLineupStore` → `matches.NewLineupService` → `deps.LineupMgr` |
+
+### Logic Moved Out of `handlers/api.go`
+
+- Dynamic query building for season/week/team filter combinations
+- `DELETE … INSERT OR IGNORE` transaction for atomic lineup replacement
+- Zero-player-ID skip logic
+
+### Key Design Decisions
+
+**`SaveLineupRequest` carries `int64` for `WeekNumber`:** Handler's
+`models.SaveTeamLineupRequest.WeekNumber` is `int`; the conversion to `int64`
+happens at the handler boundary before calling the service. The DB column and
+SQLite driver handle both seamlessly.
+
+**`DeleteLineupPlan` does not error on non-existent ID:** The original handler
+called `db.DB.Exec` and discarded all results, always returning 200. The store
+passes through genuine DB errors (e.g., connection failure) but does not return
+a `ErrNotFound` for missing rows — preserving the original behavior for the
+normal delete-then-confirm flow while surfacing real failures.
+
+**`mapLineupErr` mirrors `mapMatchErr`/`mapScheduleErr`:** Consistent error
+translation pattern across all three match-family managers.
+
+### Accepted Debt
+
+| Item | Disposition |
+|------|-------------|
+| Skipped-weeks still direct `db.DB` | Belongs to seasons domain; separate extraction pass |
+| `listByeRequests`/`deleteByeRequest` still direct `db.DB` | Same; complete bye-request extraction is a seasons-domain task |
+| Lineup plans `WeekNumber` type mismatch (`int` vs `int64`) | Cast at handler boundary; no model change needed |
+
+### Not in Phase C
+
+- Route or JSON shape changes
+- Skipped-weeks or bye-request extraction
+- Leagues/players/teams CRUD extraction
+
 ## Decision History
 
 ### 2026-06-08 - Make week close authoritative
