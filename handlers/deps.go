@@ -71,6 +71,11 @@ type RoundManager interface {
 	ClearResults(ctx context.Context, matchID int64) error
 }
 
+// ScheduleManager handles schedule generation for a season.
+type ScheduleManager interface {
+	GenerateSchedule(ctx context.Context, req matches.GenerateRequest) (matches.GenerateResult, error)
+}
+
 // SeasonManager handles season lifecycle: activation, checklist evaluation,
 // previous-season lookup, draft/stale checks, team management, and bye requests.
 type SeasonManager interface {
@@ -110,4 +115,7 @@ type Dependencies struct {
 	// SeasonMgr handles season lifecycle: activation, checklist, previous-season.
 	// Required: Register panics if nil.
 	SeasonMgr SeasonManager
+	// ScheduleMgr handles schedule generation.
+	// Routes are registered only when non-nil.
+	ScheduleMgr ScheduleManager
 }

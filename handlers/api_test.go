@@ -75,6 +75,14 @@ func (n *noopSeasonMgr) UpdateByeRequest(_ context.Context, _, _ int64, _ bool) 
 	return models.ByeRequest{}, nil
 }
 
+// noopScheduleMgr satisfies handlers.ScheduleManager for tests that don't
+// exercise schedule generation.
+type noopScheduleMgr struct{}
+
+func (n *noopScheduleMgr) GenerateSchedule(_ context.Context, _ matches.GenerateRequest) (matches.GenerateResult, error) {
+	return matches.GenerateResult{}, nil
+}
+
 // testServer initializes a fresh SQLite database in a temp directory and
 // returns a running test HTTP server with all routes registered.
 // The DB connection and server are closed automatically when the test ends.
@@ -97,7 +105,9 @@ func testServer(t *testing.T) *httptest.Server {
 	ruleSvc := rules.NewRuleService(ruleStore)
 	seasonStore := sqlite.NewSeasonStore(db.DB)
 	seasonSvc := seasons.NewSeasonService(seasonStore)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, SeasonMgr: seasonSvc}
+	scheduleStore := sqlite.NewScheduleStore(db.DB)
+	scheduleSvc := matches.NewScheduleService(scheduleStore)
+	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, SeasonMgr: seasonSvc, ScheduleMgr: scheduleSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

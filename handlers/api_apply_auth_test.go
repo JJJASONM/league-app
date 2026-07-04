@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"league_app/backend/domains/matches"
 	"league_app/backend/domains/seasons"
 	"league_app/models"
 )
@@ -59,6 +60,14 @@ func (n *noopSeasonMgr) CreateByeRequest(_ context.Context, _ int64, _ seasons.C
 }
 func (n *noopSeasonMgr) UpdateByeRequest(_ context.Context, _, _ int64, _ bool) (models.ByeRequest, error) {
 	return models.ByeRequest{}, nil
+}
+
+// noopScheduleMgr satisfies ScheduleManager for tests that only exercise auth
+// or route-mounting logic and do not exercise schedule generation endpoints.
+type noopScheduleMgr struct{}
+
+func (n *noopScheduleMgr) GenerateSchedule(_ context.Context, _ matches.GenerateRequest) (matches.GenerateResult, error) {
+	return matches.GenerateResult{}, nil
 }
 
 // stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.

@@ -100,6 +100,8 @@ func main() {
 	ruleSvc := rules.NewRuleService(ruleStore)
 	seasonStore := sqlite.NewSeasonStore(db.DB)
 	seasonSvc := seasons.NewSeasonService(seasonStore)
+	scheduleStore := sqlite.NewScheduleStore(db.DB)
+	scheduleSvc := matches.NewScheduleService(scheduleStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
@@ -109,6 +111,7 @@ func main() {
 		RoundMgr:        roundSvc,
 		RuleMgr:         ruleSvc,
 		SeasonMgr:       seasonSvc,
+		ScheduleMgr:     scheduleSvc,
 	}
 
 	// API routes
