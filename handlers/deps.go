@@ -6,6 +6,7 @@ import (
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
+	"league_app/backend/domains/players"
 	"league_app/backend/domains/seasons"
 	"league_app/backend/validation"
 	"league_app/models"
@@ -103,6 +104,16 @@ type LeagueManager interface {
 	DeleteLeague(ctx context.Context, id int64) error
 }
 
+// PlayerManager handles player CRUD operations.
+// Required: Register panics if nil.
+type PlayerManager interface {
+	ListPlayers(ctx context.Context, leagueID *int64) ([]models.Player, error)
+	GetPlayer(ctx context.Context, id int64) (models.Player, error)
+	CreatePlayer(ctx context.Context, input players.CreatePlayerInput) (models.Player, error)
+	UpdatePlayer(ctx context.Context, id int64, input players.UpdatePlayerInput) error
+	DeletePlayer(ctx context.Context, id int64) error
+}
+
 // SeasonManager handles season lifecycle: activation, checklist evaluation,
 // previous-season lookup, draft/stale checks, team management, bye requests,
 // and season roster operations.
@@ -158,6 +169,9 @@ type Dependencies struct {
 	// LeagueMgr handles league CRUD.
 	// Required: Register panics if nil.
 	LeagueMgr LeagueManager
+	// PlayerMgr handles player CRUD.
+	// Required: Register panics if nil.
+	PlayerMgr PlayerManager
 	// SeasonMgr handles season lifecycle: activation, checklist, previous-season.
 	// Required: Register panics if nil.
 	SeasonMgr SeasonManager

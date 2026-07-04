@@ -14,6 +14,7 @@ import (
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
+	"league_app/backend/domains/players"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
 	"league_app/backend/validation"
@@ -64,6 +65,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	if v := reflect.ValueOf(deps.LeagueMgr); v.Kind() == reflect.Ptr && v.IsNil() {
 		panic("handlers.Register: deps.LeagueMgr must not be a typed nil")
 	}
+	if deps.PlayerMgr == nil {
+		panic("handlers.Register: deps.PlayerMgr must not be nil")
+	}
+	if v := reflect.ValueOf(deps.PlayerMgr); v.Kind() == reflect.Ptr && v.IsNil() {
+		panic("handlers.Register: deps.PlayerMgr must not be a typed nil")
+	}
 	// Leagues
 	leagueMgr := deps.LeagueMgr
 	mux.HandleFunc("GET /api/leagues", func(w http.ResponseWriter, r *http.Request) {
@@ -83,11 +90,22 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	})
 
 	// Players — scoped to ?league_id=
-	mux.HandleFunc("GET /api/players", listPlayers)
-	mux.HandleFunc("POST /api/players", createPlayer)
-	mux.HandleFunc("GET /api/players/{id}", getPlayer)
-	mux.HandleFunc("PUT /api/players/{id}", updatePlayer)
-	mux.HandleFunc("DELETE /api/players/{id}", deletePlayer)
+	playerMgr := deps.PlayerMgr
+	mux.HandleFunc("GET /api/players", func(w http.ResponseWriter, r *http.Request) {
+		listPlayers(w, r, playerMgr)
+	})
+	mux.HandleFunc("POST /api/players", func(w http.ResponseWriter, r *http.Request) {
+		createPlayer(w, r, playerMgr)
+	})
+	mux.HandleFunc("GET /api/players/{id}", func(w http.ResponseWriter, r *http.Request) {
+		getPlayer(w, r, playerMgr)
+	})
+	mux.HandleFunc("PUT /api/players/{id}", func(w http.ResponseWriter, r *http.Request) {
+		updatePlayer(w, r, playerMgr)
+	})
+	mux.HandleFunc("DELETE /api/players/{id}", func(w http.ResponseWriter, r *http.Request) {
+		deletePlayer(w, r, playerMgr)
+	})
 
 	// Teams — scoped to ?league_id=
 	mux.HandleFunc("GET /api/teams", listTeams)
@@ -549,151 +567,121 @@ func mapLeagueErr(w http.ResponseWriter, err error) {
 
 // ─── Players — scoped to league via team ─────────────────────────────────────
 
-func listPlayers(w http.ResponseWriter, r *http.Request) {
+func listPlayers(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
 	leagueID, hasLeague := qparamInt(r, "league_id")
-	var rows *sql.Rows
-	var err error
-	const sel = `SELECT p.id, p.player_number, p.first_name, p.last_name,
-	                    p.first_name || ' ' || p.last_name,
-	                    COALESCE(p.phone,''), COALESCE(p.email,''),
-	                    p.team_id, COALESCE(t.name,''), COALESCE(t.league_id,0),
-	                    p.handicap, p.admin_hold, COALESCE(p.active,1), COALESCE(p.note,''),
-	                    p.created_at
-	             FROM players p LEFT JOIN teams t ON t.id = p.team_id`
+	var lid *int64
 	if hasLeague {
-		rows, err = db.DB.Query(sel+` WHERE t.league_id = ? ORDER BY p.last_name, p.first_name`, leagueID)
-	} else {
-		rows, err = db.DB.Query(sel + ` ORDER BY p.last_name, p.first_name`)
+		lid = &leagueID
 	}
+	list, err := mgr.ListPlayers(r.Context(), lid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var players []models.Player
-	for rows.Next() {
-		var p models.Player
-		var adminHold int
-		var activeInt int
-		rows.Scan(&p.ID, &p.PlayerNumber, &p.FirstName, &p.LastName, &p.Name,
-			&p.Phone, &p.Email, &p.TeamID, &p.TeamName, &p.LeagueID,
-			&p.Handicap, &adminHold, &activeInt, &p.Note, &p.CreatedAt)
-		p.AdminHold = adminHold == 1
-		p.Active = activeInt == 1
-		players = append(players, p)
-	}
-	if players == nil {
-		players = []models.Player{}
-	}
-	jsonOK(w, players)
+	jsonOK(w, list)
 }
 
-func createPlayer(w http.ResponseWriter, r *http.Request) {
-	var p models.Player
-	if err := decode(r, &p); err != nil {
+func createPlayer(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
+	var body models.Player
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	if strings.TrimSpace(p.FirstName) == "" && strings.TrimSpace(p.LastName) == "" {
-		jsonError(w, "first or last name is required", 400)
-		return
-	}
-	adminHold := 0
-	if p.AdminHold {
-		adminHold = 1
-	}
-	res, err := db.DB.Exec(
-		`INSERT INTO players (player_number, first_name, last_name, phone, email, team_id, handicap, admin_hold)
-		 VALUES (?,?,?,?,?,?,?,?)`,
-		p.PlayerNumber, p.FirstName, p.LastName, p.Phone, p.Email, p.TeamID, p.Handicap, adminHold)
+	created, err := mgr.CreatePlayer(r.Context(), players.CreatePlayerInput{
+		PlayerNumber: body.PlayerNumber,
+		FirstName:    body.FirstName,
+		LastName:     body.LastName,
+		Phone:        body.Phone,
+		Email:        body.Email,
+		TeamID:       body.TeamID,
+		Handicap:     body.Handicap,
+		AdminHold:    body.AdminHold,
+	})
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapPlayerErr(w, err)
 		return
 	}
-	p.ID, _ = res.LastInsertId()
-	p.Name = p.FirstName + " " + p.LastName
+	body.ID = created.ID
+	body.Name = body.FirstName + " " + body.LastName
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, p)
+	jsonOK(w, body)
 }
 
-func getPlayer(w http.ResponseWriter, r *http.Request) {
+func getPlayer(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var p models.Player
-	var adminHold int
-	var activeInt int
-	err = db.DB.QueryRow(`
-		SELECT p.id, p.player_number, p.first_name, p.last_name,
-		       p.first_name || ' ' || p.last_name,
-		       COALESCE(p.phone,''), COALESCE(p.email,''),
-		       p.team_id, COALESCE(t.name,''), COALESCE(t.league_id,0),
-		       p.handicap, p.admin_hold, COALESCE(p.active,1), COALESCE(p.note,''),
-		       p.created_at
-		FROM players p LEFT JOIN teams t ON t.id = p.team_id WHERE p.id=?`, id,
-	).Scan(&p.ID, &p.PlayerNumber, &p.FirstName, &p.LastName, &p.Name,
-		&p.Phone, &p.Email, &p.TeamID, &p.TeamName, &p.LeagueID,
-		&p.Handicap, &adminHold, &activeInt, &p.Note, &p.CreatedAt)
+	p, err := mgr.GetPlayer(r.Context(), id)
 	if err != nil {
-		jsonError(w, "player not found", 404)
+		mapPlayerErr(w, err)
 		return
 	}
-	p.AdminHold = adminHold == 1
-	p.Active = activeInt == 1
 	jsonOK(w, p)
 }
 
-func updatePlayer(w http.ResponseWriter, r *http.Request) {
+func updatePlayer(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var p models.Player
-	if err := decode(r, &p); err != nil {
+	var body models.Player
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	adminHold := 0
-	if p.AdminHold {
-		adminHold = 1
-	}
-	// player_number is NOT updated here — it is locked once set (only writable on create)
-	_, err = db.DB.Exec(
-		`UPDATE players SET first_name=?, last_name=?, phone=?, email=?,
-		 team_id=?, handicap=?, admin_hold=? WHERE id=?`,
-		p.FirstName, p.LastName, p.Phone, p.Email, p.TeamID, p.Handicap, adminHold, id)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.UpdatePlayer(r.Context(), id, players.UpdatePlayerInput{
+		FirstName: body.FirstName,
+		LastName:  body.LastName,
+		Phone:     body.Phone,
+		Email:     body.Email,
+		TeamID:    body.TeamID,
+		Handicap:  body.Handicap,
+		AdminHold: body.AdminHold,
+	}); err != nil {
+		mapPlayerErr(w, err)
 		return
 	}
-	p.ID = id
-	p.Name = p.FirstName + " " + p.LastName
-	jsonOK(w, p)
+	body.ID = id
+	body.Name = body.FirstName + " " + body.LastName
+	jsonOK(w, body)
 }
 
-func deletePlayer(w http.ResponseWriter, r *http.Request) {
+func deletePlayer(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var historyCount int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM handicap_history WHERE player_id = ?`, id).Scan(&historyCount); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if historyCount > 0 {
-		jsonError(w, "This player has handicap history records and cannot be deleted. Deactivate the player instead.", 409)
-		return
-	}
-	if _, err := db.DB.Exec(`DELETE FROM players WHERE id=?`, id); err != nil {
-		jsonError(w, err.Error(), 500)
+	if err := mgr.DeletePlayer(r.Context(), id); err != nil {
+		mapPlayerErr(w, err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// mapPlayerErr translates player domain errors to HTTP responses.
+func mapPlayerErr(w http.ResponseWriter, err error) {
+	var de *domainerr.Err
+	switch {
+	case errors.Is(err, players.ErrNotFound):
+		jsonError(w, "player not found", http.StatusNotFound)
+	case errors.As(err, &de):
+		switch de.Category {
+		case domainerr.NotFound:
+			jsonError(w, de.Message, http.StatusNotFound)
+		case domainerr.InvalidInput:
+			jsonError(w, de.Message, http.StatusBadRequest)
+		case domainerr.Conflict:
+			jsonError(w, de.Message, http.StatusConflict)
+		default:
+			jsonError(w, de.Message, http.StatusInternalServerError)
+		}
+	default:
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // ─── Teams — scoped to league_id ─────────────────────────────────────────────
