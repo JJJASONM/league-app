@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"league_app/backend/domains/handicaps"
+	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
@@ -45,6 +46,8 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 	ruleSvc := rules.NewRuleService(ruleStore)
 	seasonStore := sqlite.NewSeasonStore(db.DB)
 	seasonSvc := seasons.NewSeasonService(seasonStore)
+	leagueStore := sqlite.NewLeagueStore(db.DB)
+	leagueSvc := leagues.NewLeagueService(leagueStore)
 	scheduleStore := sqlite.NewScheduleStore(db.DB)
 	scheduleSvc := matches.NewScheduleService(scheduleStore)
 	matchStore := sqlite.NewMatchStore(db.DB)
@@ -59,6 +62,7 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 		WeekMgr:         weekSvc,
 		RoundMgr:        roundSvc,
 		RuleMgr:         ruleSvc,
+		LeagueMgr:       leagueSvc,
 		SeasonMgr:       seasonSvc,
 		ScheduleMgr:     scheduleSvc,
 		MatchMgr:        matchSvc,
