@@ -12,6 +12,7 @@ import (
 
 	"league_app/backend/domainerr"
 	"league_app/backend/domains/handicaps"
+	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
@@ -57,12 +58,29 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	if v := reflect.ValueOf(deps.SeasonMgr); v.Kind() == reflect.Ptr && v.IsNil() {
 		panic("handlers.Register: deps.SeasonMgr must not be a typed nil")
 	}
+	if deps.LeagueMgr == nil {
+		panic("handlers.Register: deps.LeagueMgr must not be nil")
+	}
+	if v := reflect.ValueOf(deps.LeagueMgr); v.Kind() == reflect.Ptr && v.IsNil() {
+		panic("handlers.Register: deps.LeagueMgr must not be a typed nil")
+	}
 	// Leagues
-	mux.HandleFunc("GET /api/leagues", listLeagues)
-	mux.HandleFunc("POST /api/leagues", createLeague)
-	mux.HandleFunc("GET /api/leagues/{id}", getLeague)
-	mux.HandleFunc("PUT /api/leagues/{id}", updateLeague)
-	mux.HandleFunc("DELETE /api/leagues/{id}", deleteLeague)
+	leagueMgr := deps.LeagueMgr
+	mux.HandleFunc("GET /api/leagues", func(w http.ResponseWriter, r *http.Request) {
+		listLeagues(w, r, leagueMgr)
+	})
+	mux.HandleFunc("POST /api/leagues", func(w http.ResponseWriter, r *http.Request) {
+		createLeague(w, r, leagueMgr)
+	})
+	mux.HandleFunc("GET /api/leagues/{id}", func(w http.ResponseWriter, r *http.Request) {
+		getLeague(w, r, leagueMgr)
+	})
+	mux.HandleFunc("PUT /api/leagues/{id}", func(w http.ResponseWriter, r *http.Request) {
+		updateLeague(w, r, leagueMgr)
+	})
+	mux.HandleFunc("DELETE /api/leagues/{id}", func(w http.ResponseWriter, r *http.Request) {
+		deleteLeague(w, r, leagueMgr)
+	})
 
 	// Players — scoped to ?league_id=
 	mux.HandleFunc("GET /api/players", listPlayers)
@@ -424,101 +442,109 @@ func applyUserIDFromContext(ctx context.Context) *int64 {
 
 // ─── Leagues ─────────────────────────────────────────────────────────────────
 
-func listLeagues(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.DB.Query(
-		`SELECT id, name, game_format, COALESCE(day_of_week,''), created_at FROM leagues ORDER BY id`)
+func listLeagues(w http.ResponseWriter, r *http.Request, mgr LeagueManager) {
+	ls, err := mgr.ListLeagues(r.Context())
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var leagues []models.League
-	for rows.Next() {
-		var l models.League
-		rows.Scan(&l.ID, &l.Name, &l.GameFormat, &l.DayOfWeek, &l.CreatedAt)
-		leagues = append(leagues, l)
-	}
-	if leagues == nil {
-		leagues = []models.League{}
-	}
-	jsonOK(w, leagues)
+	jsonOK(w, ls)
 }
 
-func createLeague(w http.ResponseWriter, r *http.Request) {
-	var l models.League
-	if err := decode(r, &l); err != nil {
+func createLeague(w http.ResponseWriter, r *http.Request, mgr LeagueManager) {
+	var body struct {
+		Name       string `json:"name"`
+		GameFormat string `json:"game_format"`
+		DayOfWeek  string `json:"day_of_week"`
+	}
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	if strings.TrimSpace(l.Name) == "" {
-		jsonError(w, "name is required", 400)
-		return
-	}
-	if l.GameFormat == "" {
-		l.GameFormat = "8ball"
-	}
-	res, err := db.DB.Exec(
-		`INSERT INTO leagues (name, game_format, day_of_week) VALUES (?,?,?)`,
-		l.Name, l.GameFormat, l.DayOfWeek)
+	l, err := mgr.CreateLeague(r.Context(), leagues.CreateLeagueInput{
+		Name:       body.Name,
+		GameFormat: body.GameFormat,
+		DayOfWeek:  body.DayOfWeek,
+	})
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		mapLeagueErr(w, err)
 		return
 	}
-	l.ID, _ = res.LastInsertId()
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, l)
 }
 
-func getLeague(w http.ResponseWriter, r *http.Request) {
+func getLeague(w http.ResponseWriter, r *http.Request, mgr LeagueManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var l models.League
-	err = db.DB.QueryRow(
-		`SELECT id, name, game_format, COALESCE(day_of_week,''), created_at FROM leagues WHERE id=?`, id,
-	).Scan(&l.ID, &l.Name, &l.GameFormat, &l.DayOfWeek, &l.CreatedAt)
+	l, err := mgr.GetLeague(r.Context(), id)
 	if err != nil {
-		jsonError(w, "league not found", 404)
+		mapLeagueErr(w, err)
 		return
 	}
 	jsonOK(w, l)
 }
 
-func updateLeague(w http.ResponseWriter, r *http.Request) {
+func updateLeague(w http.ResponseWriter, r *http.Request, mgr LeagueManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	var l models.League
-	if err := decode(r, &l); err != nil {
+	var body struct {
+		Name       string `json:"name"`
+		GameFormat string `json:"game_format"`
+		DayOfWeek  string `json:"day_of_week"`
+	}
+	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	_, err = db.DB.Exec(
-		`UPDATE leagues SET name=?, game_format=?, day_of_week=? WHERE id=?`,
-		l.Name, l.GameFormat, l.DayOfWeek, id)
-	if err != nil {
+	if err := mgr.UpdateLeague(r.Context(), id, leagues.UpdateLeagueInput{
+		Name:       body.Name,
+		GameFormat: body.GameFormat,
+		DayOfWeek:  body.DayOfWeek,
+	}); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	l.ID = id
-	jsonOK(w, l)
+	jsonOK(w, models.League{ID: id, Name: body.Name, GameFormat: body.GameFormat, DayOfWeek: body.DayOfWeek})
 }
 
-func deleteLeague(w http.ResponseWriter, r *http.Request) {
+func deleteLeague(w http.ResponseWriter, r *http.Request, mgr LeagueManager) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
 		return
 	}
-	if _, err := db.DB.Exec(`DELETE FROM leagues WHERE id=?`, id); err != nil {
+	if err := mgr.DeleteLeague(r.Context(), id); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// mapLeagueErr translates league domain errors to HTTP responses.
+func mapLeagueErr(w http.ResponseWriter, err error) {
+	var de *domainerr.Err
+	switch {
+	case errors.Is(err, leagues.ErrNotFound):
+		jsonError(w, "league not found", http.StatusNotFound)
+	case errors.As(err, &de):
+		switch de.Category {
+		case domainerr.NotFound:
+			jsonError(w, de.Message, http.StatusNotFound)
+		case domainerr.InvalidInput:
+			jsonError(w, de.Message, http.StatusBadRequest)
+		default:
+			jsonError(w, de.Message, http.StatusInternalServerError)
+		}
+	default:
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // ─── Players — scoped to league via team ─────────────────────────────────────

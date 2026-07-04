@@ -16,6 +16,7 @@ import (
 
 	"league_app/backend/domainerr"
 	"league_app/backend/domains/handicaps"
+	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/rules"
 	"league_app/backend/domains/seasons"
@@ -34,6 +35,24 @@ type stubHandicapSvc struct {
 func (s *stubHandicapSvc) Recommendations(ctx context.Context, seasonID int64) (models.HandicapReviewResponse, error) {
 	return s.fn(ctx, seasonID)
 }
+
+// noopLeagueMgr satisfies handlers.LeagueManager for tests that only exercise
+// non-league handler logic.
+type noopLeagueMgr struct{}
+
+func (n *noopLeagueMgr) ListLeagues(_ context.Context) ([]models.League, error) {
+	return []models.League{}, nil
+}
+func (n *noopLeagueMgr) GetLeague(_ context.Context, _ int64) (models.League, error) {
+	return models.League{}, nil
+}
+func (n *noopLeagueMgr) CreateLeague(_ context.Context, _ leagues.CreateLeagueInput) (models.League, error) {
+	return models.League{}, nil
+}
+func (n *noopLeagueMgr) UpdateLeague(_ context.Context, _ int64, _ leagues.UpdateLeagueInput) error {
+	return nil
+}
+func (n *noopLeagueMgr) DeleteLeague(_ context.Context, _ int64) error { return nil }
 
 // noopRuleMgr satisfies handlers.RuleManager for tests that only exercise other
 // handler logic and do not exercise the season-rules endpoints.
@@ -168,13 +187,15 @@ func testServer(t *testing.T) *httptest.Server {
 	ruleSvc := rules.NewRuleService(ruleStore)
 	seasonStore := sqlite.NewSeasonStore(db.DB)
 	seasonSvc := seasons.NewSeasonService(seasonStore)
+	leagueStore := sqlite.NewLeagueStore(db.DB)
+	leagueSvc := leagues.NewLeagueService(leagueStore)
 	scheduleStore := sqlite.NewScheduleStore(db.DB)
 	scheduleSvc := matches.NewScheduleService(scheduleStore)
 	matchStore := sqlite.NewMatchStore(db.DB)
 	matchSvc := matches.NewMatchService(matchStore)
 	lineupStore := sqlite.NewLineupStore(db.DB)
 	lineupSvc := matches.NewLineupService(lineupStore)
-	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, SeasonMgr: seasonSvc, ScheduleMgr: scheduleSvc, MatchMgr: matchSvc, LineupMgr: lineupSvc}
+	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, LeagueMgr: leagueSvc, SeasonMgr: seasonSvc, ScheduleMgr: scheduleSvc, MatchMgr: matchSvc, LineupMgr: lineupSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -194,7 +215,7 @@ func TestGetHandicapRecommendations_NotFound404(t *testing.T) {
 		return models.HandicapReviewResponse{}, domainerr.New("HC_SEASON_NOT_FOUND", domainerr.NotFound, "season not found")
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, SeasonMgr: &noopSeasonMgr{}})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, LeagueMgr: &noopLeagueMgr{}, SeasonMgr: &noopSeasonMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -219,7 +240,7 @@ func TestGetHandicapRecommendations_InternalError500(t *testing.T) {
 		return models.HandicapReviewResponse{}, domainerr.Wrap("HC_DATA_ERROR", domainerr.Internal, "internal error", fmt.Errorf("db offline"))
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, SeasonMgr: &noopSeasonMgr{}})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, LeagueMgr: &noopLeagueMgr{}, SeasonMgr: &noopSeasonMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -252,7 +273,7 @@ func TestGetHandicapRecommendations_Success200(t *testing.T) {
 		return want, nil
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, SeasonMgr: &noopSeasonMgr{}})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, LeagueMgr: &noopLeagueMgr{}, SeasonMgr: &noopSeasonMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -287,7 +308,7 @@ func TestGetHandicapRecommendations_NonDomainError500NoLeak(t *testing.T) {
 		return models.HandicapReviewResponse{}, errors.New("secret database path /var/db/prod.db")
 	}}
 	mux := http.NewServeMux()
-	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, SeasonMgr: &noopSeasonMgr{}})
+	handlers.Register(mux, dir, handlers.Dependencies{HandicapSvc: stub, RuleMgr: &noopRuleMgr{}, LeagueMgr: &noopLeagueMgr{}, SeasonMgr: &noopSeasonMgr{}})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
