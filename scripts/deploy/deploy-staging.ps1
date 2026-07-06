@@ -28,7 +28,7 @@ try {
     & node --check web\app.js
     if ($LASTEXITCODE -ne 0) { throw 'web/app.js syntax check failed.' }
 
-    & node --check web\domains\rules\index.js
+    & node --check web\domains\rules\rules-domain.js
     if ($LASTEXITCODE -ne 0) { throw 'Rules module syntax check failed.' }
 
     New-Item -ItemType Directory -Path (Split-Path $artifact) -Force | Out-Null
