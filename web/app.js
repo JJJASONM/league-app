@@ -35,7 +35,7 @@ function loadSection(sec) {
     case 'entry':     populateSeasonSelect('entry-season-select', loadEntryMatches); break;
     case 'standings': populateSeasonSelect('standings-season-select', loadStandings); break;
     case 'stats':     populateSeasonSelect('stats-season-select', loadPlayerStats); break;
-    case 'handicap':  populateSeasonSelect('handicap-season-select', _onHandicapSeasonChange); break;
+    case 'handicap':  document.querySelector('handicaps-page')?.refresh(allSeasons, activeSeason); break;
   }
 }
 
@@ -2127,18 +2127,6 @@ async function loadPlayerStats() {
     </tr>`).join('') || '<tr><td colspan="9" class="text-center text-muted py-3">No stats yet</td></tr>';
 }
 
-// -- Handicap Review ----------------------------------------------------------
-// Rendering is owned by <handicap-review> in web/domains/handicaps/.
-// This shell function bridges the season select to the component's public API.
-
-function _onHandicapSeasonChange() {
-  const sid    = document.getElementById('handicap-season-select').value;
-  const widget = document.getElementById('handicap-review-widget');
-  if (!widget) return;
-  if (sid) widget.loadSeason(sid);
-  else     widget.reset();
-}
-
 // ── Leagues management modal ──────────────────────────────────────────────────
 
 // Fetches team counts for every known league and re-renders the table + checklist.
@@ -2244,9 +2232,6 @@ async function deleteLeague(id) {
     loadSection('dashboard');
   } catch(e) { toast(e.message,'danger'); }
 }
-
-// -- Listener registrations (replaces inline onchange where new code is added) --
-document.getElementById('handicap-season-select')?.addEventListener('change', _onHandicapSeasonChange);
 
 // ── Backup ────────────────────────────────────────────────────────────────────
 async function backup() {
