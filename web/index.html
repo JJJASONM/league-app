@@ -143,15 +143,7 @@
 
     <!-- Lineup Planning -->
     <div id="section-lineup" class="section">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <h4 class="mb-0 fw-bold">Lineup Planning</h4>
-        <div class="d-flex gap-2 align-items-center">
-          <select class="form-select form-select-sm w-auto" id="lu-season-sel" onchange="loadLineupWeeks()"></select>
-          <select class="form-select form-select-sm" id="lu-week-sel" onchange="loadLineupForWeek()" style="min-width:170px"></select>
-        </div>
-      </div>
-      <p class="text-muted small mb-3">Set a <strong>Default Lineup</strong> once per team, then override specific weeks as needed. Lineups load automatically in Match Entry.</p>
-      <div id="lineup-cards" class="row g-3"></div>
+      <lineup-page></lineup-page>
     </div>
 
     <!-- Match Entry -->
@@ -423,5 +415,6 @@
     <script type="module" src="/domains/teams/index.js"></script>
     <script type="module" src="/domains/handicaps/handicaps-domain.js"></script>
     <script type="module" src="/domains/seasons/seasons-domain.js"></script>
+    <script type="module" src="/domains/lineups/lineups-domain.js"></script>
 </body>
 </html>
