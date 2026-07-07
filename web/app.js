@@ -36,8 +36,8 @@ function loadSection(sec) {
       _entryPreSelectSeasonId = null;
       _entryPreSelectMatchId  = null;
       break;
-    case 'standings': populateSeasonSelect('standings-season-select', loadStandings); break;
-    case 'stats':     populateSeasonSelect('stats-season-select', loadPlayerStats); break;
+    case 'standings': document.querySelector('standings-section')?.refresh(allSeasons); break;
+    case 'stats':     document.querySelector('stats-section')?.refresh(allSeasons); break;
     case 'handicap':  document.querySelector('handicaps-page')?.refresh(allSeasons, activeSeason); break;
   }
 }
@@ -346,9 +346,8 @@ document.addEventListener('season-nav-request', e => {
 });
 
 document.addEventListener('schedule-data-changed', () => {
-  loadStandings();
-  const statsSeasonId = document.getElementById('stats-season-select').value;
-  if (statsSeasonId) loadPlayerStats();
+  document.querySelector('standings-section')?.reload();
+  document.querySelector('stats-section')?.reload();
 });
 
 // ── Season utilities (shared; used by schedule, lineup, and scoresheet) ────────
@@ -486,57 +485,6 @@ async function deletePlayer(id) {
     allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
     loadPlayers();
   } catch(e) { toast(e.message,'danger'); }
-}
-
-// ── Season selects ────────────────────────────────────────────────────────────
-function populateSeasonSelect(selId, callback) {
-  const sel = document.getElementById(selId);
-  sel.innerHTML = allSeasons.map(s =>
-    `<option value="${s.id}" ${s.active?'selected':''}>${s.name}</option>`
-  ).join('') || '<option value="">No seasons</option>';
-  if (callback) callback();
-}
-
-
-// ── Standings ─────────────────────────────────────────────────────────────────
-async function loadStandings() {
-  const seasonId = document.getElementById('standings-season-select').value;
-  if (!seasonId) return;
-  const standings = await api('GET', `/standings?season_id=${seasonId}`);
-  const tbody = document.querySelector('#standings-table tbody');
-  tbody.innerHTML = standings.map((s,i) => `
-    <tr ${i===0?'class="table-warning fw-bold"':''}>
-      <td>${i+1}</td>
-      <td>${s.team_name}</td>
-      <td>${s.played}</td>
-      <td>${s.wins}</td>
-      <td>${s.losses}</td>
-      <td>${s.ties}</td>
-      <td class="fw-bold">${s.points}</td>
-      <td>${s.games_won}</td>
-      <td>${s.games_lost}</td>
-      <td>${(s.win_pct*100).toFixed(1)}%</td>
-    </tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-3">No completed matches yet</td></tr>';
-}
-
-// ── Player Stats ──────────────────────────────────────────────────────────────
-async function loadPlayerStats() {
-  const seasonId = document.getElementById('stats-season-select').value;
-  if (!seasonId) return;
-  const stats = await api('GET', `/player-stats?season_id=${seasonId}`);
-  const tbody = document.querySelector('#stats-table tbody');
-  tbody.innerHTML = stats.map(s => `
-    <tr>
-      <td class="text-muted small">${s.player_number||'—'}</td>
-      <td>${s.player_name}</td>
-      <td>${s.team_name}</td>
-      <td><span class="badge bg-secondary badge-hc">${s.handicap}</span></td>
-      <td>${s.sets_won}</td>
-      <td>${s.sets_lost}</td>
-      <td>${s.games_won}</td>
-      <td>${s.games_lost}</td>
-      <td>${(s.win_pct*100).toFixed(1)}%</td>
-    </tr>`).join('') || '<tr><td colspan="9" class="text-center text-muted py-3">No stats yet</td></tr>';
 }
 
 // ── Leagues management modal ──────────────────────────────────────────────────

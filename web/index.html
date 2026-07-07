@@ -121,34 +121,12 @@
 
     <!-- Standings -->
     <div id="section-standings" class="section">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4 class="mb-0 fw-bold">Standings</h4>
-        <select class="form-select form-select-sm w-auto" id="standings-season-select" onchange="loadStandings()"></select>
-      </div>
-      <div class="card">
-        <div class="card-body p-0">
-          <table class="table table-hover mb-0" id="standings-table">
-            <thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>T</th><th>Pts</th><th>GW</th><th>GL</th><th>Win%</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
+      <standings-section></standings-section>
     </div>
 
     <!-- Player Stats -->
     <div id="section-stats" class="section">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4 class="mb-0 fw-bold">Player Stats</h4>
-        <select class="form-select form-select-sm w-auto" id="stats-season-select" onchange="loadPlayerStats()"></select>
-      </div>
-      <div class="card">
-        <div class="card-body p-0">
-          <table class="table table-hover mb-0" id="stats-table">
-            <thead><tr><th>#</th><th>Player</th><th>Team</th><th>Handicap</th><th>SW</th><th>SL</th><th>GW</th><th>GL</th><th>Win%</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
+      <stats-section></stats-section>
     </div>
 
     <!-- Handicap Review -->
@@ -372,5 +350,6 @@
     <script type="module" src="/domains/lineups/lineups-domain.js"></script>
     <script type="module" src="/domains/matches/matches-domain.js"></script>
     <script type="module" src="/domains/schedules/schedules-domain.js"></script>
+    <script type="module" src="/domains/standings/standings-domain.js"></script>
 </body>
 </html>
