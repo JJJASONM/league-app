@@ -148,21 +148,7 @@
 
     <!-- Match Entry -->
     <div id="section-entry" class="section">
-      <h4 class="mb-3 fw-bold">Match Entry</h4>
-      <div class="row g-2 mb-3 align-items-end">
-        <div class="col-auto">
-          <label class="form-label small mb-1">Season</label>
-          <select class="form-select form-select-sm" id="entry-season-select" onchange="loadEntryMatches()"></select>
-        </div>
-        <div class="col-auto">
-          <label class="form-label small mb-1">Match</label>
-          <select class="form-select form-select-sm" id="entry-match-select" onchange="loadMatchEntry()"></select>
-        </div>
-      </div>
-      <!-- Inline lineup picker — shown only when no lineup plans exist -->
-      <div id="entry-lineup" class="d-none"></div>
-      <!-- Scoresheet -->
-      <div id="entry-scoresheet" class="d-none"></div>
+      <match-entry-page></match-entry-page>
     </div>
 
     <!-- Standings -->
@@ -416,5 +402,6 @@
     <script type="module" src="/domains/handicaps/handicaps-domain.js"></script>
     <script type="module" src="/domains/seasons/seasons-domain.js"></script>
     <script type="module" src="/domains/lineups/lineups-domain.js"></script>
+    <script type="module" src="/domains/matches/matches-domain.js"></script>
 </body>
 </html>
