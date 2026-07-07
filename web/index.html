@@ -90,18 +90,7 @@
 
     <!-- Players -->
     <div id="section-players" class="section">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4 class="mb-0 fw-bold">Players</h4>
-        <button class="btn btn-primary btn-sm" onclick="openNewPlayer()"><i class="bi bi-plus-lg"></i> Add Player</button>
-      </div>
-      <div class="card">
-        <div class="card-body p-0">
-          <table class="table table-hover mb-0" id="players-table">
-            <thead><tr><th>#</th><th>Last Name</th><th>First Name</th><th>Diff</th><th>Team</th><th>Phone</th><th></th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
+      <players-page></players-page>
     </div>
 
     <!-- Schedule -->
@@ -231,80 +220,6 @@
   </div>
 </div>
 
-<!-- Player Modal -->
-<div class="modal fade" id="player-modal" tabindex="-1">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="player-modal-title">Add Player</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <input type="hidden" id="player-id">
-
-        <!-- Player number: shown readonly with lock icon when editing -->
-        <div class="mb-3">
-          <label class="form-label">Player # <span class="text-muted small">(e.g. 42 — locked once saved)</span></label>
-          <div class="input-group">
-            <input type="text" class="form-control" id="player-number" maxlength="4" placeholder="42">
-            <span class="input-group-text d-none" id="player-number-lock" title="Player number is locked"><i class="bi bi-lock-fill text-secondary"></i></span>
-          </div>
-        </div>
-
-        <!-- First / Last name -->
-        <div class="row g-2 mb-3">
-          <div class="col">
-            <label class="form-label">First Name *</label>
-            <input type="text" class="form-control" id="player-first-name">
-          </div>
-          <div class="col">
-            <label class="form-label">Last Name *</label>
-            <input type="text" class="form-control" id="player-last-name">
-          </div>
-        </div>
-
-        <!-- Phone / Email -->
-        <div class="row g-2 mb-3">
-          <div class="col">
-            <label class="form-label">Phone</label>
-            <input type="tel" class="form-control" id="player-phone" placeholder="(555) 555-5555">
-          </div>
-          <div class="col">
-            <label class="form-label">Email</label>
-            <input type="email" class="form-control" id="player-email" placeholder="player@example.com">
-          </div>
-        </div>
-
-        <!-- Handicap -->
-        <div class="mb-3">
-          <label class="form-label" id="handicap-label">Diff Rating</label>
-          <input type="number" class="form-control" id="player-handicap" value="0" step="0.01">
-          <div class="form-text" id="handicap-hint">8-ball: (games won − games lost) ÷ matches played. 9-ball: race-to number (e.g. 5, 7).</div>
-        </div>
-
-        <!-- Admin Hold — 9-ball only -->
-        <div class="mb-3 d-none" id="admin-hold-row">
-          <div class="form-check">
-            <input class="form-check-input" type="checkbox" id="player-admin-hold">
-            <label class="form-check-label" for="player-admin-hold">
-              Admin Hold <span class="text-muted small">(handicap locked at Administrative Discretion)</span>
-            </label>
-          </div>
-        </div>
-
-        <!-- Team -->
-        <div class="mb-1">
-          <label class="form-label">Team</label>
-          <select class="form-select" id="player-team"><option value="">— No Team —</option></select>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" class="btn btn-primary" onclick="savePlayer()">Save</button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- Close Week Modal -->
 <div class="modal fade" id="close-week-modal" tabindex="-1">
@@ -351,5 +266,6 @@
     <script type="module" src="/domains/matches/matches-domain.js"></script>
     <script type="module" src="/domains/schedules/schedules-domain.js"></script>
     <script type="module" src="/domains/standings/standings-domain.js"></script>
+    <script type="module" src="/domains/players/players-domain.js"></script>
 </body>
 </html>
