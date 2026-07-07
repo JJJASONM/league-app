@@ -28,7 +28,7 @@ function loadSection(sec) {
     case 'dashboard': loadDashboard(); break;
     case 'seasons':   document.querySelector('seasons-page')?.refresh(activeLeague, allSeasons, allTeams); break;
     case 'teams':     loadTeams(); break;
-    case 'players':   loadPlayers(); break;
+    case 'players':   document.querySelector('players-page')?.refresh(allTeams, activeLeague); break;
     case 'schedule':  document.querySelector('schedule-page')?.refresh(allSeasons, allTeams, activeLeague); break;
     case 'lineup':    document.querySelector('lineup-page')?.refresh(allSeasons, activeSeason, allTeams, allPlayers); break;
     case 'entry':
@@ -350,6 +350,12 @@ document.addEventListener('schedule-data-changed', () => {
   document.querySelector('stats-section')?.reload();
 });
 
+document.addEventListener('players-data-changed', e => {
+  allPlayers = e.detail.players;
+  const activeSec = document.querySelector('[data-section].active')?.dataset.section;
+  if (activeSec === 'teams') loadTeams();
+});
+
 // ── Season utilities (shared; used by schedule, lineup, and scoresheet) ────────
 
 // Format a YYYY-MM-DD or ISO date string as "Jul 6, 2026". Returns fallback if empty.
@@ -374,117 +380,6 @@ function fmtDateRange(start, end) {
 function loadTeams() {
   const page = document.querySelector('teams-page');
   if (page) page.refresh(activeLeague?.id ?? null, activeSeason?.id ?? null);
-}
-
-// ── Players ───────────────────────────────────────────────────────────────────
-async function loadPlayers() {
-  if (!activeLeague) return;
-  allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
-  const tbody = document.querySelector('#players-table tbody');
-  tbody.innerHTML = allPlayers.map(p => `
-    <tr>
-      <td class="text-muted small">${p.player_number||'—'}</td>
-      <td class="fw-semibold">${p.last_name}${p.admin_hold ? ' <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem">Hold</span>' : ''}</td>
-      <td>${p.first_name}</td>
-      <td><span class="badge bg-secondary badge-hc">${p.handicap}</span></td>
-      <td>${p.team_name || '<span class="text-muted">—</span>'}</td>
-      <td class="text-muted small">${p.phone||'—'}</td>
-      <td class="text-end">
-        <button class="btn btn-outline-secondary btn-sm py-0 me-1" onclick="editPlayer(${p.id})"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-outline-danger btn-sm py-0" onclick="deletePlayer(${p.id})"><i class="bi bi-trash"></i></button>
-      </td>
-    </tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted py-3">No players yet</td></tr>';
-}
-
-function setPlayerModalMode(isEdit) {
-  const numInput = document.getElementById('player-number');
-  const lockIcon = document.getElementById('player-number-lock');
-  // Lock player number when editing
-  numInput.readOnly = isEdit;
-  numInput.classList.toggle('bg-light', isEdit);
-  lockIcon.classList.toggle('d-none', !isEdit);
-  // Show admin hold only for 9-ball leagues
-  const is9ball = activeLeague?.game_format === '9ball';
-  document.getElementById('admin-hold-row').classList.toggle('d-none', !is9ball);
-}
-
-function openNewPlayer() {
-  document.getElementById('player-modal-title').textContent = 'Add Player';
-  document.getElementById('player-id').value = '';
-  document.getElementById('player-number').value = '';
-  document.getElementById('player-first-name').value = '';
-  document.getElementById('player-last-name').value = '';
-  document.getElementById('player-phone').value = '';
-  document.getElementById('player-email').value = '';
-  document.getElementById('player-handicap').value = '0';
-  document.getElementById('player-admin-hold').checked = false;
-  setPlayerModalMode(false);
-  populateTeamDropdown(null);
-  openModal('player-modal');
-}
-
-function editPlayer(id) {
-  const p = allPlayers.find(x => x.id === id);
-  if (!p) return;
-  document.getElementById('player-modal-title').textContent = 'Edit Player';
-  document.getElementById('player-id').value = p.id;
-  document.getElementById('player-number').value = p.player_number || '';
-  document.getElementById('player-first-name').value = p.first_name || '';
-  document.getElementById('player-last-name').value = p.last_name || '';
-  document.getElementById('player-phone').value = p.phone || '';
-  document.getElementById('player-email').value = p.email || '';
-  document.getElementById('player-handicap').value = p.handicap;
-  document.getElementById('player-admin-hold').checked = !!p.admin_hold;
-  setPlayerModalMode(true);
-  populateTeamDropdown(p.team_id);
-  openModal('player-modal');
-}
-
-function populateTeamDropdown(selectedId) {
-  const sel = document.getElementById('player-team');
-  sel.innerHTML = '<option value="">— No Team —</option>' +
-    allTeams.map(t => `<option value="${t.id}" ${t.id==selectedId?'selected':''}>${t.name}</option>`).join('');
-}
-
-async function savePlayer() {
-  const id        = document.getElementById('player-id').value;
-  const teamVal   = document.getElementById('player-team').value;
-  const firstName = document.getElementById('player-first-name').value.trim();
-  const lastName  = document.getElementById('player-last-name').value.trim();
-  if (!firstName && !lastName) { toast('First or last name is required','warning'); return; }
-  const body = {
-    player_number: id ? undefined : document.getElementById('player-number').value.trim(), // only on create
-    first_name:    firstName,
-    last_name:     lastName,
-    phone:         document.getElementById('player-phone').value.trim(),
-    email:         document.getElementById('player-email').value.trim(),
-    handicap:      parseFloat(document.getElementById('player-handicap').value) || 0,
-    admin_hold:    document.getElementById('player-admin-hold').checked,
-    team_id:       teamVal ? parseInt(teamVal) : null,
-    league_id:     activeLeague?.id
-  };
-  // Include player_number on create
-  if (!id) body.player_number = document.getElementById('player-number').value.trim();
-  try {
-    if (id) await api('PUT', `/players/${id}`, body);
-    else    await api('POST', '/players', body);
-    closeModal('player-modal');
-    toast('Player saved');
-    allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
-    const activeSec = document.querySelector('[data-section].active')?.dataset.section;
-    if (activeSec === 'teams') loadTeams();
-    else loadPlayers();
-  } catch(e) { toast(e.message,'danger'); }
-}
-
-async function deletePlayer(id) {
-  if (!confirm('Remove this player?')) return;
-  try {
-    await api('DELETE', `/players/${id}`);
-    toast('Deleted');
-    allPlayers = await api('GET', `/players?league_id=${activeLeague.id}`);
-    loadPlayers();
-  } catch(e) { toast(e.message,'danger'); }
 }
 
 // ── Leagues management modal ──────────────────────────────────────────────────
