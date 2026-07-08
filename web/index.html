@@ -48,34 +48,7 @@
 
     <!-- Dashboard -->
     <div id="section-dashboard" class="section active">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <div>
-          <h4 class="mb-0 fw-bold">What Needs Doing</h4>
-          <div class="text-muted small" id="dash-league-label"></div>
-        </div>
-        <button class="btn btn-outline-secondary btn-sm" onclick="loadDashboard()"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-      </div>
-      <div class="row g-3">
-        <div class="col-lg-7">
-          <div class="card" id="dash-action-card">
-            <div id="dash-actions"><div class="text-muted text-center py-4">Loading…</div></div>
-          </div>
-        </div>
-        <div class="col-lg-5">
-          <div class="card mb-3">
-            <div class="card-header fw-semibold py-2">Upcoming This Week</div>
-            <div class="card-body p-0">
-              <table class="table table-sm mb-0" id="dash-upcoming"></table>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header fw-semibold py-2">Season Standings</div>
-            <div class="card-body p-0">
-              <table class="table table-sm mb-0" id="dash-standings"></table>
-            </div>
-          </div>
-        </div>
-      </div>
+      <dashboard-page></dashboard-page>
     </div>
 
     <!-- Seasons -->
@@ -267,5 +240,6 @@
     <script type="module" src="/domains/schedules/schedules-domain.js"></script>
     <script type="module" src="/domains/standings/standings-domain.js"></script>
     <script type="module" src="/domains/players/players-domain.js"></script>
+    <script type="module" src="/domains/dashboard/dashboard-domain.js"></script>
 </body>
 </html>
