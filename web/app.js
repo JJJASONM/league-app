@@ -22,6 +22,11 @@ document.querySelectorAll('[data-section]').forEach(link => {
   });
 });
 
+// Sidebar event wiring — shell-owned; registered here rather than as inline HTML attributes.
+document.getElementById('league-select')?.addEventListener('change', switchLeague);
+document.querySelector('[data-action="manage-leagues"]')?.addEventListener('click', openLeagueModal);
+document.querySelector('[data-action="backup"]')?.addEventListener('click', backup);
+
 function loadSection(sec) {
   if (!activeLeague) return;
   switch(sec) {

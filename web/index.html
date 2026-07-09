@@ -17,7 +17,7 @@
     <!-- League Switcher -->
     <div class="league-picker">
       <label>League</label>
-      <select class="form-select form-select-sm" id="league-select" onchange="switchLeague()">
+      <select class="form-select form-select-sm" id="league-select">
         <option value="">Loading…</option>
       </select>
     </div>
@@ -38,8 +38,8 @@
     </ul>
 
     <div class="mt-auto px-3 pb-3">
-      <button class="btn btn-sm btn-outline-secondary w-100 mb-2" onclick="openLeagueModal()"><i class="bi bi-gear"></i> Manage Leagues</button>
-      <button class="btn btn-sm btn-outline-secondary w-100" onclick="backup()"><i class="bi bi-cloud-download"></i> Backup DB</button>
+      <button class="btn btn-sm btn-outline-secondary w-100 mb-2" data-action="manage-leagues"><i class="bi bi-gear"></i> Manage Leagues</button>
+      <button class="btn btn-sm btn-outline-secondary w-100" data-action="backup"><i class="bi bi-cloud-download"></i> Backup DB</button>
     </div>
   </nav>
 
