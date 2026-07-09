@@ -225,113 +225,39 @@ function loadTeams() {
   if (page) page.refresh(activeLeague?.id ?? null, activeSeason?.id ?? null);
 }
 
-// ── Leagues management modal ──────────────────────────────────────────────────
+// ── Leagues management modal ─────────────────────────────────────────────
 
-// Fetches team counts for every known league and re-renders the table + checklist.
-// Called on open and after every add/delete so counts stay accurate.
-async function refreshLeaguesTable() {
-  const counts = {};
-  await Promise.all(allLeagues.map(async l => {
-    try {
-      const ts = await api('GET', `/teams?league_id=${l.id}`);
-      counts[l.id] = ts.length;
-    } catch(_) { counts[l.id] = 0; }
-  }));
-  renderLeaguesTable(counts);
+function openLeagueModal() {
+  document.querySelector('leagues-page')?.openModal(activeLeague);
 }
 
-async function openLeagueModal() {
-  await refreshLeaguesTable();
-  openModal('league-modal');
-}
+document.addEventListener('leagues-list-changed', async e => {
+  const { leagues, deletedId } = e.detail;
+  allLeagues = leagues;
 
-function renderLeaguesTable(counts = {}) {
-  const formatLabel = { '8ball':'8-Ball','9ball':'9-Ball','10ball':'10-Ball','straight':'Straight' };
-  const tbody = document.querySelector('#leagues-table tbody');
-  tbody.innerHTML = allLeagues.map(l => {
-    const n = counts[l.id] ?? '—';
-    const teamOk = typeof n === 'number' && n >= 2;
-    const teamBadge = typeof n === 'number'
-      ? `<span class="badge ${teamOk ? 'bg-success' : 'bg-warning text-dark'}" style="font-size:.7rem">
-          ${teamOk ? '<i class="bi bi-check-lg"></i> ' : '<i class="bi bi-exclamation-triangle"></i> '}${n} team${n !== 1 ? 's' : ''}
-        </span>`
-      : '<span class="text-muted small">—</span>';
-    return `
-    <tr ${activeLeague && l.id === activeLeague.id ? 'class="table-primary"' : ''}>
-      <td class="fw-semibold">${l.name}</td>
-      <td>${formatLabel[l.game_format]||l.game_format}</td>
-      <td>${l.day_of_week||'—'}</td>
-      <td>${teamBadge}</td>
-      <td class="text-end">
-        <button class="btn btn-outline-danger btn-sm py-0" onclick="deleteLeague(${l.id})"><i class="bi bi-trash"></i></button>
-      </td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="5" class="text-center text-muted py-2">No leagues yet</td></tr>';
+  if (deletedId != null && activeLeague?.id === deletedId) {
+    activeLeague = allLeagues[0] || null;
+    if (activeLeague) localStorage.setItem('activeLeagueId', String(activeLeague.id));
+    else              localStorage.removeItem('activeLeagueId');
+  }
 
-  // Verification checklist per league.
-  const checklist = document.getElementById('league-checklist');
-  if (!checklist) return;
-  checklist.innerHTML = allLeagues.map(l => {
-    const n = counts[l.id] ?? 0;
-    const hasTeams  = n >= 2;
-    const needsOdd  = n > 0 && n % 2 === 1;
-    const item = (ok, text) =>
-      `<li class="${ok ? 'text-success' : 'text-muted'}">
-        <i class="bi ${ok ? 'bi-check-circle-fill' : 'bi-circle'} me-1"></i>${text}
-      </li>`;
-    return `<div class="mb-2">
-      <div class="fw-semibold small mb-1">${l.name}</div>
-      <ul class="list-unstyled ms-1 mb-0" style="font-size:.82rem">
-        ${item(n >= 2, `At least 2 teams configured (${n} now)`)}
-        ${item(needsOdd, `Odd team count enables natural bye rotation (${n} teams)`)}
-        ${item(false, 'Review teams and rosters before generating a season schedule')}
-      </ul>
-    </div>`;
-  }).join('') || '<div class="text-muted small">No leagues to check.</div>';
-}
-
-async function addLeague() {
-  const name   = document.getElementById('new-league-name').value.trim();
-  const format = document.getElementById('new-league-format').value;
-  const day    = document.getElementById('new-league-day').value;
-  if (!name) { toast('League name is required','warning'); return; }
-  try {
-    const newL = await api('POST', '/leagues', { name, game_format: format, day_of_week: day||null });
-    toast('League added');
-    document.getElementById('new-league-name').value = '';
-    allLeagues = await api('GET', '/leagues');
-    // Update sidebar select
-    const sel = document.getElementById('league-select');
+  const sel = document.getElementById('league-select');
+  if (allLeagues.length === 0) {
+    sel.innerHTML = '<option value="">No leagues — add one</option>';
+    activeLeague = null;
+  } else {
     sel.innerHTML = allLeagues.map(l =>
       `<option value="${l.id}" ${activeLeague && l.id === activeLeague.id ? 'selected' : ''}>${l.name}</option>`
     ).join('');
-    await refreshLeaguesTable();
-  } catch(e) { toast(e.message,'danger'); }
-}
+  }
 
-async function deleteLeague(id) {
-  if (!confirm('Delete this league and ALL its teams, seasons and matches? This cannot be undone.')) return;
-  try {
-    await api('DELETE', `/leagues/${id}`);
-    toast('League deleted');
-    allLeagues = await api('GET', '/leagues');
-    // If we deleted the active league, switch to first available
-    if (activeLeague?.id === id) {
-      activeLeague = allLeagues[0] || null;
-      if (activeLeague) localStorage.setItem('activeLeagueId', activeLeague.id);
-      else              localStorage.removeItem('activeLeagueId');
-    }
-    const sel = document.getElementById('league-select');
-    sel.innerHTML = allLeagues.map(l =>
-      `<option value="${l.id}" ${activeLeague && l.id === activeLeague.id ? 'selected' : ''}>${l.name}</option>`
-    ).join('') || '<option value="">No leagues</option>';
+  if (deletedId != null) {
     if (activeLeague) await loadLeagueData();
-    await refreshLeaguesTable();
     loadSection('dashboard');
-  } catch(e) { toast(e.message,'danger'); }
-}
+  }
+});
 
-// ── Backup ────────────────────────────────────────────────────────────────────
+
 async function backup() {
   try {
     const res = await api('POST', '/backup');

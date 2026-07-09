@@ -104,63 +104,7 @@
 
 <!-- ── Modals ─────────────────────────────────────────────────────────────── -->
 
-<!-- League Modal -->
-<div class="modal fade" id="league-modal" tabindex="-1">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">Manage Leagues</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <div class="mb-3 border-bottom pb-3">
-          <h6 class="fw-semibold">Add New League</h6>
-          <div class="row g-2">
-            <div class="col-md-4">
-              <label class="form-label small mb-1">League Name *</label>
-              <input type="text" class="form-control form-control-sm" id="new-league-name" placeholder="e.g. Monday 8-Ball">
-            </div>
-            <div class="col-md-3">
-              <label class="form-label small mb-1">Format</label>
-              <select class="form-select form-select-sm" id="new-league-format">
-                <option value="8ball">8-Ball</option>
-                <option value="9ball">9-Ball</option>
-                <option value="10ball">10-Ball</option>
-                <option value="straight">Straight Pool</option>
-              </select>
-            </div>
-            <div class="col-md-3">
-              <label class="form-label small mb-1">Day of Week</label>
-              <select class="form-select form-select-sm" id="new-league-day">
-                <option value="">—</option>
-                <option value="Monday">Monday</option>
-                <option value="Tuesday">Tuesday</option>
-                <option value="Wednesday">Wednesday</option>
-                <option value="Thursday">Thursday</option>
-                <option value="Friday">Friday</option>
-                <option value="Saturday">Saturday</option>
-                <option value="Sunday">Sunday</option>
-              </select>
-            </div>
-            <div class="col-md-2 d-flex align-items-end">
-              <button class="btn btn-primary btn-sm w-100" onclick="addLeague()"><i class="bi bi-plus-lg"></i> Add</button>
-            </div>
-          </div>
-        </div>
-        <h6 class="fw-semibold mb-2">Existing Leagues</h6>
-        <table class="table table-sm table-hover" id="leagues-table">
-          <thead><tr><th>Name</th><th>Format</th><th>Day</th><th>Teams</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <h6 class="fw-semibold mb-2 mt-3"><i class="bi bi-clipboard-check"></i> Setup Checklist</h6>
-        <div id="league-checklist" class="text-muted small">Loading…</div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-      </div>
-    </div>
-  </div>
-</div>
+<leagues-page></leagues-page>
 
 <!-- Assign Match Teams Modal -->
 <div class="modal fade" id="assign-match-modal" tabindex="-1">
@@ -241,5 +185,6 @@
     <script type="module" src="/domains/standings/standings-domain.js"></script>
     <script type="module" src="/domains/players/players-domain.js"></script>
     <script type="module" src="/domains/dashboard/dashboard-domain.js"></script>
+    <script type="module" src="/domains/leagues/leagues-domain.js"></script>
 </body>
 </html>
