@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"league_app/backend/domainerr"
-	"league_app/logic"
 )
 
 // GenerateRequest is the input for ScheduleService.GenerateSchedule.
@@ -28,7 +27,7 @@ type GenerateResult struct {
 }
 
 // ScheduleService orchestrates schedule generation: resolving teams, calling
-// the pure logic generators, and persisting the result.
+// the scheduling generators, and persisting the result.
 // It implements the ScheduleManager interface declared in handlers/deps.go.
 type ScheduleService struct {
 	store ScheduleStore
@@ -77,14 +76,14 @@ func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequ
 		return GenerateResult{}, fmt.Errorf("generate schedule: load byes: %w", err)
 	}
 
-	opts := logic.ScheduleOptions{
+	opts := ScheduleOptions{
 		StartDate: startDate,
 		SkipDates: skipDates,
 		NumWeeks:  req.NumWeeks,
 		ByeByWeek: byeByWeek,
 	}
 
-	var entries []logic.ScheduleEntry
+	var entries []ScheduleEntry
 	var genErr error
 
 	if req.ScheduleType == "blanket" {
@@ -92,7 +91,7 @@ func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequ
 		if mpw < 1 {
 			mpw = 1
 		}
-		entries, genErr = logic.BlanketTemplate(req.NumWeeks, mpw, opts)
+		entries, genErr = BlanketTemplate(req.NumWeeks, mpw, opts)
 	} else {
 		teamIDs, collectErr := s.collectTeamIDs(ctx, req, meta)
 		if collectErr != nil {
@@ -101,17 +100,17 @@ func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequ
 
 		switch req.ScheduleType {
 		case "single_rr":
-			entries, genErr = logic.SingleRoundRobin(teamIDs, opts)
+			entries, genErr = SingleRoundRobin(teamIDs, opts)
 		case "split":
-			entries, genErr = logic.SplitSeason(teamIDs, opts)
+			entries, genErr = SplitSeason(teamIDs, opts)
 		case "custom":
 			if req.NumWeeks < 1 {
 				return GenerateResult{}, domainerr.New("SCHEDULE_NUM_WEEKS_REQUIRED",
 					domainerr.InvalidInput, "num_weeks is required for custom schedule")
 			}
-			entries, genErr = logic.CustomSchedule(teamIDs, opts)
+			entries, genErr = CustomSchedule(teamIDs, opts)
 		default: // "double_rr"
-			entries, genErr = logic.DoubleRoundRobin(teamIDs, opts)
+			entries, genErr = DoubleRoundRobin(teamIDs, opts)
 		}
 	}
 

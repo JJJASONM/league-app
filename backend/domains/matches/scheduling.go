@@ -1,4 +1,4 @@
-package logic
+package matches
 
 import (
 	"fmt"
@@ -18,9 +18,9 @@ type ScheduleEntry struct {
 // ScheduleOptions holds parameters shared across all schedule generators.
 type ScheduleOptions struct {
 	StartDate time.Time
-	SkipDates []time.Time     // calendar dates to skip when assigning week dates
-	NumWeeks  int             // for "custom": total weeks; 0 = full cycle
-	ByeByWeek map[int]int64   // week number → team ID that should receive the natural bye (approved bye requests)
+	SkipDates []time.Time   // calendar dates to skip when assigning week dates
+	NumWeeks  int           // for "custom": total weeks; 0 = full cycle
+	ByeByWeek map[int]int64 // week number -> team ID that should receive the natural bye (approved bye requests)
 }
 
 // SingleRoundRobin generates a schedule where each team plays every other team once.
@@ -88,7 +88,7 @@ outer:
 	return assignDates(entries, opts), nil
 }
 
-// BlanketTemplate creates numWeeks × matchesPerWeek empty match slots (team IDs = 0).
+// BlanketTemplate creates numWeeks x matchesPerWeek empty match slots (team IDs = 0).
 // These are meant to be filled in manually via the schedule editor.
 func BlanketTemplate(numWeeks, matchesPerWeek int, opts ScheduleOptions) ([]ScheduleEntry, error) {
 	if numWeeks < 1 {
@@ -159,10 +159,10 @@ func maxWeekNum(entries []ScheduleEntry) int {
 // requested week number to the team that should receive that week's natural bye.
 //
 // The algorithm builds a full deterministic permutation of week numbers:
-//   1. For each approved request, map the team's natural-bye source week to the
-//      requested destination week.
-//   2. Pair the remaining unclaimed source weeks with the remaining unclaimed
-//      destination weeks in sorted order, preserving relative sequence.
+//  1. For each approved request, map the team's natural-bye source week to the
+//     requested destination week.
+//  2. Pair the remaining unclaimed source weeks with the remaining unclaimed
+//     destination weeks in sorted order, preserving relative sequence.
 //
 // This handles independent and chained requests correctly regardless of the
 // non-deterministic iteration order of Go maps.
@@ -191,7 +191,7 @@ func applyByeRequests(entries []ScheduleEntry, byeByWeek map[int]int64) []Schedu
 		weekPlaying[e.WeekNumber][e.HomeTeamID] = true
 		weekPlaying[e.WeekNumber][e.AwayTeamID] = true
 	}
-	naturalByeWeek := make(map[int64]int) // team → week where it has the natural bye
+	naturalByeWeek := make(map[int64]int) // team -> week where it has the natural bye
 	for w, playing := range weekPlaying {
 		for t := range allTeams {
 			if !playing[t] {
@@ -219,7 +219,7 @@ func applyByeRequests(entries []ScheduleEntry, byeByWeek map[int]int64) []Schedu
 	}
 	sort.Slice(reqs, func(i, j int) bool { return reqs[i].week < reqs[j].week })
 
-	// srcToNew[originalWeek] = newWeek — where each source week's content ends up.
+	// srcToNew[originalWeek] = newWeek -- where each source week's content ends up.
 	srcToNew := make(map[int]int)
 	usedAsNew := make(map[int]bool)
 
