@@ -16,21 +16,12 @@ import {
   saveRounds,
   clearMatchResults as apiClearResults,
 } from './match-entry-api-service.js';
+import { fmtDate } from '../../components/date-display.js';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, ch =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])
   );
-}
-
-function fmtDate(raw, fallback = 'TBD') {
-  if (!raw) return fallback;
-  const parts = raw.slice(0, 10).split('-').map(Number);
-  if (parts.length !== 3 || parts.some(isNaN)) return fallback;
-  const [y, mo, d] = parts;
-  const dt = new Date(y, mo - 1, d);
-  if (isNaN(dt)) return fallback;
-  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function fmtHC(v) { return (v >= 0 ? '+' : '') + v; }

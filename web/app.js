@@ -200,26 +200,6 @@ document.addEventListener('dashboard-refresh-request', async () => {
   document.querySelector('dashboard-page')?.refresh(activeLeague, activeSeason, allTeams, allPlayers);
 });
 
-// ── Season utilities (shared; used by schedule, lineup, and scoresheet) ────────
-
-// Format a YYYY-MM-DD or ISO date string as "Jul 6, 2026". Returns fallback if empty.
-function displayDate(raw, fallback = 'TBD') {
-  if (!raw) return fallback;
-  const parts = raw.slice(0, 10).split('-').map(Number);
-  if (parts.length !== 3 || parts.some(isNaN)) return fallback;
-  const [y, mo, d] = parts;
-  const dt = new Date(y, mo - 1, d);
-  if (isNaN(dt)) return fallback;
-  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-// fmtDate kept for season date-range display (delegates to displayDate).
-function fmtDate(raw, fallback = 'TBD') { return displayDate(raw, fallback); }
-
-function fmtDateRange(start, end) {
-  return `${displayDate(start, '—')} – ${displayDate(end, 'TBD')}`;
-}
-
 // ── Teams ─────────────────────────────────────────────────────────────────────
 function loadTeams() {
   const page = document.querySelector('teams-page');
