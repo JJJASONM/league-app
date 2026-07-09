@@ -27,6 +27,7 @@ import {
   listSeasonTeams, getSeasonChecklist,
 } from './season-api-service.js';
 import './season-editor-component.js';
+import { displayDate, fmtDateRange } from '../../components/date-display.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -46,11 +47,6 @@ function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-// Use the shell's displayDate global for consistent date formatting.
-function fmtDateRange(start, end) {
-  return `${displayDate(start, '—')} – ${displayDate(end, 'TBD')}`;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────

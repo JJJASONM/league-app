@@ -11,6 +11,7 @@
 //     The shell handles this by calling navTo(section).
 
 import { fetchDashboardMatches, fetchDashboardStandings } from './dashboard-api-service.js';
+import { displayDate } from '../../components/date-display.js';
 
 class DashboardPage extends HTMLElement {
   #activeLeague = null;

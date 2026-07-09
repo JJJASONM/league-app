@@ -6,17 +6,12 @@
 //     league/season context changes. Repopulates selectors and loads cards.
 
 import { fetchMatches, fetchLineupPlans, saveLineupPlans } from './lineup-api-service.js';
+import { fmtDate } from '../../components/date-display.js';
 
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function fmtDate(raw, fallback = 'TBD') {
-  if (!raw) return fallback;
-  const d = new Date(raw + (raw.length === 10 ? 'T00:00:00' : ''));
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 class LineupPage extends HTMLElement {
