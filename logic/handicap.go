@@ -1,9 +1,12 @@
-// Package logic implements the business rules for the pool league.
+// Package logic is a minimal pure-calculation package.
+// It provides the 8-ball scoresheet spot formula (CalcSpot, CalcSpotM) and
+// legacy skill-level helpers retained for future 9-ball support.
+// Domain-specific logic lives in backend/domains/; this package has no domain imports.
 package logic
 
 import "math"
 
-// ─── 8-Ball Scoresheet Spot Formula ──────────────────────────────────────────
+// --- 8-Ball Scoresheet Spot Formula -----------------------------------------
 //
 // Derived from the FileMaker Scoresheet_Gameday calculation fields:
 //
@@ -12,7 +15,7 @@ import "math"
 // Which simplifies to:
 //
 //	spot = Abs(player_a_handicap - player_b_handicap) * 2.55
-//	              (because  0.85 × 3 = 2.55)
+//	              (because  0.85 x 3 = 2.55)
 //
 // The app rounds to the nearest whole ball because partial spots are not
 // operationally meaningful on a scoresheet.
@@ -76,7 +79,7 @@ func CalcSpotM(homeHC, awayHC, multiplier float64) SpotResult {
 	return SpotResult{Pts: pts, To: to}
 }
 
-// ─── Legacy skill-level helper (kept for backward compatibility) ──────────────
+// --- Legacy skill-level helper (kept for backward compatibility) -------------
 
 // HandicapAdjustment returns the bonus games awarded to the weaker player using
 // an integer skill-level system. Not used for 8-ball scoresheets; retained for
