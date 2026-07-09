@@ -1,4 +1,4 @@
-package logic
+package matches
 
 import (
 	"league_app/models"
@@ -35,14 +35,13 @@ func MatchOutcome(results []models.MatchResult, homeTeamID, awayTeamID int64) (h
 }
 
 // ComputeStandings aggregates match results into a standings table.
-// matches must be completed matches; results maps matchID → []MatchResult.
+// matches must be completed matches; results maps matchID -> []MatchResult.
 func ComputeStandings(
 	matches []models.Match,
 	results map[int64][]models.MatchResult,
 	teams []models.Team,
 ) []models.Standing {
 
-	// Index team names
 	nameByID := make(map[int64]string, len(teams))
 	for _, t := range teams {
 		nameByID[t.ID] = t.Name

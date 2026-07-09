@@ -290,7 +290,7 @@ func (s *RoundService) GetStandings(ctx context.Context, seasonID int64) ([]mode
 	if err != nil {
 		return nil, fmt.Errorf("get standings: %w", err)
 	}
-	standings := logic.ComputeStandings(data.Matches, data.ResultMap, data.Teams)
+	standings := ComputeStandings(data.Matches, data.ResultMap, data.Teams)
 	if standings == nil {
 		standings = []models.Standing{}
 	}
