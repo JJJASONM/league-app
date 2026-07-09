@@ -1,10 +1,10 @@
-package logic
+package matches
 
 import (
 	"testing"
 )
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// --- helpers -----------------------------------------------------------------
 
 // threeTeamEntries returns the natural 3-team single round-robin:
 //
@@ -54,7 +54,7 @@ func matchCountInWeek(entries []ScheduleEntry, week int) int {
 	return n
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+// --- tests -------------------------------------------------------------------
 
 func TestApplyByeRequests_EmptyMap(t *testing.T) {
 	entries := threeTeamEntries()
@@ -75,13 +75,13 @@ func TestApplyByeRequests_EmptyMap(t *testing.T) {
 	}
 	for i := range entries {
 		if entries[i] != result[i] {
-			t.Errorf("entry %d changed: %+v → %+v", i, entries[i], result[i])
+			t.Errorf("entry %d changed: %+v -> %+v", i, entries[i], result[i])
 		}
 	}
 }
 
 func TestApplyByeRequests_AlreadyNatural(t *testing.T) {
-	// Requesting team 1's bye for week 1 — team 1 already has that bye naturally.
+	// Requesting team 1's bye for week 1 -- team 1 already has that bye naturally.
 	result := applyByeRequests(threeTeamEntries(), map[int]int64{1: 1})
 	if bye := byeInWeek(result, 1); bye != 1 {
 		t.Errorf("week 1 bye: want team 1, got team %d", bye)
@@ -116,7 +116,7 @@ func TestApplyByeRequests_SingleSwap(t *testing.T) {
 // that affect separate, non-overlapping week pairs.
 //
 // Natural:   week1=team1 bye, week2=team2 bye, week3=team3 bye
-// Requests:  team3 bye → week1,  team1 bye → week3
+// Requests:  team3 bye -> week1,  team1 bye -> week3
 // Expected:  week1=team3, week2=team2, week3=team1
 func TestApplyByeRequests_TwoRequests_Independent(t *testing.T) {
 	result := applyByeRequests(threeTeamEntries(), map[int]int64{1: 3, 3: 1})
@@ -140,9 +140,11 @@ func TestApplyByeRequests_TwoRequests_Independent(t *testing.T) {
 // simple pairwise swap), pairwise processing would displace one request.
 //
 // Natural:   week1=team1, week2=team2, week3=team3
-// Requests:  team3 bye → week1,  team2 bye → week3
-//   srcToNew: natural-week3 → dest1, natural-week2 → dest3, natural-week1 → dest2
-//   i.e. a 3-cycle: 1→2, 2→3, 3→1
+// Requests:  team3 bye -> week1,  team2 bye -> week3
+//
+//	srcToNew: natural-week3 -> dest1, natural-week2 -> dest3, natural-week1 -> dest2
+//	i.e. a 3-cycle: 1->2, 2->3, 3->1
+//
 // Expected:  week1=team3, week2=team1, week3=team2
 func TestApplyByeRequests_TwoRequests_Chained(t *testing.T) {
 	result := applyByeRequests(threeTeamEntries(), map[int]int64{1: 3, 3: 2})
@@ -177,16 +179,16 @@ func TestApplyByeRequests_Deterministic(t *testing.T) {
 	}
 }
 
-// TestSingleRoundRobin_ThreeTeams_TwoApprovedByes is an end-to-end test through
+// TestSingleRoundRobin_FiveTeams_TwoApprovedByes is an end-to-end test through
 // the public API confirming that two approved bye requests on different weeks
 // are both reflected in the generated schedule.
 //
-// 5-team single RR natural byes: 1→A, 2→D, 3→B, 4→E, 5→C
-// Requests: E bye → week 1 (E natural week 4), B bye → week 2 (B natural week 3)
+// 5-team single RR natural byes: 1->A, 2->D, 3->B, 4->E, 5->C
+// Requests: E bye -> week 1 (E natural week 4), B bye -> week 2 (B natural week 3)
 func TestSingleRoundRobin_FiveTeams_TwoApprovedByes(t *testing.T) {
 	teamIDs := []int64{1, 2, 3, 4, 5} // A=1, B=2, C=3, D=4, E=5
 
-	// Approved: E(5) → week1, B(2) → week2
+	// Approved: E(5) -> week1, B(2) -> week2
 	opts := ScheduleOptions{
 		ByeByWeek: map[int]int64{1: 5, 2: 2},
 	}
@@ -206,7 +208,7 @@ func TestSingleRoundRobin_FiveTeams_TwoApprovedByes(t *testing.T) {
 	if len(entries) != 10 {
 		t.Errorf("total matches: want 10, got %d", len(entries))
 	}
-	// Every week has exactly 2 matches (5 teams → 2 matches + 1 bye per week).
+	// Every week has exactly 2 matches (5 teams -> 2 matches + 1 bye per week).
 	for w := 1; w <= 5; w++ {
 		if n := matchCountInWeek(entries, w); n != 2 {
 			t.Errorf("week %d: want 2 matches, got %d", w, n)
