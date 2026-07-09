@@ -10,15 +10,18 @@ let _entryPreSelectSeasonId = null;
 let _entryPreSelectMatchId = null;
 
 // ── Navigation ───────────────────────────────────────────────────────────────
+function activateSection(sec) {
+  document.querySelectorAll('[data-section]').forEach(l => l.classList.remove('active'));
+  document.querySelector(`[data-section="${sec}"]`)?.classList.add('active');
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.getElementById('section-' + sec)?.classList.add('active');
+  loadSection(sec);
+}
+
 document.querySelectorAll('[data-section]').forEach(link => {
   link.addEventListener('click', e => {
     e.preventDefault();
-    const sec = link.dataset.section;
-    document.querySelectorAll('[data-section]').forEach(l => l.classList.remove('active'));
-    link.classList.add('active');
-    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
-    document.getElementById('section-' + sec).classList.add('active');
-    loadSection(sec);
+    activateSection(link.dataset.section);
   });
 });
 
@@ -153,15 +156,8 @@ init();
 
 
 
-// Navigate to a section by name
-function navTo(sec) {
-  document.querySelectorAll('[data-section]').forEach(l => l.classList.remove('active'));
-  const link = document.querySelector(`[data-section="${sec}"]`);
-  if (link) link.classList.add('active');
-  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
-  document.getElementById('section-' + sec)?.classList.add('active');
-  loadSection(sec);
-}
+// Cross-domain navigation entry point; delegates to activateSection.
+function navTo(sec) { activateSection(sec); }
 
 // ── Seasons domain bridge ─────────────────────────────────────────────────────
 // The seasons domain component fires these events; the shell updates cross-domain
