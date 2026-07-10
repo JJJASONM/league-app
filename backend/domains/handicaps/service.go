@@ -68,7 +68,7 @@ func (s *Service) compute(ctx context.Context, tx Store, seasonID int64) (models
 	}
 
 	// Interpret update method; nil or blank defaults to "manual_review".
-	method := "manual_review"
+	method := MethodManualReview
 	if rules.UpdateMethod != nil && *rules.UpdateMethod != "" {
 		method = *rules.UpdateMethod
 	}
@@ -89,12 +89,12 @@ func (s *Service) compute(ctx context.Context, tx Store, seasonID int64) (models
 	// the recommendations path. A future correction may add an explicit "unsupported"
 	// return for unknown methods.
 	switch method {
-	case "manual_review":
-		return emptyResp("no_auto_apply",
+	case MethodManualReview:
+		return emptyResp(ReviewStatusNoAutoApply,
 			"No handicap changes are applied automatically. Update player handicaps manually via the Players tab.",
 			0), nil
-	case "kicker_average_preview":
-		return emptyResp("unsupported",
+	case MethodKickerAveragePreview:
+		return emptyResp(ReviewStatusUnsupported,
 			"kicker_average_preview is not yet implemented. No changes are applied automatically.",
 			0), nil
 	}
@@ -105,7 +105,7 @@ func (s *Service) compute(ctx context.Context, tx Store, seasonID int64) (models
 		return models.HandicapReviewResponse{}, domainerr.Wrap(CodeDataError, domainerr.Internal, "internal error", err)
 	}
 	if weeksClosed == 0 {
-		return emptyResp("no_data",
+		return emptyResp(ReviewStatusNoData,
 			"No closed weeks available. Close a week to generate handicap recommendations.",
 			0), nil
 	}
@@ -125,7 +125,7 @@ func (s *Service) compute(ctx context.Context, tx Store, seasonID int64) (models
 		return models.HandicapReviewResponse{
 			SeasonID:        seasonID,
 			Method:          method,
-			Status:          "preview",
+			Status:          ReviewStatusPreview,
 			Message:         "No handicap changes recommended. Review complete.",
 			WeeksClosed:     weeksClosed,
 			Recommendations: []models.HandicapReviewRec{},
@@ -151,7 +151,7 @@ func (s *Service) compute(ctx context.Context, tx Store, seasonID int64) (models
 
 	changed := 0
 	for _, rec := range recs {
-		if rec.RecommendedHC != nil && rec.Reason != "no_change" {
+		if rec.RecommendedHC != nil && rec.Reason != ReasonNoChange {
 			changed++
 		}
 	}
@@ -168,7 +168,7 @@ func (s *Service) compute(ctx context.Context, tx Store, seasonID int64) (models
 	return models.HandicapReviewResponse{
 		SeasonID:        seasonID,
 		Method:          method,
-		Status:          "preview",
+		Status:          ReviewStatusPreview,
 		Message:         msg,
 		WeeksClosed:     weeksClosed,
 		Recommendations: recs,
@@ -310,11 +310,11 @@ func (s *Service) buildRecs(
 
 		switch {
 		case included == 0:
-			rec.Reason = "no_data"
+			rec.Reason = ReasonNoData
 		case e.AdminHold:
-			rec.Reason = "admin_hold"
+			rec.Reason = ReasonAdminHold
 		case result.WindowRacks < threshold:
-			rec.Reason = "below_threshold"
+			rec.Reason = ReasonBelowThreshold
 		default:
 			recommended := result.WindowImplied
 			capped := false
@@ -330,14 +330,14 @@ func (s *Service) buildRecs(
 			rec.ChangeAmount = &change
 			switch {
 			case capped:
-				rec.Reason = "capped"
+				rec.Reason = ReasonCapped
 			case recommended == math.Round(e.AssignedHC*100)/100:
-				rec.Reason = "no_change"
+				rec.Reason = ReasonNoChange
 			}
 		}
 
 		// Compute rec token for actionable players only (eligible for Apply).
-		if rec.Reason == "" || rec.Reason == "capped" {
+		if rec.Reason == "" || rec.Reason == ReasonCapped {
 			allSamples := make([]tokenSample, len(acc.samples))
 			for i, s := range acc.samples {
 				allSamples[i] = tokenSample{OppHC: s.OpponentHC, RackDiff: s.RackDiff}
@@ -351,7 +351,7 @@ func (s *Service) buildRecs(
 				SeasonID:      seasonID,
 				PlayerID:      e.PlayerID,
 				AssignedHC:    assignedHCNorm,
-				Method:        "game_diff_average",
+				Method:        MethodGameDiffAverage,
 				WindowSize:    window,
 				Threshold:     threshold,
 				MaxHC:         maxHC,
@@ -380,19 +380,19 @@ func (s *Service) HandicapPreview(ctx context.Context, seasonID int64) (models.A
 		return models.AdvancePreviewHandicap{}, fmt.Errorf("handicap preview: %w", err)
 	}
 
-	method := "manual_review"
+	method := MethodManualReview
 	if rules.UpdateMethod != nil && *rules.UpdateMethod != "" {
 		method = *rules.UpdateMethod
 	}
 
 	switch method {
-	case "kicker_average_preview":
+	case MethodKickerAveragePreview:
 		return models.AdvancePreviewHandicap{
 			Method:  method,
-			Status:  "unsupported",
+			Status:  ReviewStatusUnsupported,
 			Message: "Kicker average handicap recommendations are not implemented yet. No handicap changes are applied automatically.",
 		}, nil
-	case "game_diff_average":
+	case MethodGameDiffAverage:
 		maxHC := s.interpretMaxHC(rules)
 		raws, err := s.store.GameDiffAverageRecs(ctx, seasonID)
 		if err != nil {
@@ -401,7 +401,7 @@ func (s *Service) HandicapPreview(ctx context.Context, seasonID int64) (models.A
 		recs := applyGameDiffCap(raws, maxHC)
 		changedCount := 0
 		for _, r := range recs {
-			if !r.Skipped && r.Reason != "no_change" {
+			if !r.Skipped && r.Reason != ReasonNoChange {
 				changedCount++
 			}
 		}
@@ -416,14 +416,14 @@ func (s *Service) HandicapPreview(ctx context.Context, seasonID int64) (models.A
 		}
 		return models.AdvancePreviewHandicap{
 			Method:          method,
-			Status:          "preview",
+			Status:          ReviewStatusPreview,
 			Message:         msg,
 			Recommendations: recs,
 		}, nil
 	default: // "manual_review" and any unknown method
 		return models.AdvancePreviewHandicap{
 			Method:  method,
-			Status:  "no_auto_apply",
+			Status:  ReviewStatusNoAutoApply,
 			Message: "No handicap changes are applied automatically.",
 		}, nil
 	}
@@ -443,14 +443,14 @@ func applyGameDiffCap(raws []GameDiffAverageRow, maxHC float64) []models.PlayerH
 		}
 		if raw.AdminHold {
 			rec.Skipped = true
-			rec.Reason = "admin_hold"
+			rec.Reason = ReasonAdminHold
 			rec.RecommendedHandicap = raw.CurrentHC
 			recs = append(recs, rec)
 			continue
 		}
 		if raw.MatchCount == 0 {
 			rec.Skipped = true
-			rec.Reason = "no_data"
+			rec.Reason = ReasonNoData
 			rec.RecommendedHandicap = raw.CurrentHC
 			recs = append(recs, rec)
 			continue
@@ -468,9 +468,9 @@ func applyGameDiffCap(raws []GameDiffAverageRow, maxHC float64) []models.PlayerH
 		rec.RecommendedHandicap = recommended
 		switch {
 		case capped:
-			rec.Reason = "capped"
+			rec.Reason = ReasonCapped
 		case math.Round(raw.CurrentHC*10)/10 == recommended:
-			rec.Reason = "no_change"
+			rec.Reason = ReasonNoChange
 		}
 		recs = append(recs, rec)
 	}

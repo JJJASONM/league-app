@@ -267,7 +267,7 @@ func (s *Service) Apply(ctx context.Context, seasonID int64, req ApplyRequest) (
 		}
 
 		// Method gate: Apply is only supported for game_diff_average.
-		if liveResp.Method != "game_diff_average" {
+		if liveResp.Method != MethodGameDiffAverage {
 			return domainerr.New(CodeMethodNotApply, domainerr.Unprocessable,
 				fmt.Sprintf("apply is not supported for method %q; use game_diff_average", liveResp.Method))
 		}
@@ -313,25 +313,25 @@ func (s *Service) Apply(ctx context.Context, seasonID int64, req ApplyRequest) (
 			}
 
 			switch liveRec.Reason {
-			case "no_data":
+			case ReasonNoData:
 				rejections = append(rejections, ApplyRejection{
 					PlayerID: e.PlayerID, Code: RejectionNoData,
 					Message: "player has no eligible rack data",
 				})
 				continue
-			case "below_threshold":
+			case ReasonBelowThreshold:
 				rejections = append(rejections, ApplyRejection{
 					PlayerID: e.PlayerID, Code: RejectionBelowThreshold,
 					Message: "player has not met the minimum rack threshold",
 				})
 				continue
-			case "no_change":
+			case ReasonNoChange:
 				rejections = append(rejections, ApplyRejection{
 					PlayerID: e.PlayerID, Code: RejectionNoChange,
 					Message: "recommended handicap equals current handicap; no change to apply",
 				})
 				continue
-			case "", "capped":
+			case "", ReasonCapped:
 				// Actionable: fall through to conflict checks.
 			default:
 				rejections = append(rejections, ApplyRejection{
@@ -421,7 +421,7 @@ func (s *Service) Apply(ctx context.Context, seasonID int64, req ApplyRequest) (
 				ApplyRequestID:     req.ApplyRequestID,
 				RequestHash:        requestHash,
 				SeasonID:           seasonID,
-				Method:             "game_diff_average",
+				Method:             MethodGameDiffAverage,
 				WindowSize:         liveRec.WindowSize,
 				WindowRacks:        liveRec.WindowRacks,
 				LifetimeRacks:      liveRec.LifetimeRacks,
