@@ -27,6 +27,13 @@ import {
   fetchRecommendations,
   applyHandicaps,
 } from './handicap-api-service.js';
+import {
+  REASON_ADMIN_HOLD,
+  REASON_NO_DATA,
+  REASON_BELOW_THRESHOLD,
+  REASON_NO_CHANGE,
+  REASON_CAPPED,
+} from './handicap-codes.js';
 
 class HandicapReview extends HTMLElement {
   #seasonId   = null;
@@ -236,12 +243,12 @@ class HandicapReview extends HTMLElement {
 
     // Status/reason cell
     let noteCell;
-    if      (r.reason === 'admin_hold')      noteCell = '<span class="badge bg-secondary">Admin Hold</span>';
-    else if (r.reason === 'no_data')         noteCell = '<span class="text-muted fst-italic">No data</span>';
-    else if (r.reason === 'below_threshold') noteCell = `<span class="text-muted fst-italic">Below threshold (${r.eligibility_threshold})</span>`;
-    else if (r.reason === 'no_change')       noteCell = '<span class="text-muted fst-italic">No change</span>';
-    else if (r.reason === 'capped')          noteCell = '<span class="badge bg-warning text-dark">Capped</span>';
-    else                                     noteCell = '';
+    if      (r.reason === REASON_ADMIN_HOLD)      noteCell = '<span class="badge bg-secondary">Admin Hold</span>';
+    else if (r.reason === REASON_NO_DATA)         noteCell = '<span class="text-muted fst-italic">No data</span>';
+    else if (r.reason === REASON_BELOW_THRESHOLD) noteCell = `<span class="text-muted fst-italic">Below threshold (${r.eligibility_threshold})</span>`;
+    else if (r.reason === REASON_NO_CHANGE)       noteCell = '<span class="text-muted fst-italic">No change</span>';
+    else if (r.reason === REASON_CAPPED)          noteCell = '<span class="badge bg-warning text-dark">Capped</span>';
+    else                                          noteCell = '';
 
     const trClass = nonActionable ? ' class="text-muted"' : '';
     const isChecked = this.#selected.has(r.player_id);
