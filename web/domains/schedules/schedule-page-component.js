@@ -20,6 +20,14 @@ import {
   fetchLeaguePlayers,
 } from './schedule-api-service.js';
 import { fmtDate } from '../../components/date-display.js';
+import {
+  REASON_ADMIN_HOLD,
+  REASON_NO_DATA,
+  REASON_NO_CHANGE,
+  REASON_CAPPED,
+} from '../handicaps/handicap-codes.js';
+
+const WEEK_STATUS_CLOSED = 'closed';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, ch =>
@@ -300,7 +308,7 @@ class SchedulePage extends HTMLElement {
         </tr>`
       : '';
 
-    const isClosed    = ws && ws.status === 'closed';
+    const isClosed    = ws && ws.status === WEEK_STATUS_CLOSED;
     const closedLabel = (ws && ws.closed_at) ? 'Closed &middot; ' + fmtDate(ws.closed_at) : 'Closed';
     const statusChip  = isClosed
       ? `<span class="badge bg-success ms-2">${closedLabel}</span>`
@@ -399,16 +407,16 @@ class SchedulePage extends HTMLElement {
       let recCell, noteCell;
       if (r.skipped) {
         recCell  = '<span class="text-muted">N/A</span>';
-        noteCell = r.reason === 'admin_hold'
+        noteCell = r.reason === REASON_ADMIN_HOLD
           ? '<span class="badge bg-secondary">Admin Hold</span>'
-          : r.reason === 'no_data'
+          : r.reason === REASON_NO_DATA
             ? '<span class="text-muted fst-italic">No data</span>'
             : `<span class="text-muted fst-italic">${esc(r.reason || '')}</span>`;
       } else {
         recCell  = esc(fmtHC(r.recommended_handicap));
-        noteCell = r.reason === 'no_change'
+        noteCell = r.reason === REASON_NO_CHANGE
           ? '<span class="text-muted fst-italic">No change</span>'
-          : r.reason === 'capped'
+          : r.reason === REASON_CAPPED
             ? '<span class="badge bg-warning text-dark">Capped</span>'
             : '';
       }
