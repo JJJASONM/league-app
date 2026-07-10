@@ -11,6 +11,7 @@
 //     keep its allPlayers global in sync.
 
 import { fetchPlayers, createPlayer, updatePlayer, removePlayer } from './players-api-service.js';
+import { GAME_FORMAT_9BALL } from '../leagues/game-format-codes.js';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, ch =>
@@ -210,7 +211,7 @@ class PlayersPage extends HTMLElement {
     numInput.readOnly = isEdit;
     numInput.classList.toggle('bg-light', isEdit);
     lockIcon.classList.toggle('d-none', !isEdit);
-    const is9ball = this.#activeLeague?.game_format === '9ball';
+    const is9ball = this.#activeLeague?.game_format === GAME_FORMAT_9BALL;
     document.getElementById('admin-hold-row').classList.toggle('d-none', !is9ball);
   }
 

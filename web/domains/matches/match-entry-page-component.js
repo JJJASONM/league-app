@@ -17,6 +17,7 @@ import {
   clearMatchResults as apiClearResults,
 } from './match-entry-api-service.js';
 import { fmtDate } from '../../components/date-display.js';
+import { GAME_FORMAT_8BALL } from '../leagues/game-format-codes.js';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, ch =>
@@ -132,7 +133,7 @@ class MatchEntryPage extends HTMLElement {
       for (const r of rulesList) this.#seasonRules[r.rule_key] = r.rule_value;
     } catch (_) {}
 
-    if (!this.#activeLeague || this.#activeLeague.game_format !== '8ball') {
+    if (!this.#activeLeague || this.#activeLeague.game_format !== GAME_FORMAT_8BALL) {
       scoresheetDiv.classList.remove('d-none');
       scoresheetDiv.innerHTML = '<div class="text-muted p-3">9-ball scoresheet coming soon.</div>';
       return;

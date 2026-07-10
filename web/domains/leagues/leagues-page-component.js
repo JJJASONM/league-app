@@ -14,6 +14,12 @@
 //     Shell updates allLeagues, rebuilds the league selector, and reloads context.
 
 import { fetchAllLeagues, fetchLeagueTeams, createLeague, removeLeague } from './leagues-api-service.js';
+import {
+  GAME_FORMAT_8BALL,
+  GAME_FORMAT_9BALL,
+  GAME_FORMAT_10BALL,
+  GAME_FORMAT_STRAIGHT,
+} from './game-format-codes.js';
 
 const MODAL_ID = 'leagues-manage-modal';
 
@@ -57,10 +63,10 @@ class LeaguesPage extends HTMLElement {
             <div class="col-md-3">
               <label class="form-label small mb-1">Format</label>
               <select class="form-select form-select-sm" id="new-league-format">
-                <option value="8ball">8-Ball</option>
-                <option value="9ball">9-Ball</option>
-                <option value="10ball">10-Ball</option>
-                <option value="straight">Straight Pool</option>
+                <option value="${GAME_FORMAT_8BALL}">8-Ball</option>
+                <option value="${GAME_FORMAT_9BALL}">9-Ball</option>
+                <option value="${GAME_FORMAT_10BALL}">10-Ball</option>
+                <option value="${GAME_FORMAT_STRAIGHT}">Straight Pool</option>
               </select>
             </div>
             <div class="col-md-3">
@@ -191,7 +197,7 @@ class LeaguesPage extends HTMLElement {
     const formatEl = document.getElementById('new-league-format');
     const dayEl    = document.getElementById('new-league-day');
     const name     = nameEl?.value.trim() ?? '';
-    const format   = formatEl?.value ?? '8ball';
+    const format   = formatEl?.value ?? GAME_FORMAT_8BALL;
     const day      = dayEl?.value ?? '';
     if (!name) { toast('League name is required', 'warning'); return; }
     try {
