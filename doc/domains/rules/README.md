@@ -4,8 +4,8 @@
 
 **Owner:** `rules`
 **Status:** `draft`
-**Current version:** `0.1`
-**Last reviewed:** `2026-06-08`
+**Current version:** `0.2`
+**Last reviewed:** `2026-07-10`
 
 The Rules domain defines configurable league behavior, validates editable rule
 values, resolves inherited values, and creates a locked season snapshot.
@@ -13,12 +13,24 @@ Handicaps, schedules, and matches apply those values within their own domains.
 
 ## Public Interface
 
-Target entry points:
+Backend entry point:
 
 ```text
-web/domains/rules/rules-domain.js
 backend/domains/rules/public.go
 ```
+
+The package exposes:
+
+- `Definitions() []Definition` — the full developer-owned rule registry
+- `Find(key string) (Definition, bool)` — look up a single definition by key
+- `ValidateValue(key, value string) error` — validate a stored value against its
+  definition; unknown keys are valid (backward-compatible custom rules)
+- `RuleStore` interface in `backend/domains/rules/store.go` — implemented by
+  `backend/storage/sqlite/rule_store.go`; used by other domains to read effective
+  season-rule values without direct DB access
+
+`RuleStore.GetValue(ctx, seasonID, key string)` returns the stored value for the
+key in that season's `season_rules` table; callers supply their own defaults.
 
 The backend returns rule definitions, editable values, validation errors, and
 effective values with their source scope.
@@ -54,7 +66,7 @@ locks the snapshot.
 
 Key: `min_ball_handicap` | Type: integer, min 0, default 0 | Group: Handicap Settings
 
-**Status:** draft — frontend-enforced only (scoresheet calculation)
+**Status:** draft — backend-enforced (scoresheet save) and frontend-enforced (live display)
 
 **Behavior:** threshold cutoff, not a floor.
 
@@ -72,13 +84,13 @@ Key: `min_ball_handicap` | Type: integer, min 0, default 0 | Group: Handicap Set
 | 2             | 2 — meets threshold, computed spot applies |
 | 5             | 5 — above threshold, computed spot applies |
 
-**Where applied:** `calcHandicap()` in `web/app.js`. Not yet backend-authoritative. Stored in `season_rules.rule_key = 'min_ball_handicap'` via the existing rules tab; read at match-entry time from `/api/seasons/{id}/rules`.
+**Where applied:** Backend — `matches.ResolveRoundConfig` in `backend/domains/matches/round_config.go` reads this via `rules.RuleStore.GetValue` inside the `SaveRounds` write transaction. Frontend — `calcHandicap()` in `web/app.js` reads it at match-entry load time from `/api/seasons/{id}/rules` for live scoresheet display.
 
 ### handicap_current_game_window
 
 Key: `handicap_current_game_window` | Type: integer, min 1, default 15 | Group: Handicap Settings | Order: 70
 
-**Status:** draft: backend-enforced (read by `seasonHandicapWindowConfig` in `handlers/api.go`)
+**Status:** draft — backend-enforced (handicap recommendation calculation)
 
 **Behavior:** Controls the rolling window for the opponent-normalized rack calculation.
 
@@ -88,13 +100,13 @@ Key: `handicap_current_game_window` | Type: integer, min 1, default 15 | Group: 
 - Missing/blank stored value defaults to 15 with no error.
 - Stored zero, negative, or non-integer value returns HTTP 500 from the recommendations endpoint.
 
-**Where applied:** `GET /api/seasons/{id}/handicap-recommendations` via `seasonHandicapWindowConfig`.
+**Where applied:** `handicaps.Service.Recommendations` reads this via `handicaps.Store.SeasonHandicapRules` (SQLite adapter) → `GET /api/seasons/{id}/handicap-recommendations`.
 
 ### handicap_min_games_for_recommendation
 
 Key: `handicap_min_games_for_recommendation` | Type: integer, min 1, default 15 | Group: Handicap Settings | Order: 80
 
-**Status:** draft: backend-enforced (read by `seasonHandicapWindowConfig` in `handlers/api.go`)
+**Status:** draft — backend-enforced (handicap recommendation eligibility gate)
 
 **Behavior:** Minimum number of included racks required before a recommendation is generated.
 
@@ -104,7 +116,7 @@ Key: `handicap_min_games_for_recommendation` | Type: integer, min 1, default 15 
 - Missing/blank stored value defaults to 15 with no error.
 - Stored zero, negative, or non-integer value returns HTTP 500 from the recommendations endpoint.
 
-**Where applied:** `GET /api/seasons/{id}/handicap-recommendations` via `seasonHandicapWindowConfig`.
+**Where applied:** `handicaps.Service.Recommendations` reads this via `handicaps.Store.SeasonHandicapRules` (SQLite adapter) → `GET /api/seasons/{id}/handicap-recommendations`.
 
 ## Questions
 

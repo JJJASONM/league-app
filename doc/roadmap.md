@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-06-30
+**Last reviewed:** 2026-07-10
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -27,12 +27,15 @@ Stabilize current admin workflows
 These items should stay small enough to review and ship independently.
 
 - Domain and data-access restructuring.
-  - Continue moving logic out of `handlers/api.go` into backend domain services.
+  - Major domains (matches, handicaps, seasons, leagues, players, teams) have
+    purpose-built service/store layers. Remaining work: wire remaining CRUD
+    handlers to their extracted services; ensure all domain boundaries are
+    explicit before adding further logic.
   - Continue moving workflow UI out of `web/app.js` into domain-owned frontend
-    modules.
-  - Keep backend/domain/store/adapter boundaries explicit and purpose-built.
-  - Prioritize `matches`, `handicaps`, `schedules`, `seasons`, and `standings`
-    boundaries.
+    modules. Remaining work: skipped-weeks, bye-requests, and remaining season
+    CRUD workflows.
+  - Keep backend/domain/store/adapter boundaries explicit and purpose-built for
+    any new work added.
 
 - Stabilize current official-results workflow.
   - Keep Close Week, Reopen, warning acknowledgment, and advance
@@ -41,12 +44,6 @@ These items should stay small enough to review and ship independently.
     results.
   - Keep handicap review/apply behavior aligned with official results and
     attribution.
-
-- Documentation and roadmap alignment.
-  - Update roadmap and domain docs so completed Close Week and Handicap Apply
-    work is reflected accurately.
-  - Keep open questions current instead of letting implemented behavior live
-    only in code.
 
 - Keep staging and GitHub current after accepted work.
   - PM owns pushing committed work to origin.
@@ -59,10 +56,11 @@ stable.
 
 - Controlled codes foundation.
   - Resolve `CODES-Q001`.
-  - Define physical storage for code sets, values, labels, display order, and
-    active flags.
-  - Move statuses, reasons, categories, and participation types onto stable
-    codes instead of display labels.
+  - In-domain Go constants are established for statuses and reasons. Physical
+    DB storage design (code sets, labels, display order, active flags, admin
+    management screens) remains open.
+  - Move any remaining free-text comparisons onto stable constants as domain
+    work continues.
 
 - Season and schedule workflow completion.
   - Resolve `SCHEDULES-Q001`.
@@ -158,6 +156,24 @@ follow-up.
 - Official standings gated by closed weeks.
 - Handicap review workflow.
 - Handicap Apply workflow with attribution bridge.
+- Backend domain extraction — matches (week close/reopen B1–B4, schedule A, match
+  B, lineup C), handicaps (service/store Data Access A, apply B1–B3, personal key
+  auth C1), and domain services for seasons, leagues, players, and teams.
+  `handlers/api.go` is now a thin delegation layer for most routes.
+- Rules domain — backend-authoritative rule definitions and value validation
+  (`rules.Definitions()`, `rules.ValidateValue()`); `rules.RuleStore` interface
+  used by `matches.ResolveRoundConfig` and `handicaps.Service` to read season rules
+  without direct DB access.
+- Backend controlled codes vocabulary — in-domain Go constants for schedule types,
+  week statuses, handicap reasons, season checklist blockers, and game formats.
+- Frontend domain extraction — handicaps, schedules, matches, players, leagues,
+  seasons, and standings screens extracted from `web/app.js` into domain-owned
+  Web Components and named API services under `web/domains/`.
+- Frontend controlled codes — game_format and handicap reason constants in dedicated
+  code modules (`web/domains/leagues/game-format-codes.js`,
+  `web/domains/handicaps/handicap-codes.js`).
+- Documentation alignment — roadmap and domain READMEs updated to reflect
+  completed extraction phases and remove stale file/function references.
 
 ## Open Questions To Resolve
 
