@@ -94,7 +94,7 @@ func (s *WeekStore) ListWeekSummaries(ctx context.Context, seasonID int64) ([]mo
 	for _, wn := range weekOrder {
 		c := counts[wn]
 		st := statusMap[wn]
-		status := "open"
+		status := matches.WeekStatusOpen
 		var closedAt *string
 		if st.status != "" {
 			status = st.status
@@ -155,10 +155,10 @@ func (s *WeekStore) CloseWeek(ctx context.Context, seasonID, weekNum int64, acks
 
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO league_weeks (season_id, week_number, status, closed_at)
-		VALUES (?, ?, 'closed', CURRENT_TIMESTAMP)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(season_id, week_number) DO UPDATE
-		SET status='closed', closed_at=CURRENT_TIMESTAMP`,
-		seasonID, weekNum); err != nil {
+		SET status=excluded.status, closed_at=CURRENT_TIMESTAMP`,
+		seasonID, weekNum, matches.WeekStatusClosed); err != nil {
 		return fmt.Errorf("close week: upsert league_weeks: %w", err)
 	}
 
@@ -199,8 +199,8 @@ func (s *WeekStore) ReopenWeek(ctx context.Context, seasonID, weekNum int64) err
 	defer tx.Rollback()
 
 	if _, err = tx.ExecContext(ctx, `
-		UPDATE league_weeks SET status='open', closed_at=NULL
-		WHERE season_id=? AND week_number=?`, seasonID, weekNum); err != nil {
+		UPDATE league_weeks SET status=?, closed_at=NULL
+		WHERE season_id=? AND week_number=?`, matches.WeekStatusOpen, seasonID, weekNum); err != nil {
 		return fmt.Errorf("reopen week: update league_weeks: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `
@@ -244,16 +244,16 @@ func (s *WeekStore) GetWeekAdvanceSummary(ctx context.Context, seasonID, weekNum
 	// Week status from league_weeks; absence means open.
 	var weekStatus string
 	switch err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(status,'open') FROM league_weeks
+		SELECT COALESCE(status,'') FROM league_weeks
 		WHERE season_id=? AND week_number=?`, seasonID, weekNum).Scan(&weekStatus); err {
 	case nil:
 	case sql.ErrNoRows:
-		weekStatus = "open"
+		weekStatus = matches.WeekStatusOpen
 	default:
 		return matches.WeekAdvanceSummary{}, fmt.Errorf("advance summary: week status: %w", err)
 	}
 	if weekStatus == "" {
-		weekStatus = "open"
+		weekStatus = matches.WeekStatusOpen
 	}
 
 	// Next scheduled week (COALESCE returns 0 when no later week exists).

@@ -153,7 +153,7 @@ func (s *WeekService) ReopenWeek(ctx context.Context, seasonID, weekNum int64) e
 	if err != nil {
 		return fmt.Errorf("reopen week: %w", err)
 	}
-	if status != "closed" {
+	if status != WeekStatusClosed {
 		return domainerr.New("WEEK_NOT_CLOSED", domainerr.Conflict, "week is not closed")
 	}
 
