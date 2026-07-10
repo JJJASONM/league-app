@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"league_app/backend/domainerr"
+	"league_app/backend/domains/matches"
 	"league_app/models"
 )
 
@@ -38,7 +39,7 @@ func (s *SeasonService) CreateSeason(ctx context.Context, input CreateSeasonInpu
 		return models.Season{}, domainerr.New("LEAGUE_ID_REQUIRED", domainerr.InvalidInput, "league_id is required")
 	}
 	if input.ScheduleType == "" {
-		input.ScheduleType = "double_rr"
+		input.ScheduleType = matches.ScheduleTypeDoubleRR
 	}
 	return s.store.CreateSeason(ctx, input)
 }
@@ -48,7 +49,7 @@ func (s *SeasonService) CreateSeason(ctx context.Context, input CreateSeasonInpu
 // Propagates ErrNotFound (wrapped) from the store when the season does not exist.
 func (s *SeasonService) UpdateSeason(ctx context.Context, seasonID int64, input UpdateSeasonInput) (models.Season, error) {
 	if input.ScheduleType == "" {
-		input.ScheduleType = "double_rr"
+		input.ScheduleType = matches.ScheduleTypeDoubleRR
 	}
 	return s.store.UpdateSeason(ctx, seasonID, input)
 }

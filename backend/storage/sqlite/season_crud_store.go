@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"league_app/backend/domains/matches"
 	"league_app/backend/domains/seasons"
 	"league_app/models"
 )
@@ -50,7 +51,7 @@ func scanFullSeason(row interface{ Scan(...any) error }) (models.Season, error) 
 		s.ActivatedAt = &activatedAt.String
 	}
 	if s.ScheduleType == "" {
-		s.ScheduleType = "double_rr"
+		s.ScheduleType = matches.ScheduleTypeDoubleRR
 	}
 	return s, nil
 }
