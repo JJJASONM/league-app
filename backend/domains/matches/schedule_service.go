@@ -42,7 +42,7 @@ func NewScheduleService(store ScheduleStore) *ScheduleService {
 // It replaces any existing unplayed matches and updates the season's schedule metadata.
 func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
 	if req.ScheduleType == "" {
-		req.ScheduleType = "double_rr"
+		req.ScheduleType = ScheduleTypeDoubleRR
 	}
 
 	meta, err := s.store.GetScheduleSeasonMeta(ctx, req.SeasonID)
@@ -86,7 +86,7 @@ func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequ
 	var entries []ScheduleEntry
 	var genErr error
 
-	if req.ScheduleType == "blanket" {
+	if req.ScheduleType == ScheduleTypeBlanket {
 		mpw := req.MatchesPerWeek
 		if mpw < 1 {
 			mpw = 1
@@ -99,17 +99,17 @@ func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequ
 		}
 
 		switch req.ScheduleType {
-		case "single_rr":
+		case ScheduleTypeSingleRR:
 			entries, genErr = SingleRoundRobin(teamIDs, opts)
-		case "split":
+		case ScheduleTypeSplit:
 			entries, genErr = SplitSeason(teamIDs, opts)
-		case "custom":
+		case ScheduleTypeCustom:
 			if req.NumWeeks < 1 {
 				return GenerateResult{}, domainerr.New("SCHEDULE_NUM_WEEKS_REQUIRED",
 					domainerr.InvalidInput, "num_weeks is required for custom schedule")
 			}
 			entries, genErr = CustomSchedule(teamIDs, opts)
-		default: // "double_rr"
+		default: // ScheduleTypeDoubleRR
 			entries, genErr = DoubleRoundRobin(teamIDs, opts)
 		}
 	}
