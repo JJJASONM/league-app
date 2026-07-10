@@ -220,7 +220,7 @@ func (s *SeasonService) UpdateTeam(ctx context.Context, seasonID, teamID int64, 
 			return models.SeasonTeam{}, err
 		}
 		if !onRoster {
-			return models.SeasonTeam{}, domainerr.New("CAPTAIN_NOT_ON_ROSTER", domainerr.InvalidInput,
+			return models.SeasonTeam{}, domainerr.New(ChecklistCaptainNotOnRoster, domainerr.InvalidInput,
 				"captain must be on this team's season roster")
 		}
 	}
@@ -361,7 +361,7 @@ func (s *SeasonService) computeChecklist(ctx context.Context, seasonID int64, me
 
 	if len(teams) < 2 {
 		c.Blockers = append(c.Blockers, models.ChecklistItem{
-			Code:    "TEAMS_TOO_FEW",
+			Code:    ChecklistTeamsTooFew,
 			Message: fmt.Sprintf("season has %d participating team; at least 2 required", len(teams)),
 		})
 	}
@@ -369,13 +369,13 @@ func (s *SeasonService) computeChecklist(ctx context.Context, seasonID int64, me
 	for _, t := range teams {
 		if t.RosterCount == 0 {
 			c.Blockers = append(c.Blockers, models.ChecklistItem{
-				Code:    "TEAM_NO_PLAYERS",
+				Code:    ChecklistTeamNoPlayers,
 				Message: fmt.Sprintf("team %q has no rostered players", t.Name),
 				TeamID:  t.TeamID,
 			})
 		} else if t.RosterCount < 3 {
 			c.Warnings = append(c.Warnings, models.ChecklistItem{
-				Code:    "TEAM_FEW_PLAYERS",
+				Code:    ChecklistTeamFewPlayers,
 				Message: fmt.Sprintf("team %q has %d player(s); 3 or more recommended for match play", t.Name, t.RosterCount),
 				TeamID:  t.TeamID,
 			})
@@ -383,13 +383,13 @@ func (s *SeasonService) computeChecklist(ctx context.Context, seasonID int64, me
 
 		if t.CaptainID == nil {
 			c.Blockers = append(c.Blockers, models.ChecklistItem{
-				Code:    "TEAM_NO_CAPTAIN",
+				Code:    ChecklistTeamNoCaptain,
 				Message: fmt.Sprintf("team %q has no captain assigned", t.Name),
 				TeamID:  t.TeamID,
 			})
 		} else if !t.CaptainOnRoster {
 			c.Blockers = append(c.Blockers, models.ChecklistItem{
-				Code:    "CAPTAIN_NOT_ON_ROSTER",
+				Code:    ChecklistCaptainNotOnRoster,
 				Message: fmt.Sprintf("team %q captain is not on the season roster", t.Name),
 				TeamID:  t.TeamID,
 			})
@@ -398,7 +398,7 @@ func (s *SeasonService) computeChecklist(ctx context.Context, seasonID int64, me
 
 	if meta.ScheduleStale {
 		c.Blockers = append(c.Blockers, models.ChecklistItem{
-			Code:    "SCHEDULE_STALE",
+			Code:    ChecklistScheduleStale,
 			Message: "schedule is stale after team changes; regenerate before activating",
 		})
 	}
@@ -409,12 +409,12 @@ func (s *SeasonService) computeChecklist(ctx context.Context, seasonID int64, me
 	}
 	if matchCount == 0 {
 		c.Blockers = append(c.Blockers, models.ChecklistItem{
-			Code:    "NO_SCHEDULE",
+			Code:    ChecklistNoSchedule,
 			Message: "no schedule has been generated for this season",
 		})
 	} else if meta.EndDate == nil || *meta.EndDate == "" {
 		c.Blockers = append(c.Blockers, models.ChecklistItem{
-			Code:    "NO_END_DATE",
+			Code:    ChecklistNoEndDate,
 			Message: "season has no calculable end date; regenerate the schedule",
 		})
 	}
