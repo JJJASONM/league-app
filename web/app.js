@@ -1,5 +1,5 @@
 
-// ── State ────────────────────────────────────────────────────────────────────
+// --- State --------------------------------------------------------------------
 let allLeagues  = [];
 let activeLeague = null;
 let allTeams    = [];
@@ -9,7 +9,7 @@ let activeSeason = null;
 let _entryPreSelectSeasonId = null;
 let _entryPreSelectMatchId = null;
 
-// ── Navigation ───────────────────────────────────────────────────────────────
+// --- Navigation ---------------------------------------------------------------
 function activateSection(sec) {
   document.querySelectorAll('[data-section]').forEach(l => l.classList.remove('active'));
   document.querySelector(`[data-section="${sec}"]`)?.classList.add('active');
@@ -25,7 +25,7 @@ document.querySelectorAll('[data-section]').forEach(link => {
   });
 });
 
-// Sidebar event wiring — shell-owned; registered here rather than as inline HTML attributes.
+// Sidebar event wiring - shell-owned; registered here rather than as inline HTML attributes.
 document.getElementById('league-select')?.addEventListener('change', switchLeague);
 document.querySelector('[data-action="manage-leagues"]')?.addEventListener('click', openLeagueModal);
 document.querySelector('[data-action="backup"]')?.addEventListener('click', backup);
@@ -50,7 +50,7 @@ function loadSection(sec) {
   }
 }
 
-// ── API helpers ───────────────────────────────────────────────────────────────
+// --- API helpers --------------------------------------------------------------
 async function api(method, path, body) {
   const opts = { method, headers: {'Content-Type':'application/json'} };
   if (body !== undefined) opts.body = JSON.stringify(body);
@@ -82,7 +82,7 @@ function lidAmp() {
   return activeLeague ? `&league_id=${activeLeague.id}` : '';
 }
 
-// ── Toast ─────────────────────────────────────────────────────────────────────
+// --- Toast --------------------------------------------------------------------
 function toast(msg, type='success') {
   const el = document.createElement('div');
   el.className = `toast align-items-center text-bg-${type} border-0 show mb-2`;
@@ -96,7 +96,7 @@ function toast(msg, type='success') {
 function openModal(id)  { new bootstrap.Modal(document.getElementById(id)).show(); }
 function closeModal(id) { bootstrap.Modal.getInstance(document.getElementById(id))?.hide(); }
 
-// ── League selector ───────────────────────────────────────────────────────────
+// --- League selector ----------------------------------------------------------
 async function switchLeague() {
   const id = parseInt(document.getElementById('league-select').value);
   activeLeague = allLeagues.find(l => l.id === id) || null;
@@ -118,11 +118,11 @@ async function loadLeagueData() {
     ]);
     activeSeason = allSeasons.find(s => s.active) || null;
     const label = document.getElementById('active-season-label');
-    label.textContent = activeSeason ? '📅 ' + activeSeason.name : 'No active season';
+    label.textContent = activeSeason ? '\u{1F4C5} ' + activeSeason.name : 'No active season';
   } catch(e) { toast('Failed to load league data: ' + e.message, 'danger'); }
 }
 
-// ── Bootstrap ─────────────────────────────────────────────────────────────────
+// --- Bootstrap ----------------------------------------------------------------
 async function init() {
   try {
     allLeagues = await api('GET', '/leagues');
@@ -134,7 +134,7 @@ async function init() {
   // Populate league dropdown
   const sel = document.getElementById('league-select');
   if (allLeagues.length === 0) {
-    sel.innerHTML = '<option value="">No leagues — add one</option>';
+    sel.innerHTML = '<option value="">No leagues - add one</option>';
     activeLeague = null;
   } else {
     sel.innerHTML = allLeagues.map(l =>
@@ -159,7 +159,7 @@ init();
 // Cross-domain navigation entry point; delegates to activateSection.
 function navTo(sec) { activateSection(sec); }
 
-// ── Seasons domain bridge ─────────────────────────────────────────────────────
+// --- Seasons domain bridge ----------------------------------------------------
 // The seasons domain component fires these events; the shell updates cross-domain
 // state (allSeasons, activeSeason) and responds to navigation requests.
 
@@ -167,7 +167,7 @@ document.addEventListener('season-state-changed', e => {
   allSeasons   = e.detail.allSeasons;
   activeSeason = e.detail.activeSeason;
   document.getElementById('active-season-label').textContent =
-    activeSeason ? '📅 ' + activeSeason.name : 'No active season';
+    activeSeason ? '\u{1F4C5} ' + activeSeason.name : 'No active season';
 });
 
 document.addEventListener('season-nav-request', e => {
@@ -200,13 +200,13 @@ document.addEventListener('dashboard-refresh-request', async () => {
   document.querySelector('dashboard-page')?.refresh(activeLeague, activeSeason, allTeams, allPlayers);
 });
 
-// ── Teams ─────────────────────────────────────────────────────────────────────
+// --- Teams --------------------------------------------------------------------
 function loadTeams() {
   const page = document.querySelector('teams-page');
   if (page) page.refresh(activeLeague?.id ?? null, activeSeason?.id ?? null);
 }
 
-// ── Leagues management modal ─────────────────────────────────────────────
+// --- Leagues management modal -------------------------------------------------
 
 function openLeagueModal() {
   document.querySelector('leagues-page')?.openModal(activeLeague);
@@ -224,7 +224,7 @@ document.addEventListener('leagues-list-changed', async e => {
 
   const sel = document.getElementById('league-select');
   if (allLeagues.length === 0) {
-    sel.innerHTML = '<option value="">No leagues — add one</option>';
+    sel.innerHTML = '<option value="">No leagues - add one</option>';
     activeLeague = null;
   } else {
     sel.innerHTML = allLeagues.map(l =>
