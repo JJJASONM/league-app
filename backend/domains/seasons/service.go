@@ -332,6 +332,18 @@ func (s *SeasonService) UpdateByeRequest(ctx context.Context, seasonID, byeID in
 	return updated, nil
 }
 
+// FindActiveSeasonByLeague returns the ID of the active season in leagueID.
+// Returns (0, false, nil) when no active season exists.
+func (s *SeasonService) FindActiveSeasonByLeague(ctx context.Context, leagueID int64) (int64, bool, error) {
+	return s.store.FindActiveSeasonByLeague(ctx, leagueID)
+}
+
+// RosterEligible returns (true, "") when both teams in a match have at least
+// minPlayers season-roster players, or when the season is not managed.
+func (s *SeasonService) RosterEligible(ctx context.Context, matchID int64, minPlayers int) (bool, string, error) {
+	return s.store.RosterEligible(ctx, matchID, minPlayers)
+}
+
 // getMeta fetches the season meta and converts sql.ErrNoRows to ErrNotFound.
 func (s *SeasonService) getMeta(ctx context.Context, seasonID int64) (SeasonMeta, error) {
 	meta, err := s.store.GetMeta(ctx, seasonID)

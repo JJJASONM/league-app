@@ -132,6 +132,12 @@ func (n *noopSeasonMgr) ListByeRequests(_ context.Context, _ int64) ([]models.By
 	return []models.ByeRequest{}, nil
 }
 func (n *noopSeasonMgr) DeleteByeRequest(_ context.Context, _, _ int64) error { return nil }
+func (n *noopSeasonMgr) FindActiveSeasonByLeague(_ context.Context, _ int64) (int64, bool, error) {
+	return 0, false, nil
+}
+func (n *noopSeasonMgr) RosterEligible(_ context.Context, _ int64, _ int) (bool, string, error) {
+	return true, "", nil
+}
 
 // noopScheduleMgr satisfies handlers.ScheduleManager for tests that don't
 // exercise schedule generation.
@@ -6441,5 +6447,120 @@ func TestDeletePlayer_NonExistent_Returns200(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("want 200 (idempotent delete), got %d", resp.StatusCode)
+	}
+}
+
+// ─── Standings via league_id (FindActiveSeasonByLeague boundary) ──────────────
+
+// TestStandings_LeagueID_NoActiveSeason returns empty standings when there is no
+// active season for the given league_id, exercising FindActiveSeasonByLeague.
+func TestStandings_LeagueID_NoActiveSeason(t *testing.T) {
+	f := weekTestSeed(t)
+	// Season is created but never activated — active=0.
+	resp, err := http.Get(fmt.Sprintf("%s/api/standings?league_id=%d", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var standings []map[string]any
+	json.NewDecoder(resp.Body).Decode(&standings)
+	if len(standings) != 0 {
+		t.Errorf("want empty standings for inactive season, got %d entries", len(standings))
+	}
+}
+
+// TestStandings_LeagueID_ResolvesActiveSeasonAndReturnsStandings activates the
+// season, closes a week with results, and confirms standings are returned when
+// calling GET /api/standings?league_id=X (no explicit season_id).
+func TestStandings_LeagueID_ResolvesActiveSeasonAndReturnsStandings(t *testing.T) {
+	f := weekTestSeed(t)
+
+	// Get the league_id for this season.
+	var leagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM seasons WHERE id=?`, f.sid).Scan(&leagueID); err != nil {
+		t.Fatalf("get league_id: %v", err)
+	}
+
+	// Activate the season and add match results.
+	db.DB.Exec(`UPDATE seasons SET active=1 WHERE id=?`, f.sid)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	db.DB.Exec(`
+		INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,0,3)`, f.matchID, f.playerA, f.teamA)
+	db.DB.Exec(`
+		INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,0,3,-3)`, f.matchID, f.playerB, f.teamB)
+
+	// Close the week so standings count the match.
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, _ := http.DefaultClient.Do(closeReq)
+	closeResp.Body.Close()
+
+	// Request standings by league_id — no season_id in query.
+	resp, err := http.Get(fmt.Sprintf("%s/api/standings?league_id=%d", f.srv.URL, leagueID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, b)
+	}
+	var standings []map[string]any
+	json.NewDecoder(resp.Body).Decode(&standings)
+	totalPlayed := 0
+	for _, s := range standings {
+		if p, _ := s["played"].(float64); p > 0 {
+			totalPlayed++
+		}
+	}
+	if totalPlayed == 0 {
+		t.Error("want standings via league_id to include closed match")
+	}
+}
+
+// ─── Roster eligibility guard (RosterEligible boundary) ──────────────────────
+
+// TestSaveRounds_BlockedByRosterGate verifies that POST /api/matches/{id}/rounds
+// returns 422 when the managed season's home team has fewer than 3 roster players.
+func TestSaveRounds_BlockedByRosterGate(t *testing.T) {
+	f := weekTestSeed(t)
+
+	// Mark the season as managed so the roster gate applies.
+	db.DB.Exec(`UPDATE seasons SET teams_managed=1 WHERE id=?`, f.sid)
+
+	// Add team records but only 1 player on the home team roster (< 3 required).
+	db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team A')`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team B')`, f.sid, f.teamB)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	// Away team has 3 players — only home is short.
+	rP2, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('B2','P',?,3.0)`, f.teamB)
+	rP3, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('B3','P',?,3.0)`, f.teamB)
+	p2, _ := rP2.LastInsertId()
+	p3, _ := rP3.LastInsertId()
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, f.playerB)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, p2)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, p3)
+
+	body := fmt.Sprintf(`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`,
+		f.playerA, f.playerB)
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("roster gate must return 422 when home team has < 3 players, got %d: %s", resp.StatusCode, b)
 	}
 }

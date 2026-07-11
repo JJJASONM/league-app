@@ -263,6 +263,12 @@ func (s *stubSeasonStore) DeleteSeason(_ context.Context, _ int64) error {
 	s.deleteSeasonCalled = true
 	return s.deleteSeasonErr
 }
+func (s *stubSeasonStore) FindActiveSeasonByLeague(_ context.Context, _ int64) (int64, bool, error) {
+	return 0, false, nil
+}
+func (s *stubSeasonStore) RosterEligible(_ context.Context, _ int64, _ int) (bool, string, error) {
+	return true, "", nil
+}
 
 func newSvc(store *stubSeasonStore) *seasons.SeasonService {
 	return seasons.NewSeasonService(store)

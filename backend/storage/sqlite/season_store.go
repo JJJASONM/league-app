@@ -239,6 +239,73 @@ func (s *SeasonStore) GetMatchTeams(ctx context.Context, seasonID int64) ([]seas
 	return out, rows.Err()
 }
 
+// FindActiveSeasonByLeague returns the ID of the active season in leagueID.
+// Returns (0, false, nil) when no active season exists.
+func (s *SeasonStore) FindActiveSeasonByLeague(ctx context.Context, leagueID int64) (int64, bool, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM seasons WHERE league_id=? AND active=1 LIMIT 1`, leagueID,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("find active season league %d: %w", leagueID, err)
+	}
+	return id, true, nil
+}
+
+// RosterEligible returns (true, "", nil) when both teams in a match have at
+// least minPlayers season-roster players, or when the season is not managed.
+// Returns (true, "", nil) when the match is not found.
+// Returns (false, msg, nil) when a team is ineligible.
+func (s *SeasonStore) RosterEligible(ctx context.Context, matchID int64, minPlayers int) (bool, string, error) {
+	var seasonID, homeID, awayID int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT season_id, COALESCE(home_team_id,0), COALESCE(away_team_id,0)
+		 FROM matches WHERE id=?`, matchID,
+	).Scan(&seasonID, &homeID, &awayID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, "", nil // match not found; let other validation catch it
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("roster eligible match %d: %w", matchID, err)
+	}
+
+	var teamsManaged int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(teams_managed,0) FROM seasons WHERE id=?`, seasonID,
+	).Scan(&teamsManaged); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, "", fmt.Errorf("roster eligible season %d: %w", seasonID, err)
+	}
+	if teamsManaged == 0 {
+		return true, "", nil
+	}
+
+	check := func(teamID int64, label string) (bool, string, error) {
+		var n int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM season_rosters WHERE season_id=? AND team_id=?`,
+			seasonID, teamID).Scan(&n); err != nil {
+			return false, "", fmt.Errorf("roster count team %d: %w", teamID, err)
+		}
+		if n < minPlayers {
+			return false, fmt.Sprintf(
+				"%s team has %d season-roster player(s); %d required to use a scoresheet",
+				label, n, minPlayers), nil
+		}
+		return true, "", nil
+	}
+
+	if ok, msg, err := check(homeID, "home"); err != nil || !ok {
+		return ok, msg, err
+	}
+	if ok, msg, err := check(awayID, "away"); err != nil || !ok {
+		return ok, msg, err
+	}
+	return true, "", nil
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const seasonCols = `id, league_id, name, start_date, end_date, active, schedule_type,

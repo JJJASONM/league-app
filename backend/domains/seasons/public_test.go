@@ -458,7 +458,10 @@ func TestRosterEligible_LegacySeason_AlwaysTrue(t *testing.T) {
 		 VALUES (?,?,?,1) RETURNING id`, sid, t1, t2).Scan(&matchID)
 
 	// No season_teams → skip check
-	ok, msg := seasons.RosterEligible(d, matchID, 3)
+	ok, msg, err := makeSvc(d).RosterEligible(context.Background(), matchID, 3)
+	if err != nil {
+		t.Fatalf("RosterEligible: %v", err)
+	}
 	if !ok {
 		t.Errorf("want eligible for legacy season, got msg=%q", msg)
 	}
@@ -488,7 +491,10 @@ func TestRosterEligible_InsufficientRoster_ReturnsFalse(t *testing.T) {
 		`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number)
 		 VALUES (?,?,?,1) RETURNING id`, sid, t1, t2).Scan(&matchID)
 
-	ok, msg := seasons.RosterEligible(d, matchID, 3)
+	ok, msg, err := makeSvc(d).RosterEligible(context.Background(), matchID, 3)
+	if err != nil {
+		t.Fatalf("RosterEligible: %v", err)
+	}
 	if ok {
 		t.Error("want ineligible when home team has < 3 players")
 	}
@@ -503,15 +509,15 @@ func TestRosterEligible_SufficientRoster_ReturnsTrue(t *testing.T) {
 	t1 := seedTeam(t, d, lid, "A")
 	t2 := seedTeam(t, d, lid, "B")
 	sid := seedManagedSeason(t, d, lid, "Current", "2026-09-01", "")
-	players := make([]int64, 6)
+	playerIDs := make([]int64, 6)
 	for i := 0; i < 3; i++ {
-		players[i] = seedPlayer(t, d, t1, fmt.Sprintf("H%d", i), "X")
-		players[i+3] = seedPlayer(t, d, t2, fmt.Sprintf("A%d", i), "Y")
+		playerIDs[i] = seedPlayer(t, d, t1, fmt.Sprintf("H%d", i), "X")
+		playerIDs[i+3] = seedPlayer(t, d, t2, fmt.Sprintf("A%d", i), "Y")
 	}
 
-	addSeasonTeam(t, d, sid, t1, &players[0])
-	addSeasonTeam(t, d, sid, t2, &players[3])
-	for i, pid := range players {
+	addSeasonTeam(t, d, sid, t1, &playerIDs[0])
+	addSeasonTeam(t, d, sid, t2, &playerIDs[3])
+	for i, pid := range playerIDs {
 		tid := t1
 		if i >= 3 {
 			tid = t2
@@ -524,7 +530,10 @@ func TestRosterEligible_SufficientRoster_ReturnsTrue(t *testing.T) {
 		`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number)
 		 VALUES (?,?,?,1) RETURNING id`, sid, t1, t2).Scan(&matchID)
 
-	ok, _ := seasons.RosterEligible(d, matchID, 3)
+	ok, _, err := makeSvc(d).RosterEligible(context.Background(), matchID, 3)
+	if err != nil {
+		t.Fatalf("RosterEligible: %v", err)
+	}
 	if !ok {
 		t.Error("want eligible when both teams have >= 3 players")
 	}
