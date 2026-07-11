@@ -49,51 +49,6 @@ function loadSection(sec) {
   }
 }
 
-// --- API helpers --------------------------------------------------------------
-async function api(method, path, body) {
-  const opts = { method, headers: {'Content-Type':'application/json'} };
-  if (body !== undefined) opts.body = JSON.stringify(body);
-  const res = await fetch('/api' + path, opts);
-  const data = await res.json();
-  if (!res.ok) {
-    if (Array.isArray(data.messages) && data.messages.length > 0) {
-      const errs = data.messages.filter(m => m.level === 'error');
-      const list = (errs.length ? errs : data.messages).map(m => m.message).join('; ');
-      throw new Error(list);
-    }
-    throw new Error(data.error || 'Request failed');
-  }
-  return data;
-}
-
-function escapeHTML(value) {
-  return String(value ?? '').replace(/[&<>"']/g, ch => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[ch]));
-}
-
-// Returns "?league_id=X" or "" if no active league
-function lid() {
-  return appContext.getLeagueQuery();
-}
-// Returns "&league_id=X" for appending to existing query strings
-function lidAmp() {
-  return appContext.getLeagueQueryAmp();
-}
-
-// --- Toast --------------------------------------------------------------------
-function toast(msg, type='success') {
-  const el = document.createElement('div');
-  el.className = `toast align-items-center text-bg-${type} border-0 show mb-2`;
-  el.setAttribute('role','alert');
-  el.innerHTML = `<div class="d-flex"><div class="toast-body">${msg}</div>
-    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
-  document.getElementById('toast-container').appendChild(el);
-  setTimeout(() => el.remove(), 3500);
-}
-
-function openModal(id)  { new bootstrap.Modal(document.getElementById(id)).show(); }
-function closeModal(id) { bootstrap.Modal.getInstance(document.getElementById(id))?.hide(); }
 
 const appContext = window.LeagueAppContext.createShellContext({
   api,
