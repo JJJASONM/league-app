@@ -1,14 +1,4 @@
 
-// --- State --------------------------------------------------------------------
-let allLeagues  = [];
-let activeLeague = null;
-let allTeams    = [];
-let allPlayers  = [];
-let allSeasons  = [];
-let activeSeason = null;
-let _entryPreSelectSeasonId = null;
-let _entryPreSelectMatchId = null;
-
 // --- Navigation ---------------------------------------------------------------
 function activateSection(sec) {
   document.querySelectorAll('[data-section]').forEach(l => l.classList.remove('active'));
@@ -31,22 +21,31 @@ document.querySelector('[data-action="manage-leagues"]')?.addEventListener('clic
 document.querySelector('[data-action="backup"]')?.addEventListener('click', backup);
 
 function loadSection(sec) {
-  if (!activeLeague) return;
+  const state = appContext.getState();
+  if (!state.activeLeague) return;
   switch(sec) {
-    case 'dashboard': document.querySelector('dashboard-page')?.refresh(activeLeague, activeSeason, allTeams, allPlayers); break;
-    case 'seasons':   document.querySelector('seasons-page')?.refresh(activeLeague, allSeasons, allTeams); break;
+    case 'dashboard': document.querySelector('dashboard-page')?.refresh(state.activeLeague, state.activeSeason, state.allTeams, state.allPlayers); break;
+    case 'seasons':   document.querySelector('seasons-page')?.refresh(state.activeLeague, state.allSeasons, state.allTeams); break;
     case 'teams':     loadTeams(); break;
-    case 'players':   document.querySelector('players-page')?.refresh(allTeams, activeLeague); break;
-    case 'schedule':  document.querySelector('schedule-page')?.refresh(allSeasons, allTeams, activeLeague); break;
-    case 'lineup':    document.querySelector('lineup-page')?.refresh(allSeasons, activeSeason, allTeams, allPlayers); break;
+    case 'players':   document.querySelector('players-page')?.refresh(state.allTeams, state.activeLeague); break;
+    case 'schedule':  document.querySelector('schedule-page')?.refresh(state.allSeasons, state.allTeams, state.activeLeague); break;
+    case 'lineup':    document.querySelector('lineup-page')?.refresh(state.allSeasons, state.activeSeason, state.allTeams, state.allPlayers); break;
     case 'entry':
-      document.querySelector('match-entry-page')?.refresh(allSeasons, activeSeason, allPlayers, activeLeague, _entryPreSelectSeasonId, _entryPreSelectMatchId);
-      _entryPreSelectSeasonId = null;
-      _entryPreSelectMatchId  = null;
+      {
+        const preselect = appContext.consumeEntryPreselect();
+        document.querySelector('match-entry-page')?.refresh(
+          state.allSeasons,
+          state.activeSeason,
+          state.allPlayers,
+          state.activeLeague,
+          preselect.seasonId,
+          preselect.matchId
+        );
+      }
       break;
-    case 'standings': document.querySelector('standings-section')?.refresh(allSeasons); break;
-    case 'stats':     document.querySelector('stats-section')?.refresh(allSeasons); break;
-    case 'handicap':  document.querySelector('handicaps-page')?.refresh(allSeasons, activeSeason); break;
+    case 'standings': document.querySelector('standings-section')?.refresh(state.allSeasons); break;
+    case 'stats':     document.querySelector('stats-section')?.refresh(state.allSeasons); break;
+    case 'handicap':  document.querySelector('handicaps-page')?.refresh(state.allSeasons, state.activeSeason); break;
   }
 }
 
@@ -75,11 +74,11 @@ function escapeHTML(value) {
 
 // Returns "?league_id=X" or "" if no active league
 function lid() {
-  return activeLeague ? `?league_id=${activeLeague.id}` : '';
+  return appContext.getLeagueQuery();
 }
 // Returns "&league_id=X" for appending to existing query strings
 function lidAmp() {
-  return activeLeague ? `&league_id=${activeLeague.id}` : '';
+  return appContext.getLeagueQueryAmp();
 }
 
 // --- Toast --------------------------------------------------------------------
@@ -96,60 +95,38 @@ function toast(msg, type='success') {
 function openModal(id)  { new bootstrap.Modal(document.getElementById(id)).show(); }
 function closeModal(id) { bootstrap.Modal.getInstance(document.getElementById(id))?.hide(); }
 
+const appContext = window.LeagueAppContext.createShellContext({
+  api,
+  labelEl: document.getElementById('active-season-label'),
+  selectEl: document.getElementById('league-select'),
+  storage: window.localStorage,
+  toast,
+});
+
 // --- League selector ----------------------------------------------------------
 async function switchLeague() {
   const id = parseInt(document.getElementById('league-select').value);
-  activeLeague = allLeagues.find(l => l.id === id) || null;
-  if (activeLeague) localStorage.setItem('activeLeagueId', activeLeague.id);
-  await loadLeagueData();
+  await appContext.switchLeague(id);
   // reload the currently visible section
   const sec = document.querySelector('[data-section].active')?.dataset.section || 'dashboard';
   loadSection(sec);
 }
 
 async function loadLeagueData() {
-  if (!activeLeague) return;
-  const lid = activeLeague.id;
-  try {
-    [allTeams, allPlayers, allSeasons] = await Promise.all([
-      api('GET', `/teams?league_id=${lid}`),
-      api('GET', `/players?league_id=${lid}`),
-      api('GET', `/seasons?league_id=${lid}`)
-    ]);
-    activeSeason = allSeasons.find(s => s.active) || null;
-    const label = document.getElementById('active-season-label');
-    label.textContent = activeSeason ? '\u{1F4C5} ' + activeSeason.name : 'No active season';
-  } catch(e) { toast('Failed to load league data: ' + e.message, 'danger'); }
+  await appContext.loadLeagueData();
 }
 
 // --- Bootstrap ----------------------------------------------------------------
 async function init() {
-  try {
-    allLeagues = await api('GET', '/leagues');
-  } catch(e) {
-    toast('Could not load leagues: ' + e.message, 'danger');
-    allLeagues = [];
-  }
-
-  // Populate league dropdown
-  const sel = document.getElementById('league-select');
-  if (allLeagues.length === 0) {
-    sel.innerHTML = '<option value="">No leagues - add one</option>';
-    activeLeague = null;
-  } else {
-    sel.innerHTML = allLeagues.map(l =>
-      `<option value="${l.id}">${l.name}</option>`
-    ).join('');
-    // Restore last-used league from localStorage
-    const saved = parseInt(localStorage.getItem('activeLeagueId'));
-    const restored = allLeagues.find(l => l.id === saved);
-    activeLeague = restored || allLeagues[0];
-    sel.value = activeLeague.id;
-  }
-
-  if (activeLeague) {
-    await loadLeagueData();
-    document.querySelector('dashboard-page')?.refresh(activeLeague, activeSeason, allTeams, allPlayers);
+  await appContext.init();
+  const state = appContext.getState();
+  if (state.activeLeague) {
+    document.querySelector('dashboard-page')?.refresh(
+      state.activeLeague,
+      state.activeSeason,
+      state.allTeams,
+      state.allPlayers
+    );
   }
 }
 init();
@@ -164,10 +141,7 @@ function navTo(sec) { activateSection(sec); }
 // state (allSeasons, activeSeason) and responds to navigation requests.
 
 document.addEventListener('season-state-changed', e => {
-  allSeasons   = e.detail.allSeasons;
-  activeSeason = e.detail.activeSeason;
-  document.getElementById('active-season-label').textContent =
-    activeSeason ? '\u{1F4C5} ' + activeSeason.name : 'No active season';
+  appContext.applySeasonState(e.detail);
 });
 
 document.addEventListener('season-nav-request', e => {
@@ -188,7 +162,7 @@ document.addEventListener('schedule-data-changed', () => {
 });
 
 document.addEventListener('players-data-changed', e => {
-  allPlayers = e.detail.players;
+  appContext.applyPlayersState(e.detail.players);
   const activeSec = document.querySelector('[data-section].active')?.dataset.section;
   if (activeSec === 'teams') loadTeams();
 });
@@ -197,43 +171,28 @@ document.addEventListener('dashboard-nav-request', e => navTo(e.detail.section))
 
 document.addEventListener('dashboard-refresh-request', async () => {
   await loadLeagueData();
-  document.querySelector('dashboard-page')?.refresh(activeLeague, activeSeason, allTeams, allPlayers);
+  const state = appContext.getState();
+  document.querySelector('dashboard-page')?.refresh(state.activeLeague, state.activeSeason, state.allTeams, state.allPlayers);
 });
 
 // --- Teams --------------------------------------------------------------------
 function loadTeams() {
+  const state = appContext.getState();
   const page = document.querySelector('teams-page');
-  if (page) page.refresh(activeLeague?.id ?? null, activeSeason?.id ?? null);
+  if (page) page.refresh(state.activeLeague?.id ?? null, state.activeSeason?.id ?? null);
 }
 
 // --- Leagues management modal -------------------------------------------------
 
 function openLeagueModal() {
-  document.querySelector('leagues-page')?.openModal(activeLeague);
+  document.querySelector('leagues-page')?.openModal(appContext.getState().activeLeague);
 }
 
 document.addEventListener('leagues-list-changed', async e => {
-  const { leagues, deletedId } = e.detail;
-  allLeagues = leagues;
-
-  if (deletedId != null && activeLeague?.id === deletedId) {
-    activeLeague = allLeagues[0] || null;
-    if (activeLeague) localStorage.setItem('activeLeagueId', String(activeLeague.id));
-    else              localStorage.removeItem('activeLeagueId');
-  }
-
-  const sel = document.getElementById('league-select');
-  if (allLeagues.length === 0) {
-    sel.innerHTML = '<option value="">No leagues - add one</option>';
-    activeLeague = null;
-  } else {
-    sel.innerHTML = allLeagues.map(l =>
-      `<option value="${l.id}" ${activeLeague && l.id === activeLeague.id ? 'selected' : ''}>${l.name}</option>`
-    ).join('');
-  }
-
-  if (deletedId != null) {
-    if (activeLeague) await loadLeagueData();
+  await appContext.applyLeaguesChanged(e.detail);
+  const state = appContext.getState();
+  if (e.detail.deletedId != null) {
+    if (state.activeLeague) await loadLeagueData();
     loadSection('dashboard');
   }
 });
