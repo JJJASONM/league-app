@@ -535,3 +535,154 @@ func TestSeasonStore_GetMatchTeams_ReturnsList(t *testing.T) {
 		t.Fatalf("want 2 teams, got %d", len(teams))
 	}
 }
+
+// ── FindActiveSeasonByLeague ──────────────────────────────────────────────────
+
+func TestSeasonStore_FindActiveSeasonByLeague_ReturnsIDWhenActive(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "2026-09-01", "", false)
+	db.DB.Exec(`UPDATE seasons SET active=1 WHERE id=?`, sid)
+
+	got, found, err := store.FindActiveSeasonByLeague(ctx, lid)
+	if err != nil {
+		t.Fatalf("FindActiveSeasonByLeague: %v", err)
+	}
+	if !found {
+		t.Fatal("want found=true for active season")
+	}
+	if got != sid {
+		t.Errorf("want id=%d, got %d", sid, got)
+	}
+}
+
+func TestSeasonStore_FindActiveSeasonByLeague_NotFoundWhenInactive(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sseedSeason(t, lid, "S", "2026-09-01", "", false) // active=0 by default
+
+	_, found, err := store.FindActiveSeasonByLeague(ctx, lid)
+	if err != nil {
+		t.Fatalf("FindActiveSeasonByLeague: %v", err)
+	}
+	if found {
+		t.Error("want found=false when no active season")
+	}
+}
+
+func TestSeasonStore_FindActiveSeasonByLeague_NotFoundWhenNoSeasons(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+
+	_, found, err := store.FindActiveSeasonByLeague(ctx, lid)
+	if err != nil {
+		t.Fatalf("FindActiveSeasonByLeague: %v", err)
+	}
+	if found {
+		t.Error("want found=false when league has no seasons")
+	}
+}
+
+// ── RosterEligible ────────────────────────────────────────────────────────────
+
+func TestSeasonStore_RosterEligible_LegacySeason_AlwaysTrue(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	t1 := sseedTeam(t, lid, "A")
+	t2 := sseedTeam(t, lid, "B")
+	sid := sseedSeason(t, lid, "Legacy", "", "", false) // teams_managed=0
+	var matchID int64
+	db.DB.QueryRow(
+		`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number)
+		 VALUES (?,?,?,1) RETURNING id`, sid, t1, t2).Scan(&matchID)
+
+	ok, msg, err := store.RosterEligible(ctx, matchID, 3)
+	if err != nil {
+		t.Fatalf("RosterEligible: %v", err)
+	}
+	if !ok {
+		t.Errorf("want eligible for legacy season, got msg=%q", msg)
+	}
+}
+
+func TestSeasonStore_RosterEligible_NotFound_ReturnsTrue(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	// Match 999 does not exist; should return true so other validation catches it.
+	ok, msg, err := store.RosterEligible(ctx, 999, 3)
+	if err != nil {
+		t.Fatalf("RosterEligible: %v", err)
+	}
+	if !ok {
+		t.Errorf("want true (skip) for missing match, got msg=%q", msg)
+	}
+}
+
+func TestSeasonStore_RosterEligible_InsufficientRoster_ReturnsFalse(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	t1 := sseedTeam(t, lid, "A")
+	t2 := sseedTeam(t, lid, "B")
+	sid := sseedSeason(t, lid, "Current", "", "", true) // teams_managed=1
+	p1 := sseedPlayer(t, t1)
+	p2 := sseedPlayer(t, t2)
+	sseedSeasonTeam(t, sid, t1, &p1)
+	sseedSeasonTeam(t, sid, t2, &p2)
+	sseedRoster(t, sid, t1, p1) // only 1 player on home (< 3 required)
+	sseedRoster(t, sid, t2, p2)
+	sseedRoster(t, sid, t2, sseedPlayer(t, t2))
+	sseedRoster(t, sid, t2, sseedPlayer(t, t2))
+
+	var matchID int64
+	db.DB.QueryRow(
+		`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number)
+		 VALUES (?,?,?,1) RETURNING id`, sid, t1, t2).Scan(&matchID)
+
+	ok, msg, err := store.RosterEligible(ctx, matchID, 3)
+	if err != nil {
+		t.Fatalf("RosterEligible: %v", err)
+	}
+	if ok {
+		t.Error("want ineligible when home team has < 3 players")
+	}
+	if msg == "" {
+		t.Error("want non-empty message")
+	}
+}
+
+func TestSeasonStore_RosterEligible_SufficientRoster_ReturnsTrue(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	t1 := sseedTeam(t, lid, "A")
+	t2 := sseedTeam(t, lid, "B")
+	sid := sseedSeason(t, lid, "Current", "", "", true) // teams_managed=1
+	p1 := sseedPlayer(t, t1)
+	sseedSeasonTeam(t, sid, t1, &p1)
+	sseedRoster(t, sid, t1, p1)
+	sseedRoster(t, sid, t1, sseedPlayer(t, t1))
+	sseedRoster(t, sid, t1, sseedPlayer(t, t1))
+	p2 := sseedPlayer(t, t2)
+	sseedSeasonTeam(t, sid, t2, &p2)
+	sseedRoster(t, sid, t2, p2)
+	sseedRoster(t, sid, t2, sseedPlayer(t, t2))
+	sseedRoster(t, sid, t2, sseedPlayer(t, t2))
+
+	var matchID int64
+	db.DB.QueryRow(
+		`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number)
+		 VALUES (?,?,?,1) RETURNING id`, sid, t1, t2).Scan(&matchID)
+
+	ok, _, err := store.RosterEligible(ctx, matchID, 3)
+	if err != nil {
+		t.Fatalf("RosterEligible: %v", err)
+	}
+	if !ok {
+		t.Error("want eligible when both teams have >= 3 players")
+	}
+}

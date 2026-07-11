@@ -15,8 +15,8 @@ import (
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/players"
 	"league_app/backend/domains/rules"
-	"league_app/backend/domains/teams"
 	"league_app/backend/domains/seasons"
+	"league_app/backend/domains/teams"
 	"league_app/backend/validation"
 	"league_app/db"
 	"league_app/models"
@@ -331,10 +331,10 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 			getRounds(w, r, roundMgr)
 		})
 		mux.HandleFunc("POST /api/matches/{id}/rounds", func(w http.ResponseWriter, r *http.Request) {
-			saveRounds(w, r, roundMgr)
+			saveRounds(w, r, roundMgr, seasonMgr)
 		})
 		mux.HandleFunc("GET /api/standings", func(w http.ResponseWriter, r *http.Request) {
-			getStandings(w, r, roundMgr)
+			getStandings(w, r, roundMgr, seasonMgr)
 		})
 		mux.HandleFunc("GET /api/player-stats", func(w http.ResponseWriter, r *http.Request) {
 			getPlayerStats(w, r, roundMgr)
@@ -1688,7 +1688,7 @@ func listUsers(w http.ResponseWriter, r *http.Request, auth ApplyAuthResolver) {
 
 // ─── Standings ────────────────────────────────────────────────────────────────
 
-func getStandings(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
+func getStandings(w http.ResponseWriter, r *http.Request, roundMgr RoundManager, seasonMgr SeasonManager) {
 	sid, ok := qparamInt(r, "season_id")
 	if !ok {
 		leagueID, lok := qparamInt(r, "league_id")
@@ -1696,14 +1696,15 @@ func getStandings(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 			jsonOK(w, []models.Standing{})
 			return
 		}
-		if err := db.DB.QueryRow(
-			`SELECT id FROM seasons WHERE league_id=? AND active=1 LIMIT 1`, leagueID,
-		).Scan(&sid); err != nil {
+		var found bool
+		var err error
+		sid, found, err = seasonMgr.FindActiveSeasonByLeague(r.Context(), leagueID)
+		if err != nil || !found {
 			jsonOK(w, []models.Standing{})
 			return
 		}
 	}
-	standings, err := mgr.GetStandings(r.Context(), sid)
+	standings, err := roundMgr.GetStandings(r.Context(), sid)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -1728,7 +1729,7 @@ func getRounds(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 	jsonOK(w, rounds)
 }
 
-func saveRounds(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
+func saveRounds(w http.ResponseWriter, r *http.Request, roundMgr RoundManager, seasonMgr SeasonManager) {
 	matchID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -1739,12 +1740,11 @@ func saveRounds(w http.ResponseWriter, r *http.Request, mgr RoundManager) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	// Roster eligibility guard: cross-domain pre-TX check kept in handler per B3 decision.
-	if ok, msg := seasons.RosterEligible(db.DB, matchID, 3); !ok {
+	if ok, msg, err := seasonMgr.RosterEligible(r.Context(), matchID, 3); err == nil && !ok {
 		jsonError(w, msg, http.StatusUnprocessableEntity)
 		return
 	}
-	err = mgr.SaveRounds(r.Context(), matches.SaveRoundsInput{MatchID: matchID, Rounds: req.Rounds})
+	err = roundMgr.SaveRounds(r.Context(), matches.SaveRoundsInput{MatchID: matchID, Rounds: req.Rounds})
 	if err != nil {
 		var vErr *matches.RoundValidationError
 		if errors.As(err, &vErr) {

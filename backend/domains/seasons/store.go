@@ -131,6 +131,16 @@ type SeasonStore interface {
 	// Used as fallback when GetSeasonTeams returns an empty slice.
 	GetMatchTeams(ctx context.Context, seasonID int64) ([]SeasonTeamEntry, error)
 
+	// FindActiveSeasonByLeague returns the ID of the active season in leagueID.
+	// Returns (0, false, nil) when no active season exists.
+	FindActiveSeasonByLeague(ctx context.Context, leagueID int64) (int64, bool, error)
+
+	// RosterEligible returns (true, "", nil) when both teams in a match have at
+	// least minPlayers season-roster players, or when the season is not managed.
+	// Returns (true, "", nil) when the match is not found (other validation catches it).
+	// Returns (false, msg, nil) when a team is ineligible.
+	RosterEligible(ctx context.Context, matchID int64, minPlayers int) (bool, string, error)
+
 	// ── Team management ───────────────────────────────────────────────────────
 
 	// GetTeamLeagueID returns the league_id for a team.

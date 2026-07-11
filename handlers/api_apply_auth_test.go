@@ -101,6 +101,12 @@ func (n *noopSeasonMgr) ListByeRequests(_ context.Context, _ int64) ([]models.By
 	return []models.ByeRequest{}, nil
 }
 func (n *noopSeasonMgr) DeleteByeRequest(_ context.Context, _, _ int64) error { return nil }
+func (n *noopSeasonMgr) FindActiveSeasonByLeague(_ context.Context, _ int64) (int64, bool, error) {
+	return 0, false, nil
+}
+func (n *noopSeasonMgr) RosterEligible(_ context.Context, _ int64, _ int) (bool, string, error) {
+	return true, "", nil
+}
 
 // noopLeagueMgr satisfies LeagueManager for tests that only exercise auth or
 // route-mounting logic and do not exercise league endpoints.

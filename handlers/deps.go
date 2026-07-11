@@ -154,6 +154,12 @@ type SeasonManager interface {
 	DeleteSkippedWeek(ctx context.Context, id int64) error
 	ListByeRequests(ctx context.Context, seasonID int64) ([]models.ByeRequest, error)
 	DeleteByeRequest(ctx context.Context, seasonID, byeID int64) error
+	// FindActiveSeasonByLeague returns the ID of the active season in leagueID.
+	// Returns (0, false, nil) when no active season exists.
+	FindActiveSeasonByLeague(ctx context.Context, leagueID int64) (int64, bool, error)
+	// RosterEligible returns (true, "") when both teams in a match have at least
+	// minPlayers season-roster players, or when the season is not managed.
+	RosterEligible(ctx context.Context, matchID int64, minPlayers int) (bool, string, error)
 }
 
 // Dependencies holds domain services injected into handlers at startup.
