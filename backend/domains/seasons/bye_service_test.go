@@ -74,6 +74,24 @@ func TestSeasonService_DeleteByeRequest_OtherErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestSeasonService_DeleteByeRequest_MarksStale(t *testing.T) {
+	store := &stubSeasonStore{}
+	if err := newSvc(store).DeleteByeRequest(context.Background(), 1, 2); err != nil {
+		t.Fatalf("DeleteByeRequest: %v", err)
+	}
+	if !store.staleCalled {
+		t.Error("want MarkStaleIfScheduled called after bye request deletion")
+	}
+}
+
+func TestSeasonService_DeleteByeRequest_StoreErrorSkipsStale(t *testing.T) {
+	store := &stubSeasonStore{deleteByeErr: errors.New("db down")}
+	newSvc(store).DeleteByeRequest(context.Background(), 1, 2) //nolint
+	if store.staleCalled {
+		t.Error("want MarkStaleIfScheduled NOT called when delete fails")
+	}
+}
+
 // ── ListSeasonTeams (service method lives in service.go) ──────────────────────
 
 func TestSeasonService_ListSeasonTeams_ReturnsTeams(t *testing.T) {

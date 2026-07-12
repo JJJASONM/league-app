@@ -22,6 +22,8 @@ func (s *SeasonService) ListByeRequests(ctx context.Context, seasonID int64) ([]
 
 // DeleteByeRequest deletes a bye request scoped to the season.
 // Returns domainerr.NotFound when the request does not exist in the season.
+// Marks the season stale after a successful delete because the deleted request
+// may have been approved and baked into the generated schedule.
 func (s *SeasonService) DeleteByeRequest(ctx context.Context, seasonID, byeID int64) error {
 	if err := s.store.DeleteByeRequest(ctx, seasonID, byeID); err != nil {
 		if errors.Is(err, ErrByeNotFound) {
@@ -29,5 +31,6 @@ func (s *SeasonService) DeleteByeRequest(ctx context.Context, seasonID, byeID in
 		}
 		return err
 	}
+	_ = s.store.MarkStaleIfScheduled(ctx, seasonID)
 	return nil
 }

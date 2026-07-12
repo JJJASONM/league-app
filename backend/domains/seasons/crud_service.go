@@ -47,11 +47,18 @@ func (s *SeasonService) CreateSeason(ctx context.Context, input CreateSeasonInpu
 // UpdateSeason applies defaults and updates the season's mutable fields.
 // Returns the full stored row after the update so callers always see authoritative data.
 // Propagates ErrNotFound (wrapped) from the store when the season does not exist.
+// Marks the season stale after a successful update because start_date, schedule_type,
+// and num_weeks all affect the schedule's structure and calendar dates.
 func (s *SeasonService) UpdateSeason(ctx context.Context, seasonID int64, input UpdateSeasonInput) (models.Season, error) {
 	if input.ScheduleType == "" {
 		input.ScheduleType = matches.ScheduleTypeDoubleRR
 	}
-	return s.store.UpdateSeason(ctx, seasonID, input)
+	season, err := s.store.UpdateSeason(ctx, seasonID, input)
+	if err != nil {
+		return models.Season{}, err
+	}
+	_ = s.store.MarkStaleIfScheduled(ctx, seasonID)
+	return season, nil
 }
 
 // DeleteSeason removes the season record by ID.

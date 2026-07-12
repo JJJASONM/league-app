@@ -864,6 +864,31 @@ func TestSeasonService_UpdateByeRequest_Unapprove_SkipsConflictCheck(t *testing.
 	}
 }
 
+func TestSeasonService_UpdateByeRequest_MarksStale(t *testing.T) {
+	want := models.ByeRequest{ID: 1, Approved: true, WeekNumber: 3}
+	store := &stubSeasonStore{
+		gotBye: models.ByeRequest{WeekNumber: 3},
+		setBye: want,
+	}
+	if _, err := newSvc(store).UpdateByeRequest(context.Background(), 1, 1, true); err != nil {
+		t.Fatalf("UpdateByeRequest: %v", err)
+	}
+	if !store.staleCalled {
+		t.Error("want MarkStaleIfScheduled called after bye request approval")
+	}
+}
+
+func TestSeasonService_UpdateByeRequest_StoreErrorSkipsStale(t *testing.T) {
+	store := &stubSeasonStore{
+		gotBye:    models.ByeRequest{WeekNumber: 3},
+		setByeErr: errors.New("db down"),
+	}
+	newSvc(store).UpdateByeRequest(context.Background(), 1, 1, true) //nolint
+	if store.staleCalled {
+		t.Error("want MarkStaleIfScheduled NOT called when SetByeApproval fails")
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func assertHasCode(t *testing.T, items []models.ChecklistItem, code string) {

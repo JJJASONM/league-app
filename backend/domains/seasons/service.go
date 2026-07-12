@@ -329,6 +329,7 @@ func (s *SeasonService) UpdateByeRequest(ctx context.Context, seasonID, byeID in
 		}
 		return models.ByeRequest{}, err
 	}
+	_ = s.store.MarkStaleIfScheduled(ctx, seasonID)
 	return updated, nil
 }
 
