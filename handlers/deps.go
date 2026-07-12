@@ -151,7 +151,7 @@ type SeasonManager interface {
 	DeleteSeason(ctx context.Context, seasonID int64) error
 	ListSkippedWeeks(ctx context.Context, seasonID int64) ([]models.SkippedWeek, error)
 	CreateSkippedWeek(ctx context.Context, seasonID int64, skipDate, reason string) (models.SkippedWeek, error)
-	DeleteSkippedWeek(ctx context.Context, id int64) error
+	DeleteSkippedWeek(ctx context.Context, seasonID, id int64) error
 	ListByeRequests(ctx context.Context, seasonID int64) ([]models.ByeRequest, error)
 	DeleteByeRequest(ctx context.Context, seasonID, byeID int64) error
 	// FindActiveSeasonByLeague returns the ID of the active season in leagueID.

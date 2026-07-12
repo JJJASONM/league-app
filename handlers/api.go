@@ -1147,12 +1147,17 @@ func createSkippedWeek(w http.ResponseWriter, r *http.Request, mgr SeasonManager
 }
 
 func deleteSkippedWeek(w http.ResponseWriter, r *http.Request, mgr SeasonManager) {
+	sid, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid season id", 400)
+		return
+	}
 	swid, err := pathID(r, "sid")
 	if err != nil {
 		jsonError(w, "invalid skip id", 400)
 		return
 	}
-	if err := mgr.DeleteSkippedWeek(r.Context(), swid); err != nil {
+	if err := mgr.DeleteSkippedWeek(r.Context(), sid, swid); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}

@@ -226,7 +226,7 @@ func (s *stubSeasonStore) ListSkippedWeeks(_ context.Context, _ int64) ([]models
 func (s *stubSeasonStore) CreateSkippedWeek(_ context.Context, _ int64, _, _ string) (models.SkippedWeek, error) {
 	return s.createdSkipWeek, s.createSkipErr
 }
-func (s *stubSeasonStore) DeleteSkippedWeek(_ context.Context, _ int64) error {
+func (s *stubSeasonStore) DeleteSkippedWeek(_ context.Context, _, _ int64) error {
 	return s.deleteSkipErr
 }
 

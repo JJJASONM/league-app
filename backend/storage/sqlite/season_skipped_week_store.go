@@ -47,13 +47,13 @@ func (s *SeasonStore) CreateSkippedWeek(ctx context.Context, seasonID int64, ski
 	return sw, nil
 }
 
-// DeleteSkippedWeek removes a skipped week by id.
+// DeleteSkippedWeek removes a skipped week scoped to the season by id.
 // No error is returned when the row does not exist.
-func (s *SeasonStore) DeleteSkippedWeek(ctx context.Context, id int64) error {
+func (s *SeasonStore) DeleteSkippedWeek(ctx context.Context, seasonID, id int64) error {
 	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM skipped_weeks WHERE id=?`, id,
+		`DELETE FROM skipped_weeks WHERE id=? AND season_id=?`, id, seasonID,
 	); err != nil {
-		return fmt.Errorf("delete skipped week %d: %w", id, err)
+		return fmt.Errorf("delete skipped week %d/%d: %w", seasonID, id, err)
 	}
 	return nil
 }
