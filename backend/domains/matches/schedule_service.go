@@ -60,6 +60,15 @@ func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequ
 			"managed seasons generate from season_teams; from_season_id is not supported")
 	}
 
+	// Closed weeks exist: regeneration would desynchronize week numbers with
+	// committed official results. Require pushback or manual correction instead.
+	if closed, err := s.store.HasClosedWeeks(ctx, req.SeasonID); err != nil {
+		return GenerateResult{}, fmt.Errorf("generate schedule: check closed weeks: %w", err)
+	} else if closed {
+		return GenerateResult{}, domainerr.New("SCHEDULE_HAS_CLOSED_WEEKS", domainerr.Conflict,
+			"cannot regenerate schedule: one or more weeks in this season are already closed")
+	}
+
 	// Parse dates.
 	startDate, _ := time.Parse("2006-01-02", req.StartDate)
 	skipDates := make([]time.Time, 0, len(req.SkipDates))

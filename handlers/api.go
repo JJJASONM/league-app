@@ -972,6 +972,8 @@ func mapScheduleErr(w http.ResponseWriter, err error) {
 			jsonError(w, de.Message, http.StatusNotFound)
 		case domainerr.InvalidInput:
 			jsonError(w, de.Message, http.StatusBadRequest)
+		case domainerr.Conflict:
+			jsonError(w, de.Message, http.StatusConflict)
 		default:
 			jsonError(w, de.Message, http.StatusInternalServerError)
 		}

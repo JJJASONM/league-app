@@ -255,6 +255,66 @@ func TestScheduleStore_SaveGeneratedSchedule_PreservesCompletedMatches(t *testin
 	}
 }
 
+// ── HasClosedWeeks ────────────────────────────────────────────────────────────
+
+func sseedLeagueWeek(t *testing.T, seasonID int64, weekNumber int, status string) {
+	t.Helper()
+	_, err := db.DB.Exec(
+		`INSERT INTO league_weeks (season_id, week_number, status) VALUES (?,?,?)`,
+		seasonID, weekNumber, status)
+	if err != nil {
+		t.Fatalf("insert league_weeks: %v", err)
+	}
+}
+
+func TestScheduleStore_HasClosedWeeks_NoneExist_ReturnsFalse(t *testing.T) {
+	store := newScheduleStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", false)
+
+	got, err := store.HasClosedWeeks(ctx, sid)
+	if err != nil {
+		t.Fatalf("HasClosedWeeks: %v", err)
+	}
+	if got {
+		t.Error("want false when no league_weeks rows exist")
+	}
+}
+
+func TestScheduleStore_HasClosedWeeks_ClosedWeekExists_ReturnsTrue(t *testing.T) {
+	store := newScheduleStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", false)
+	sseedLeagueWeek(t, sid, 1, "closed")
+
+	got, err := store.HasClosedWeeks(ctx, sid)
+	if err != nil {
+		t.Fatalf("HasClosedWeeks: %v", err)
+	}
+	if !got {
+		t.Error("want true when a closed league_weeks row exists")
+	}
+}
+
+func TestScheduleStore_HasClosedWeeks_ClosedWeekInOtherSeason_ReturnsFalse(t *testing.T) {
+	store := newScheduleStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid1 := sseedSeason(t, lid, "S1", "", "", false)
+	sid2 := sseedSeason(t, lid, "S2", "", "", false)
+	sseedLeagueWeek(t, sid2, 1, "closed") // closed week belongs to sid2, not sid1
+
+	got, err := store.HasClosedWeeks(ctx, sid1)
+	if err != nil {
+		t.Fatalf("HasClosedWeeks: %v", err)
+	}
+	if got {
+		t.Error("want false: closed week in another season must not affect this season")
+	}
+}
+
 func TestScheduleStore_SaveGeneratedSchedule_BlanketSlots(t *testing.T) {
 	store := newScheduleStore(t)
 	ctx := context.Background()

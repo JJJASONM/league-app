@@ -118,6 +118,19 @@ func (s *ScheduleStore) LoadTeamIDsForSchedule(ctx context.Context, seasonID, le
 	return ids, rows.Err()
 }
 
+// HasClosedWeeks reports whether any league_weeks row for the season has
+// status "closed".
+func (s *ScheduleStore) HasClosedWeeks(ctx context.Context, seasonID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM league_weeks WHERE season_id=? AND status='closed'`, seasonID,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("has closed weeks %d: %w", seasonID, err)
+	}
+	return n > 0, nil
+}
+
 // SaveGeneratedSchedule atomically deletes unplayed matches, inserts new match
 // rows, and updates the season's schedule metadata.
 func (s *ScheduleStore) SaveGeneratedSchedule(ctx context.Context, req matches.SaveScheduleRequest) error {

@@ -12,16 +12,18 @@ import (
 // ── stub ──────────────────────────────────────────────────────────────────────
 
 type stubScheduleStore struct {
-	meta       matches.ScheduleSeasonMeta
-	metaErr    error
-	byes       map[int]int64
-	byesErr    error
-	histIDs    []int64
-	histErr    error
-	schedIDs   []int64
-	schedErr   error
-	saveErr    error
-	savedReq   matches.SaveScheduleRequest
+	meta          matches.ScheduleSeasonMeta
+	metaErr       error
+	byes          map[int]int64
+	byesErr       error
+	histIDs       []int64
+	histErr       error
+	schedIDs      []int64
+	schedErr      error
+	closedWeeks   bool
+	closedWeeksErr error
+	saveErr       error
+	savedReq      matches.SaveScheduleRequest
 }
 
 func (s *stubScheduleStore) GetScheduleSeasonMeta(_ context.Context, _ int64) (matches.ScheduleSeasonMeta, error) {
@@ -38,6 +40,9 @@ func (s *stubScheduleStore) LoadTeamIDsFromHistory(_ context.Context, _ int64) (
 }
 func (s *stubScheduleStore) LoadTeamIDsForSchedule(_ context.Context, _, _ int64, _ bool) ([]int64, error) {
 	return s.schedIDs, s.schedErr
+}
+func (s *stubScheduleStore) HasClosedWeeks(_ context.Context, _ int64) (bool, error) {
+	return s.closedWeeks, s.closedWeeksErr
 }
 func (s *stubScheduleStore) SaveGeneratedSchedule(_ context.Context, req matches.SaveScheduleRequest) error {
 	s.savedReq = req
@@ -235,5 +240,24 @@ func TestGenerateSchedule_BypassesTeamCheckForBlanket(t *testing.T) {
 	})
 	if err != nil {
 		t.Errorf("blanket must not check team count, got %v", err)
+	}
+}
+
+func TestGenerateSchedule_ClosedWeeksPresent_ReturnsConflict(t *testing.T) {
+	store := &stubScheduleStore{
+		meta:         matches.ScheduleSeasonMeta{LeagueID: 1, TeamsManaged: false},
+		schedIDs:     twoTeams(),
+		closedWeeks:  true,
+	}
+	_, err := newSvc(store).GenerateSchedule(context.Background(), matches.GenerateRequest{
+		SeasonID:     1,
+		ScheduleType: "double_rr",
+	})
+	if !domainerr.IsCategory(err, domainerr.Conflict) {
+		t.Errorf("want Conflict error when closed weeks exist, got %v", err)
+	}
+	var de *domainerr.Err
+	if errors.As(err, &de) && de.Code != "SCHEDULE_HAS_CLOSED_WEEKS" {
+		t.Errorf("want code SCHEDULE_HAS_CLOSED_WEEKS, got %q", de.Code)
 	}
 }
