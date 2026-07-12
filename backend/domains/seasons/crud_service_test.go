@@ -172,6 +172,27 @@ func TestSeasonService_UpdateSeason_NotFound(t *testing.T) {
 	}
 }
 
+func TestSeasonService_UpdateSeason_MarksStale(t *testing.T) {
+	store := &stubSeasonStore{updatedSeason: models.Season{ID: 1}}
+	if _, err := newSvc(store).UpdateSeason(context.Background(), 1, seasons.UpdateSeasonInput{
+		Name:         "Updated",
+		ScheduleType: "double_rr",
+	}); err != nil {
+		t.Fatalf("UpdateSeason: %v", err)
+	}
+	if !store.staleCalled {
+		t.Error("want MarkStaleIfScheduled called after season update")
+	}
+}
+
+func TestSeasonService_UpdateSeason_StoreErrorSkipsStale(t *testing.T) {
+	store := &stubSeasonStore{updateSeasonErr: errors.New("db down")}
+	newSvc(store).UpdateSeason(context.Background(), 1, seasons.UpdateSeasonInput{Name: "X"}) //nolint
+	if store.staleCalled {
+		t.Error("want MarkStaleIfScheduled NOT called when update fails")
+	}
+}
+
 // ── DeleteSeason ──────────────────────────────────────────────────────────────
 
 func TestSeasonService_DeleteSeason_Delegates(t *testing.T) {
