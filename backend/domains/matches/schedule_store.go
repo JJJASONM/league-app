@@ -54,6 +54,11 @@ type ScheduleStore interface {
 	// falls back to all teams in the league.
 	LoadTeamIDsForSchedule(ctx context.Context, seasonID, leagueID int64, teamsManaged bool) ([]int64, error)
 
+	// HasClosedWeeks reports whether any league_weeks row for the season has
+	// status "closed". Used to guard against regenerating a schedule after
+	// official results have been committed.
+	HasClosedWeeks(ctx context.Context, seasonID int64) (bool, error)
+
 	// SaveGeneratedSchedule atomically deletes unplayed matches for the season,
 	// inserts the new match rows, and updates the season row
 	// (schedule_type, num_weeks, end_date, schedule_stale=0).

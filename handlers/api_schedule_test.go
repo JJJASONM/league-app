@@ -803,3 +803,39 @@ func TestByeRequest_TwoApprovedRequestsDifferentWeeks(t *testing.T) {
 		t.Error("regeneration: Bravo should still have week-2 bye")
 	}
 }
+
+// TestGenerateSchedule_Returns409WhenClosedWeeksExist verifies that regenerating
+// a schedule is blocked when the season has at least one closed week.
+func TestGenerateSchedule_Returns409WhenClosedWeeksExist(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-07-06"
+	_, seasonID := seedScheduleFixture(t, srv, startDate)
+	generateAndGetMatches(t, srv, seasonID, startDate, nil)
+
+	// Simulate closing week 1 by inserting a league_weeks row directly.
+	if _, err := db.DB.Exec(
+		`INSERT INTO league_weeks (season_id, week_number, status) VALUES (?,1,'closed')`,
+		seasonID,
+	); err != nil {
+		t.Fatalf("seed closed week: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"season_id":%d,"schedule_type":"double_rr","start_date":%q}`,
+		seasonID, startDate)
+	resp, err := http.Post(srv.URL+"/api/matches/generate", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /matches/generate: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("want 409 Conflict when closed weeks exist, got %d", resp.StatusCode)
+	}
+
+	var body2 map[string]any
+	json.NewDecoder(resp.Body).Decode(&body2)
+	errMsg, _ := body2["error"].(string)
+	if errMsg == "" {
+		t.Error("want non-empty error message in response body")
+	}
+}
