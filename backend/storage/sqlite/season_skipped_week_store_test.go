@@ -98,7 +98,7 @@ func TestSeasonSkipStore_DeleteSkippedWeek_DeletesRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := store.DeleteSkippedWeek(ctx, sw.ID); err != nil {
+	if err := store.DeleteSkippedWeek(ctx, sid, sw.ID); err != nil {
 		t.Fatalf("DeleteSkippedWeek: %v", err)
 	}
 	var n int
@@ -110,7 +110,31 @@ func TestSeasonSkipStore_DeleteSkippedWeek_DeletesRow(t *testing.T) {
 
 func TestSeasonSkipStore_DeleteSkippedWeek_NonExistentNoError(t *testing.T) {
 	store := newSeasonStore(t)
-	if err := store.DeleteSkippedWeek(context.Background(), 9999); err != nil {
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", false)
+	if err := store.DeleteSkippedWeek(context.Background(), sid, 9999); err != nil {
 		t.Errorf("want nil error for non-existent id, got %v", err)
+	}
+}
+
+func TestSeasonSkipStore_DeleteSkippedWeek_WrongSeasonNoDelete(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid1 := sseedSeason(t, lid, "S1", "", "", false)
+	sid2 := sseedSeason(t, lid, "S2", "", "", false)
+
+	sw, err := store.CreateSkippedWeek(ctx, sid1, "2026-11-01", "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Delete with wrong season ID — row must not be removed.
+	if err := store.DeleteSkippedWeek(ctx, sid2, sw.ID); err != nil {
+		t.Fatalf("DeleteSkippedWeek wrong season: %v", err)
+	}
+	var n int
+	db.DB.QueryRow(`SELECT COUNT(*) FROM skipped_weeks WHERE id=?`, sw.ID).Scan(&n)
+	if n != 1 {
+		t.Errorf("want row to remain when wrong season_id provided, got count=%d", n)
 	}
 }

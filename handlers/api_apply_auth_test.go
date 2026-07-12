@@ -96,7 +96,7 @@ func (n *noopSeasonMgr) ListSkippedWeeks(_ context.Context, _ int64) ([]models.S
 func (n *noopSeasonMgr) CreateSkippedWeek(_ context.Context, _ int64, _, _ string) (models.SkippedWeek, error) {
 	return models.SkippedWeek{}, nil
 }
-func (n *noopSeasonMgr) DeleteSkippedWeek(_ context.Context, _ int64) error { return nil }
+func (n *noopSeasonMgr) DeleteSkippedWeek(_ context.Context, _, _ int64) error { return nil }
 func (n *noopSeasonMgr) ListByeRequests(_ context.Context, _ int64) ([]models.ByeRequest, error) {
 	return []models.ByeRequest{}, nil
 }

@@ -245,9 +245,9 @@ type SeasonStore interface {
 	// pre-existing.
 	CreateSkippedWeek(ctx context.Context, seasonID int64, skipDate, reason string) (models.SkippedWeek, error)
 
-	// DeleteSkippedWeek removes a skipped week by id. No error is returned when
-	// the row does not exist.
-	DeleteSkippedWeek(ctx context.Context, id int64) error
+	// DeleteSkippedWeek removes a skipped week scoped to the season by id.
+	// No error is returned when the row does not exist.
+	DeleteSkippedWeek(ctx context.Context, seasonID, id int64) error
 
 	// ── Additional bye request methods ────────────────────────────────────────────
 
