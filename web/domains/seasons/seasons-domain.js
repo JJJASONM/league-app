@@ -203,6 +203,10 @@ class SeasonsPage extends HTMLElement {
             </div>
           </div>
           <div class="alert alert-light border py-2 px-3 mb-0 sdx-gen-type-desc" style="font-size:.82rem"></div>
+          <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small d-none sdx-stale-alert">
+            <i class="bi bi-exclamation-triangle-fill me-1"></i>
+            <strong>Schedule may be out of date.</strong> Recent changes (skip weeks, bye requests, or season settings) were made after the last generation. Regenerate to apply them.
+          </div>
           <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small d-none sdx-schedule-preview-note">
             <i class="bi bi-eye"></i>
             Schedule is a preview - visible to admins only until this season is activated.
@@ -377,7 +381,7 @@ class SeasonsPage extends HTMLElement {
         </td>
         <td class="text-muted small">${fmtDateRange(s.start_date, s.end_date)}</td>
         <td><span class="badge bg-secondary" style="font-size:.7rem">${esc(typeLabel)}${esc(weeksNote)}</span></td>
-        <td></td>
+        <td>${s.schedule_stale ? '<span class="badge bg-warning text-dark" style="font-size:.7rem">Stale</span>' : ''}</td>
         <td class="text-end" style="white-space:nowrap">
           <button class="btn btn-outline-primary btn-sm py-0 me-1"
             data-action="manage" data-season-id="${s.id}"
@@ -448,6 +452,7 @@ class SeasonsPage extends HTMLElement {
     if (s.num_weeks)     this.querySelector('.sdx-gen-numweeks').value = s.num_weeks;
     this.#onGenTypeChange();
     this.querySelector('.sdx-schedule-preview-note').classList.toggle('d-none', s.active);
+    this.#setStaleAlert(!!s.schedule_stale);
 
     // Load season teams and (if draft) the checklist
     let seasonTeams = [], checklist = null;
@@ -652,6 +657,7 @@ class SeasonsPage extends HTMLElement {
       this.querySelector('.sdx-skip-reason-input').value = '';
       toast('Skip date added');
       await this.#loadSkips(this.#mgmtSeasonId);
+      await this.#refreshChecklistAndStale();
     } catch(e) { toast(e.message, 'danger'); }
   }
 
@@ -661,6 +667,7 @@ class SeasonsPage extends HTMLElement {
       await removeSkippedWeek(this.#mgmtSeasonId, id);
       toast('Removed');
       await this.#loadSkips(this.#mgmtSeasonId);
+      await this.#refreshChecklistAndStale();
     } catch(e) { toast(e.message, 'danger'); }
   }
 
@@ -738,6 +745,7 @@ class SeasonsPage extends HTMLElement {
       await updateByeRequest(this.#mgmtSeasonId, id, { approved });
       toast(approved ? 'Bye approved' : 'Bye unapproved');
       await this.#loadByes(this.#mgmtSeasonId);
+      await this.#refreshChecklistAndStale();
     } catch(e) { toast(e.message, 'danger'); }
   }
 
@@ -747,6 +755,7 @@ class SeasonsPage extends HTMLElement {
       await removeByeRequest(this.#mgmtSeasonId, id);
       toast('Removed');
       await this.#loadByes(this.#mgmtSeasonId);
+      await this.#refreshChecklistAndStale();
     } catch(e) { toast(e.message, 'danger'); }
   }
 
@@ -787,7 +796,45 @@ class SeasonsPage extends HTMLElement {
     this.#renderSeasonList();
     if (isNew && saved?.id) {
       await this.#manageSeason(saved.id, copyFromSeasonId);
+    } else if (this.#mgmtSeasonId) {
+      await this.#applyFreshStateToPanel();
     }
+  }
+
+  // ── Stale indicator and checklist refresh ────────────────────────────────────
+
+  #setStaleAlert(isStale) {
+    this.querySelector('.sdx-stale-alert')?.classList.toggle('d-none', !isStale);
+  }
+
+  // Apply the already-fresh this.#allSeasons to the open management panel:
+  // updates the stale alert and, for draft seasons, re-fetches and re-renders
+  // the setup checklist so the SCHEDULE_STALE blocker appears/clears live.
+  async #applyFreshStateToPanel() {
+    if (!this.#mgmtSeasonId) return;
+    const s = this.#allSeasons.find(x => x.id === this.#mgmtSeasonId);
+    if (!s) return;
+    this.#setStaleAlert(!!s.schedule_stale);
+    const isDraft = !s.active && !s.activated_at;
+    if (!isDraft) return;
+    let checklist = null;
+    try { checklist = await getSeasonChecklist(this.#mgmtSeasonId); } catch (e) {
+      toast(`Could not load setup checklist: ${e.message}`, 'danger');
+    }
+    this.#renderChecklist(checklist, isDraft);
+    const setActiveBtn = this.querySelector('.sdx-set-active-btn');
+    if (setActiveBtn && checklist) {
+      setActiveBtn.disabled = !checklist.can_activate;
+      setActiveBtn.classList.toggle('disabled', !checklist.can_activate);
+      setActiveBtn.title = checklist.can_activate
+        ? '' : 'Resolve setup blockers before activating this season.';
+    }
+  }
+
+  // Full refresh: re-fetch seasons (updates table + shell state) then apply to panel.
+  async #refreshChecklistAndStale() {
+    await this.#refreshState();
+    await this.#applyFreshStateToPanel();
   }
 
   // ── Shell state sync ──────────────────────────────────────────────────────────
