@@ -12,18 +12,20 @@ import (
 // ── stub ──────────────────────────────────────────────────────────────────────
 
 type stubScheduleStore struct {
-	meta          matches.ScheduleSeasonMeta
-	metaErr       error
-	byes          map[int]int64
-	byesErr       error
-	histIDs       []int64
-	histErr       error
-	schedIDs      []int64
-	schedErr      error
-	closedWeeks   bool
-	closedWeeksErr error
-	saveErr       error
-	savedReq      matches.SaveScheduleRequest
+	meta               matches.ScheduleSeasonMeta
+	metaErr            error
+	byes               map[int]int64
+	byesErr            error
+	histIDs            []int64
+	histErr            error
+	schedIDs           []int64
+	schedErr           error
+	closedWeeks        bool
+	closedWeeksErr     error
+	completedMatches   bool
+	completedMatchesErr error
+	saveErr            error
+	savedReq           matches.SaveScheduleRequest
 }
 
 func (s *stubScheduleStore) GetScheduleSeasonMeta(_ context.Context, _ int64) (matches.ScheduleSeasonMeta, error) {
@@ -43,6 +45,9 @@ func (s *stubScheduleStore) LoadTeamIDsForSchedule(_ context.Context, _, _ int64
 }
 func (s *stubScheduleStore) HasClosedWeeks(_ context.Context, _ int64) (bool, error) {
 	return s.closedWeeks, s.closedWeeksErr
+}
+func (s *stubScheduleStore) HasCompletedMatches(_ context.Context, _ int64) (bool, error) {
+	return s.completedMatches, s.completedMatchesErr
 }
 func (s *stubScheduleStore) SaveGeneratedSchedule(_ context.Context, req matches.SaveScheduleRequest) error {
 	s.savedReq = req
@@ -245,9 +250,9 @@ func TestGenerateSchedule_BypassesTeamCheckForBlanket(t *testing.T) {
 
 func TestGenerateSchedule_ClosedWeeksPresent_ReturnsConflict(t *testing.T) {
 	store := &stubScheduleStore{
-		meta:         matches.ScheduleSeasonMeta{LeagueID: 1, TeamsManaged: false},
-		schedIDs:     twoTeams(),
-		closedWeeks:  true,
+		meta:        matches.ScheduleSeasonMeta{LeagueID: 1, TeamsManaged: false},
+		schedIDs:    twoTeams(),
+		closedWeeks: true,
 	}
 	_, err := newSvc(store).GenerateSchedule(context.Background(), matches.GenerateRequest{
 		SeasonID:     1,
@@ -259,5 +264,61 @@ func TestGenerateSchedule_ClosedWeeksPresent_ReturnsConflict(t *testing.T) {
 	var de *domainerr.Err
 	if errors.As(err, &de) && de.Code != "SCHEDULE_HAS_CLOSED_WEEKS" {
 		t.Errorf("want code SCHEDULE_HAS_CLOSED_WEEKS, got %q", de.Code)
+	}
+}
+
+func TestGenerateSchedule_ActiveWithCompletedMatches_ReturnsConflict(t *testing.T) {
+	store := &stubScheduleStore{
+		meta:             matches.ScheduleSeasonMeta{LeagueID: 1, TeamsManaged: false, Active: true},
+		schedIDs:         twoTeams(),
+		completedMatches: true,
+	}
+	_, err := newSvc(store).GenerateSchedule(context.Background(), matches.GenerateRequest{
+		SeasonID:     1,
+		ScheduleType: "double_rr",
+	})
+	if !domainerr.IsCategory(err, domainerr.Conflict) {
+		t.Errorf("want Conflict for active season with completed matches, got %v", err)
+	}
+	var de *domainerr.Err
+	if errors.As(err, &de) && de.Code != "SCHEDULE_ACTIVE_HAS_COMPLETED" {
+		t.Errorf("want code SCHEDULE_ACTIVE_HAS_COMPLETED, got %q", de.Code)
+	}
+}
+
+func TestGenerateSchedule_ActiveNoCompletedMatches_Succeeds(t *testing.T) {
+	store := &stubScheduleStore{
+		meta:             matches.ScheduleSeasonMeta{LeagueID: 1, TeamsManaged: false, Active: true},
+		schedIDs:         twoTeams(),
+		completedMatches: false,
+	}
+	result, err := newSvc(store).GenerateSchedule(context.Background(), matches.GenerateRequest{
+		SeasonID:     1,
+		ScheduleType: "double_rr",
+	})
+	if err != nil {
+		t.Fatalf("want success for active season with no completed matches, got %v", err)
+	}
+	if result.MatchesCreated == 0 {
+		t.Error("want non-zero matches_created")
+	}
+}
+
+func TestGenerateSchedule_DraftWithCompletedMatches_Succeeds(t *testing.T) {
+	// Draft seasons are never blocked by the completed-matches guard (active-only check).
+	store := &stubScheduleStore{
+		meta:             matches.ScheduleSeasonMeta{LeagueID: 1, TeamsManaged: false, Active: false},
+		schedIDs:         twoTeams(),
+		completedMatches: true,
+	}
+	result, err := newSvc(store).GenerateSchedule(context.Background(), matches.GenerateRequest{
+		SeasonID:     1,
+		ScheduleType: "double_rr",
+	})
+	if err != nil {
+		t.Fatalf("want success for draft season regardless of completed matches, got %v", err)
+	}
+	if result.MatchesCreated == 0 {
+		t.Error("want non-zero matches_created")
 	}
 }

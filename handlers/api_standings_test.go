@@ -17,7 +17,8 @@ import (
 // active season for the given league_id, exercising FindActiveSeasonByLeague.
 func TestStandings_LeagueID_NoActiveSeason(t *testing.T) {
 	f := weekTestSeed(t)
-	// Season is created but never activated -- active=0.
+	// weekTestSeed activates the season; revert to draft to test the inactive path.
+	db.DB.Exec(`UPDATE seasons SET active=0, activated_at=NULL WHERE id=?`, f.sid)
 	resp, err := http.Get(fmt.Sprintf("%s/api/standings?league_id=%d", f.srv.URL, f.sid))
 	if err != nil {
 		t.Fatal(err)

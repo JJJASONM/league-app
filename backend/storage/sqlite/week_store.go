@@ -450,6 +450,19 @@ func (s *WeekStore) GetWeekValidationData(ctx context.Context, seasonID, weekNum
 	return result, nil
 }
 
+// IsSeasonDraft reports whether the season is in draft state
+// (active=0 AND activated_at IS NULL).
+func (s *WeekStore) IsSeasonDraft(ctx context.Context, seasonID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM seasons WHERE id=? AND COALESCE(active,0)=0 AND activated_at IS NULL`, seasonID,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("is season draft %d: %w", seasonID, err)
+	}
+	return n > 0, nil
+}
+
 // ListAcknowledgments returns all close acknowledgments for the week, ordered
 // by acknowledged_at DESC.
 func (s *WeekStore) ListAcknowledgments(ctx context.Context, seasonID, weekNum int64) ([]models.CloseAck, error) {
