@@ -23,10 +23,10 @@ func NewScheduleStore(db *sql.DB) *ScheduleStore {
 // Returns matches.ErrSeasonNotFound when the season does not exist.
 func (s *ScheduleStore) GetScheduleSeasonMeta(ctx context.Context, seasonID int64) (matches.ScheduleSeasonMeta, error) {
 	var meta matches.ScheduleSeasonMeta
-	var managed int
+	var managed, active int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT league_id, COALESCE(teams_managed,0) FROM seasons WHERE id=?`, seasonID,
-	).Scan(&meta.LeagueID, &managed)
+		`SELECT league_id, COALESCE(teams_managed,0), COALESCE(active,0) FROM seasons WHERE id=?`, seasonID,
+	).Scan(&meta.LeagueID, &managed, &active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return matches.ScheduleSeasonMeta{}, fmt.Errorf("season %d: %w", seasonID, matches.ErrSeasonNotFound)
 	}
@@ -34,7 +34,20 @@ func (s *ScheduleStore) GetScheduleSeasonMeta(ctx context.Context, seasonID int6
 		return matches.ScheduleSeasonMeta{}, fmt.Errorf("get schedule season meta %d: %w", seasonID, err)
 	}
 	meta.TeamsManaged = managed == 1
+	meta.Active = active == 1
 	return meta, nil
+}
+
+// HasCompletedMatches reports whether the season has any match with completed=1.
+func (s *ScheduleStore) HasCompletedMatches(ctx context.Context, seasonID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM matches WHERE season_id=? AND completed=1`, seasonID,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("has completed matches %d: %w", seasonID, err)
+	}
+	return n > 0, nil
 }
 
 // LoadByeRequests returns approved bye requests with a specific week number for the season.

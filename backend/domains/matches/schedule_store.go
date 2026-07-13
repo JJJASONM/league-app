@@ -12,6 +12,7 @@ var ErrSeasonNotFound = errors.New("season not found")
 type ScheduleSeasonMeta struct {
 	LeagueID     int64
 	TeamsManaged bool
+	Active       bool // true when seasons.active = 1
 }
 
 // MatchEntry is one scheduled match slot produced by a schedule generator.
@@ -58,6 +59,9 @@ type ScheduleStore interface {
 	// status "closed". Used to guard against regenerating a schedule after
 	// official results have been committed.
 	HasClosedWeeks(ctx context.Context, seasonID int64) (bool, error)
+
+	// HasCompletedMatches reports whether the season has any match with completed=1.
+	HasCompletedMatches(ctx context.Context, seasonID int64) (bool, error)
 
 	// SaveGeneratedSchedule atomically deletes unplayed matches for the season,
 	// inserts the new match rows, and updates the season row

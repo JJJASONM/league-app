@@ -12,16 +12,18 @@ import (
 
 // stubWeekStore is a test double for matches.WeekStore.
 type stubWeekStore struct {
-	matchCount      int
-	weekStatus      string
-	closeErr        error
-	closeCalled     bool
-	reopenErr       error
-	reopenCalled    bool
-	acks            []models.CloseAck
-	acksErr         error
-	advanceSummary  matches.WeekAdvanceSummary
+	matchCount        int
+	weekStatus        string
+	closeErr          error
+	closeCalled       bool
+	reopenErr         error
+	reopenCalled      bool
+	acks              []models.CloseAck
+	acksErr           error
+	advanceSummary    matches.WeekAdvanceSummary
 	advanceSummaryErr error
+	isDraft           bool
+	isDraftErr        error
 }
 
 func (s *stubWeekStore) ListWeekSummaries(_ context.Context, _ int64) ([]models.WeekSummary, error) {
@@ -66,6 +68,10 @@ func (s *stubHandicapPreviewer) HandicapPreview(_ context.Context, _ int64) (mod
 
 func (s *stubWeekStore) GetWeekValidationData(_ context.Context, _, _ int64) (matches.WeekValidationData, error) {
 	return matches.WeekValidationData{}, nil
+}
+
+func (s *stubWeekStore) IsSeasonDraft(_ context.Context, _ int64) (bool, error) {
+	return s.isDraft, s.isDraftErr
 }
 
 // newTestSvc creates a WeekService backed by the stub store.
@@ -219,6 +225,51 @@ func TestWeekService_CloseWeek_PropagatesStoreError(t *testing.T) {
 	var wce *matches.WeekCloseErr
 	if errors.As(err, &wce) {
 		t.Error("want a wrapped store error, not a WeekCloseErr (that is for validation failures)")
+	}
+}
+
+func TestWeekService_CloseWeek_DraftSeasonBlocked(t *testing.T) {
+	store := &stubWeekStore{isDraft: true}
+	svc := newTestSvc(t, store, nil)
+
+	_, err := svc.CloseWeek(context.Background(), matches.CloseWeekRequest{
+		SeasonID:   1,
+		WeekNumber: 1,
+	})
+
+	if err == nil {
+		t.Fatal("want error for draft season, got nil")
+	}
+	var de *domainerr.Err
+	if !errors.As(err, &de) {
+		t.Fatalf("want *domainerr.Err, got %T: %v", err, err)
+	}
+	if de.Category != domainerr.Conflict {
+		t.Errorf("want Conflict category, got %v", de.Category)
+	}
+	if de.Code != "WEEK_CLOSE_SEASON_DRAFT" {
+		t.Errorf("want code WEEK_CLOSE_SEASON_DRAFT, got %q", de.Code)
+	}
+	if store.closeCalled {
+		t.Error("store.CloseWeek must not be called for a draft season")
+	}
+}
+
+func TestWeekService_CloseWeek_DraftCheckErrorPropagates(t *testing.T) {
+	store := &stubWeekStore{isDraftErr: errors.New("db timeout")}
+	svc := newTestSvc(t, store, nil)
+
+	_, err := svc.CloseWeek(context.Background(), matches.CloseWeekRequest{
+		SeasonID:   1,
+		WeekNumber: 1,
+	})
+
+	if err == nil {
+		t.Fatal("want error when draft check fails, got nil")
+	}
+	var de *domainerr.Err
+	if errors.As(err, &de) {
+		t.Errorf("want plain wrapped error (not domainerr) for store failure, got %v", err)
 	}
 }
 

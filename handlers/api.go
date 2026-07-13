@@ -1364,9 +1364,20 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	})
 	if err != nil {
 		var wce *matches.WeekCloseErr
-		if errors.As(err, &wce) {
+		var de *domainerr.Err
+		switch {
+		case errors.As(err, &wce):
 			jsonValidation(w, wce.Result)
-		} else {
+		case errors.As(err, &de):
+			switch de.Category {
+			case domainerr.Conflict:
+				jsonError(w, de.Message, http.StatusConflict)
+			case domainerr.NotFound:
+				jsonError(w, de.Message, http.StatusNotFound)
+			default:
+				jsonError(w, de.Message, http.StatusInternalServerError)
+			}
+		default:
 			jsonError(w, err.Error(), 500)
 		}
 		return

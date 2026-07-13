@@ -85,4 +85,9 @@ type WeekStore interface {
 	// validation. Handicap snapshots take priority; falls back to current player
 	// handicap when the snapshot column is NULL.
 	GetWeekValidationData(ctx context.Context, seasonID, weekNum int64) (WeekValidationData, error)
+
+	// IsSeasonDraft reports whether the season is in draft state
+	// (active=0 AND activated_at IS NULL). Returns false, nil when the
+	// season does not exist.
+	IsSeasonDraft(ctx context.Context, seasonID int64) (bool, error)
 }

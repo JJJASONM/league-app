@@ -69,7 +69,15 @@ func (s *WeekService) ValidateWeek(ctx context.Context, seasonID, weekNum int64)
 
 // CloseWeek validates the week, checks that all warnings are acknowledged, then
 // commits the close. Returns *WeekCloseErr for validation/ack failures (HTTP 422).
+// Returns domainerr.Conflict (WEEK_CLOSE_SEASON_DRAFT) when the season is still draft.
 func (s *WeekService) CloseWeek(ctx context.Context, req CloseWeekRequest) (CloseWeekResult, error) {
+	if draft, err := s.store.IsSeasonDraft(ctx, req.SeasonID); err != nil {
+		return CloseWeekResult{}, fmt.Errorf("close week: draft check: %w", err)
+	} else if draft {
+		return CloseWeekResult{}, domainerr.New("WEEK_CLOSE_SEASON_DRAFT", domainerr.Conflict,
+			"cannot close a week for a draft season: activate the season before closing weeks")
+	}
+
 	cfg, err := ResolveRoundConfig(ctx, s.ruleStore, req.SeasonID)
 	if err != nil {
 		return CloseWeekResult{}, fmt.Errorf("close week: config: %w", err)

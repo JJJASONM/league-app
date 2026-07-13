@@ -124,6 +124,14 @@ func weekTestSeed(t *testing.T) weekFixture {
 		t.Fatalf("weekTestSeed: insert match: %v", err)
 	}
 	matchID, _ := rm.LastInsertId()
+
+	// Activate the season: close-week requires an active (non-draft) season.
+	if _, err := db.DB.Exec(
+		`UPDATE seasons SET active=1, activated_at=CURRENT_TIMESTAMP WHERE id=?`, sid,
+	); err != nil {
+		t.Fatalf("weekTestSeed: activate season: %v", err)
+	}
+
 	return weekFixture{srv, sid, matchID, teamA, teamB, playerA, playerB}
 }
 

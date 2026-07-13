@@ -69,6 +69,17 @@ func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequ
 			"cannot regenerate schedule: one or more weeks in this season are already closed")
 	}
 
+	// Active seasons with completed matches: regeneration would overwrite official
+	// play records whose match dates and pairings have already been communicated.
+	if meta.Active {
+		if completed, err := s.store.HasCompletedMatches(ctx, req.SeasonID); err != nil {
+			return GenerateResult{}, fmt.Errorf("generate schedule: check completed: %w", err)
+		} else if completed {
+			return GenerateResult{}, domainerr.New("SCHEDULE_ACTIVE_HAS_COMPLETED", domainerr.Conflict,
+				"cannot regenerate schedule: the season is active and has completed matches")
+		}
+	}
+
 	// Parse dates.
 	startDate, _ := time.Parse("2006-01-02", req.StartDate)
 	skipDates := make([]time.Time, 0, len(req.SkipDates))
