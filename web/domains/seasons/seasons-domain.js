@@ -208,12 +208,13 @@ class SeasonsPage extends HTMLElement {
             <strong>Schedule may be out of date.</strong> Recent changes (skip weeks, bye requests, or season settings) were made after the last generation. Regenerate to apply them.
           </div>
           <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small d-none sdx-schedule-preview-note">
-            <i class="bi bi-eye"></i>
-            Schedule is a preview - visible to admins only until this season is activated.
+            <i class="bi bi-eye me-1"></i>
+            <strong>Draft schedule.</strong> Week closing is not available for draft seasons. Activate this season before closing weeks.
           </div>
           <div class="text-muted small mt-2">
             <i class="bi bi-info-circle"></i>
-            Generating replaces only <strong>unplayed</strong> matches. Completed matches are preserved.
+            Generating replaces only <strong>unplayed</strong> matches.
+            Once a season is active and has completed matches, the schedule cannot be regenerated.
             Add any skip dates first (Skip Weeks tab) before generating.
           </div>
         </div>
@@ -623,7 +624,14 @@ class SeasonsPage extends HTMLElement {
       toast(`Schedule generated: ${res.matches_created} matches`);
       await this.#refreshState();
       if (this.#mgmtSeasonId) await this.#manageSeason(this.#mgmtSeasonId);
-    } catch(e) { toast(e.message, 'danger'); }
+    } catch(e) {
+      const msg = e.message || '';
+      if (msg.includes('active') && msg.includes('completed matches')) {
+        toast('This season is active and has completed matches — the schedule cannot be regenerated once play has begun.', 'danger');
+      } else {
+        toast(msg || 'Schedule generation failed', 'danger');
+      }
+    }
   }
 
   // ── Skip weeks ────────────────────────────────────────────────────────────────
