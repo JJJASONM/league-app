@@ -24,6 +24,7 @@ type stubMatchStore struct {
 	lastAssignID   int64
 	lastHomeTeamID *int64
 	lastAwayTeamID *int64
+	assignCalled   bool
 }
 
 func (s *stubMatchStore) ListMatches(_ context.Context, req matches.ListMatchesRequest) ([]models.Match, error) {
@@ -37,6 +38,7 @@ func (s *stubMatchStore) GetMatch(_ context.Context, id int64) (models.MatchDeta
 }
 
 func (s *stubMatchStore) AssignMatchTeams(_ context.Context, id int64, home, away *int64) error {
+	s.assignCalled = true
 	s.lastAssignID = id
 	s.lastHomeTeamID = home
 	s.lastAwayTeamID = away
@@ -170,5 +172,54 @@ func TestAssignMatchTeams_StoreErrorBecomesInternal(t *testing.T) {
 	}
 	if de.Category != domainerr.Internal {
 		t.Errorf("want Internal category, got %v", de.Category)
+	}
+}
+
+func TestAssignMatchTeams_CompletedMatch_ReturnsConflictAndSkipsStore(t *testing.T) {
+	stub := &stubMatchStore{
+		getResult: models.MatchDetail{Match: models.Match{ID: 1, Completed: true}},
+	}
+	svc := matches.NewMatchService(stub)
+	err := svc.AssignMatchTeams(context.Background(), 1, nil, nil)
+	var de *domainerr.Err
+	if !errors.As(err, &de) {
+		t.Fatalf("want domainerr.Err, got %T: %v", err, err)
+	}
+	if de.Category != domainerr.Conflict {
+		t.Errorf("want Conflict category, got %v", de.Category)
+	}
+	if de.Code != "MATCH_ALREADY_COMPLETED" {
+		t.Errorf("want code MATCH_ALREADY_COMPLETED, got %q", de.Code)
+	}
+	if stub.assignCalled {
+		t.Error("store AssignMatchTeams must not be called for a completed match")
+	}
+}
+
+func TestAssignMatchTeams_NotCompletedMatch_CallsStoreAssign(t *testing.T) {
+	stub := &stubMatchStore{
+		getResult: models.MatchDetail{Match: models.Match{ID: 2, Completed: false}},
+	}
+	svc := matches.NewMatchService(stub)
+	home := int64(5)
+	if err := svc.AssignMatchTeams(context.Background(), 2, &home, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !stub.assignCalled {
+		t.Error("store AssignMatchTeams must be called for a non-completed match")
+	}
+}
+
+func TestAssignMatchTeams_UnknownMatch_DoesNotReturnNotFound(t *testing.T) {
+	stub := &stubMatchStore{getErr: matches.ErrMatchNotFound}
+	svc := matches.NewMatchService(stub)
+	// Unknown match ID: should proceed to AssignMatchTeams (which silently does nothing),
+	// not return a NotFound error (preserves original behavior).
+	err := svc.AssignMatchTeams(context.Background(), 99, nil, nil)
+	if err != nil {
+		t.Errorf("want nil error for unknown match, got %v", err)
+	}
+	if !stub.assignCalled {
+		t.Error("store AssignMatchTeams must still be called for unknown match ID")
 	}
 }

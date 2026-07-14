@@ -839,3 +839,41 @@ func TestGenerateSchedule_Returns409WhenClosedWeeksExist(t *testing.T) {
 		t.Error("want non-empty error message in response body")
 	}
 }
+
+// TestAssignMatchTeams_CompletedMatch_Returns409 verifies that PATCH
+// /api/matches/{id}/assign returns 409 when the match is already completed.
+func TestAssignMatchTeams_CompletedMatch_Returns409(t *testing.T) {
+	srv := testServer(t)
+	const startDate = "2026-07-06"
+	_, seasonID := seedScheduleFixture(t, srv, startDate)
+	ms := generateAndGetMatches(t, srv, seasonID, startDate, nil)
+	if len(ms) == 0 {
+		t.Fatal("expected at least one match to be generated")
+	}
+	matchID := int64(ms[0]["id"].(float64))
+
+	// Mark the match completed directly in the DB.
+	if _, err := db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID); err != nil {
+		t.Fatalf("mark completed: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPatch,
+		fmt.Sprintf("%s/api/matches/%d/assign", srv.URL, matchID),
+		strings.NewReader(`{"home_team_id":null,"away_team_id":null}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH assign: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("want 409 Conflict for completed match, got %d", resp.StatusCode)
+	}
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	errMsg, _ := body["error"].(string)
+	if errMsg == "" {
+		t.Error("want non-empty error message in response body")
+	}
+}
