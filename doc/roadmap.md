@@ -64,7 +64,6 @@ stable.
 
 - Season and schedule workflow completion (remaining items).
   - Preserve completed match history during other schedule changes (pushback, etc.).
-  - Clarify how next-week preparation should work operationally.
 
 - Player quick-add workflow.
   - Resolve `PLAYERS-Q001`.
@@ -177,6 +176,11 @@ follow-up.
   once any match is completed (`SCHEDULE_ACTIVE_HAS_COMPLETED`, 409). Draft
   season UX clarified in schedule page and season management panel. Resolves
   `SCHEDULES-Q001`.
+- Next-week preparation workflow clarified. Close Week does not mutate next-week
+  data; advance-preview and advance-result report readiness only (match count,
+  assigned count, lineup status). Operational admin workflow documented in
+  doc/domains/matches/README.md. Blocking close on missing next-week lineup is
+  explicitly deferred.
 
 ## Open Questions To Resolve
 

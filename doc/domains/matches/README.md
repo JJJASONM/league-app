@@ -1589,7 +1589,87 @@ translation pattern across all three match-family managers.
 - Skipped-weeks or bye-request extraction
 - Leagues/players/teams CRUD extraction
 
+## Next-Week Preparation Workflow
+
+Next-week readiness is informational. The Close Week transaction does not mutate
+next-week data. The advance-preview and advance-result responses report current
+readiness only; no automatic preparation steps occur.
+
+### What advance-preview reports
+
+`GET /api/seasons/{id}/weeks/{week}/advance-preview` includes `next_week_number`
+and `next_week` when a further scheduled week exists. Both are omitted for the
+final week. The same fields appear in `advance_result` embedded in the POST close
+response immediately after a successful close.
+
+`next_week` fields:
+
+| Field | Description |
+|---|---|
+| `match_count` | Total scheduled matches in next week |
+| `assigned_count` | Matches where both home and away team IDs are set |
+| `unassigned_count` | Matches missing a team assignment |
+| `lineup_plan_count` | Total lineup_plans rows across all teams for next week |
+| `missing_lineup_team_ids` | Team IDs with zero lineup plan entries for next week |
+
+### What Close Week does not do
+
+Close Week does not:
+- Create lineup plans for next week
+- Assign teams to next-week matches
+- Initialize any next-week records
+- Block closure based on missing next-week lineup plans or team assignments
+
+Close validation checks only current-week matches (unassigned teams, no game
+winners, player duplicates). Next-week gaps are surfaced as informational signals
+only.
+
+### Admin workflow for preparing next week
+
+1. **Before season start** -- Generate the schedule. Standard round-robin formats
+   produce match rows with home and away teams already set. Blanket and custom
+   formats produce unassigned match slots that require manual team assignment.
+
+2. **Assigning teams (blanket/custom only)** -- The week card in the Schedule page
+   shows an "Assign" button for each unassigned match. The admin selects home and
+   away teams via PATCH /api/matches/{id}/assign. Completed matches cannot be
+   reassigned (MATCH_ALREADY_COMPLETED, 409).
+
+3. **Entering lineup plans** -- Admins enter player slot assignments before each
+   match night using the match entry screen. Lineup plans are stored per team,
+   week, and season in lineup_plans.
+
+4. **Checking readiness** -- The advance-preview modal (opened from "Review &
+   Close") shows next-week match count, unassigned count, and lineup status. After
+   close, the success panel repeats these signals in advance_result.
+
+5. **Correcting gaps** -- Missing team assignments and lineup plans are fixed from
+   the Schedule page and match entry screen. The close modal provides no in-place
+   fix actions.
+
+### Deferred
+
+- Blocking close on missing next-week lineup plans or unassigned matches. The
+  non-blocking design is intentional: legitimate workflows (substitutes, last-minute
+  changes) mean lineups are often not finalized until match night.
+- Auto-creating or pre-populating lineup plans.
+- Adding next_week_date to the advance-preview response (the API returns
+  next_week_number only; the calendar date is visible on the schedule view).
+- A dedicated next-week preparation checklist page.
+- Captain-facing lineup submission (requires auth and the online score-entry workflow).
+
 ## Decision History
+
+### 2026-07-14 - Next-week readiness is informational, not a close blocker
+
+**Status:** `accepted`
+
+Close Week validation checks only the current week's matches. Next-week readiness
+(unassigned team slots, missing lineup plans) is reported in advance-preview and
+advance-result as an informational signal. The admin fixes gaps from the Schedule
+page and match entry screen; the close modal does not block or act on next-week
+state. Blocking close on missing lineup plans would prevent legitimate last-minute
+substitution workflows.
 
 ### 2026-06-08 - Make week close authoritative
 
