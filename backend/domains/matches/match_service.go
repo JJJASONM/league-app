@@ -46,7 +46,16 @@ func (s *MatchService) GetMatch(ctx context.Context, id int64) (models.MatchDeta
 
 // AssignMatchTeams sets the home and away team IDs on the match.
 // Either value may be nil to NULL the column.
+// Returns domainerr.Conflict when the match is already completed.
 func (s *MatchService) AssignMatchTeams(ctx context.Context, id int64, homeTeamID, awayTeamID *int64) error {
+	d, err := s.store.GetMatch(ctx, id)
+	if err != nil && !errors.Is(err, ErrMatchNotFound) {
+		return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")
+	}
+	if err == nil && d.Match.Completed {
+		return domainerr.New("MATCH_ALREADY_COMPLETED", domainerr.Conflict,
+			"match is completed; team assignments cannot be changed")
+	}
 	if err := s.store.AssignMatchTeams(ctx, id, homeTeamID, awayTeamID); err != nil {
 		return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")
 	}
