@@ -284,12 +284,18 @@ class SchedulePage extends HTMLElement {
       if (m.away_team_id) { seasonTeamIds.add(m.away_team_id); seasonTeamNames[m.away_team_id] = m.away_team_name; }
     });
 
-    contentEl.innerHTML = weeks.length
-      ? weeks.map(w => this.#renderWeekCard(w, byWeek[w], weekStatusMap[w], seasonId, seasonTeamIds, seasonTeamNames)).join('')
-      : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons to generate a schedule.</div>';
+    const season  = this.#allSeasons.find(s => s.id == seasonId);
+    const isDraft = season ? (!season.active && !season.activated_at) : false;
+    const draftBanner = isDraft
+      ? '<div class="alert alert-info py-2 mb-2 small"><i class="bi bi-eye me-1"></i><strong>Draft season.</strong> Week closing is not available until this season is activated.</div>'
+      : '';
+
+    contentEl.innerHTML = draftBanner + (weeks.length
+      ? weeks.map(w => this.#renderWeekCard(w, byWeek[w], weekStatusMap[w], seasonId, isDraft, seasonTeamIds, seasonTeamNames)).join('')
+      : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons to generate a schedule.</div>');
   }
 
-  #renderWeekCard(w, weekMatches, ws, seasonId, seasonTeamIds, seasonTeamNames) {
+  #renderWeekCard(w, weekMatches, ws, seasonId, isDraft, seasonTeamIds, seasonTeamNames) {
     const isUnassigned = m => !m.home_team_id || m.home_team_name === '(unassigned)' ||
                               !m.away_team_id || m.away_team_name === '(unassigned)';
 
@@ -323,7 +329,9 @@ class SchedulePage extends HTMLElement {
       : '';
     const closeBtn = isClosed
       ? `<button class="btn btn-sm btn-outline-warning py-0 ms-2" data-action="reopen-week" data-season-id="${esc(String(seasonId))}" data-week-num="${w}" data-match-date="${esc(matchDate || '')}" title="Reopen to correct scores, then re-close"><i class="bi bi-arrow-counterclockwise"></i> Reopen</button>`
-      : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" data-action="review-close-week" data-season-id="${esc(String(seasonId))}" data-week-num="${w}" data-ack-count="${ackCount}">Review &amp; Close</button>`;
+      : isDraft
+        ? `<button class="btn btn-sm btn-outline-secondary py-0 ms-2" disabled title="Activate the season to enable week closing"><i class="bi bi-lock"></i> Review &amp; Close</button>`
+        : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" data-action="review-close-week" data-season-id="${esc(String(seasonId))}" data-week-num="${w}" data-ack-count="${ackCount}">Review &amp; Close</button>`;
     const ackSection = ackCount > 0
       ? `<div class="px-3 pb-2 d-none" id="week-acks-${w}" data-loaded="0"></div>`
       : '';
