@@ -21,24 +21,33 @@ behavior and will eventually be replaced by season roster relationships.
 
 ## Quick Add
 
-Admins may quick-add a missing player during match entry. The player may play
-immediately and receives an `INCOMPLETE` status. The affected week cannot close
-until the Admin review process completes the profile.
+Admins can quick-add a missing player from the Players page without entering a
+full profile. The minimum required fields are at least one name (first or last)
+and a diff rating (defaults to 0). Player number, phone, email, and admin hold
+are optional and can be completed later using the standard Edit Player modal.
+
+Deferred: INCOMPLETE profile status, close-week blocking for incomplete
+profiles, and match-entry quick-add integration are not yet implemented.
 
 ## Questions
 
 ### PLAYERS-Q001 - Quick-add requirements
 
-**Status:** `open`
+**Status:** `resolved`
 **Opened:** `2026-06-08`
-**Resolved:** `pending`
-**Related commit:** `pending`
+**Resolved:** `2026-07-14`
 
 **Context:** League night cannot stop for complete registration, but duplicate
 players and unsupported handicap values must be avoided.
 
-**Resolution:** Define required name fields, duplicate matching, initial
-handicap entry/default, and later profile completion requirements.
+**Resolution (Phase 1):**
+- Quick-add lives on the Players page as a simplified modal.
+- Required fields: at least one of first name or last name; diff rating (default 0).
+- Optional fields: team. Player number, phone, email, and admin hold are omitted
+  from quick-add and completed later via Edit Player.
+- Duplicate detection: deferred. No DB unique constraint on name or player number.
+- INCOMPLETE profile status and close-week blocking: deferred to a later phase.
+- Match-entry quick-add integration: deferred.
 
 ## Decision History
 
@@ -53,3 +62,13 @@ One player record may participate in multiple nights and formats.
 **Status:** `accepted`
 
 Substitute eligibility is not restricted to the same league or season.
+
+### 2026-07-14 - Quick-add Phase 1: Players page only, name + handicap minimum
+
+**Status:** `accepted`
+
+Phase 1 quick-add lives on the Players page as a simplified modal. The minimum
+field set is at least one name and a diff rating (default 0). Player number,
+contact fields, and admin hold are omitted and completed later via Edit Player.
+INCOMPLETE status, close-week blocking, and match-entry integration are
+deferred. Resolves PLAYERS-Q001.

@@ -19,7 +19,8 @@ function esc(s) {
   );
 }
 
-const MODAL_ID = 'player-modal';
+const MODAL_ID    = 'player-modal';
+const QA_MODAL_ID = 'player-quick-add-modal';
 const DASH = '\u2014';
 
 class PlayersPage extends HTMLElement {
@@ -31,9 +32,14 @@ class PlayersPage extends HTMLElement {
     this.innerHTML = `
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h4 class="mb-0 fw-bold">Players</h4>
-        <button class="btn btn-primary btn-sm" data-action="add-player">
-          <i class="bi bi-plus-lg"></i> Add Player
-        </button>
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary btn-sm" data-action="add-player">
+            <i class="bi bi-plus-lg"></i> Add Player
+          </button>
+          <button class="btn btn-outline-primary btn-sm" data-action="quick-add-player">
+            <i class="bi bi-lightning-fill"></i> Quick Add
+          </button>
+        </div>
       </div>
       <div class="card">
         <div class="card-body p-0">
@@ -48,12 +54,16 @@ class PlayersPage extends HTMLElement {
       </div>`;
 
     this.#ensureModal();
+    this.#ensureQuickAddModal();
 
     document.getElementById('player-save-btn')
       .addEventListener('click', () => this.#savePlayer());
+    document.getElementById('player-qa-save-btn')
+      .addEventListener('click', () => this.#saveQuickAdd());
 
     this.addEventListener('click', e => {
-      if (e.target.closest('[data-action="add-player"]'))  { this.#openNewPlayer(); return; }
+      if (e.target.closest('[data-action="add-player"]'))       { this.#openNewPlayer(); return; }
+      if (e.target.closest('[data-action="quick-add-player"]')) { this.#openQuickAdd();  return; }
       const editBtn = e.target.closest('[data-action="edit-player"]');
       if (editBtn) { this.#editPlayer(parseInt(editBtn.dataset.playerId, 10)); return; }
       const delBtn = e.target.closest('[data-action="delete-player"]');
@@ -271,6 +281,83 @@ class PlayersPage extends HTMLElement {
       bubbles: true,
       detail:  { players: this.#allPlayers },
     }));
+  }
+
+  #ensureQuickAddModal() {
+    if (document.getElementById(QA_MODAL_ID)) return;
+    const el = document.createElement('div');
+    el.innerHTML = `
+<div class="modal fade" id="player-quick-add-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Quick Add Player</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2 mb-3">
+          <div class="col">
+            <label class="form-label">First Name</label>
+            <input type="text" class="form-control" id="player-qa-first-name">
+          </div>
+          <div class="col">
+            <label class="form-label">Last Name</label>
+            <input type="text" class="form-control" id="player-qa-last-name">
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Diff Rating</label>
+          <input type="number" class="form-control" id="player-qa-handicap" value="0" step="0.01">
+        </div>
+        <div class="mb-1">
+          <label class="form-label">Team</label>
+          <select class="form-select" id="player-qa-team"></select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="player-qa-save-btn">Add Player</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+    document.body.appendChild(el.firstElementChild);
+  }
+
+  #openQuickAdd() {
+    document.getElementById('player-qa-first-name').value = '';
+    document.getElementById('player-qa-last-name').value  = '';
+    document.getElementById('player-qa-handicap').value   = '0';
+    document.getElementById('player-qa-team').innerHTML =
+      `<option value="">${DASH} No Team ${DASH}</option>` +
+      this.#allTeams.map(t =>
+        `<option value="${t.id}">${esc(t.name)}</option>`
+      ).join('');
+    new bootstrap.Modal(document.getElementById(QA_MODAL_ID)).show();
+  }
+
+  async #saveQuickAdd() {
+    const firstName = document.getElementById('player-qa-first-name').value.trim();
+    const lastName  = document.getElementById('player-qa-last-name').value.trim();
+    if (!firstName && !lastName) { toast('First or last name is required', 'warning'); return; }
+    const teamVal = document.getElementById('player-qa-team').value;
+    const body = {
+      first_name: firstName,
+      last_name:  lastName,
+      handicap:   parseFloat(document.getElementById('player-qa-handicap').value) || 0,
+      team_id:    teamVal ? parseInt(teamVal) : null,
+      league_id:  this.#activeLeague?.id,
+    };
+    try {
+      await createPlayer(body);
+      bootstrap.Modal.getInstance(document.getElementById(QA_MODAL_ID))?.hide();
+      toast('Player added');
+      this.#allPlayers = await fetchPlayers(this.#activeLeague.id);
+      this.#renderList();
+      this.#dispatchDataChanged();
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
   }
 }
 
