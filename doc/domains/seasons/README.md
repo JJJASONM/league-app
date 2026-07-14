@@ -74,6 +74,11 @@ A closed week may be reopened multiple times, but only selected affected
 matches become editable. Closing again reruns validation and creates another
 audited review event.
 
+Close Week is only available for active seasons. Attempting to close a week
+for a draft season returns 409 with code `WEEK_CLOSE_SEASON_DRAFT`. The
+schedule page reflects this with a disabled "Review & Close" button and a
+draft-season banner.
+
 ## Closing
 
 A season cannot close while matches remain unresolved. Each match must be
@@ -453,6 +458,14 @@ descriptive error. This check is skipped for legacy seasons with
 match records to collect team IDs. For managed seasons (`teams_managed=1`) this
 path is rejected (400). Managed seasons always generate exclusively from
 `season_teams`; `from_season_id` must be omitted or zero.
+
+Additional guards enforced at the service layer before generation runs:
+
+- `SCHEDULE_HAS_CLOSED_WEEKS` (409): the season has at least one league week
+  with status `closed`. Reopen the affected week before regenerating.
+- `SCHEDULE_ACTIVE_HAS_COMPLETED` (409): the season is active (`active=1`)
+  **and** at least one match has `completed=1`. Draft seasons are not subject
+  to this guard.
 
 ## Bye Requests
 

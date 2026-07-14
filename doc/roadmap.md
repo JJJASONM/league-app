@@ -62,10 +62,8 @@ stable.
   - Move any remaining free-text comparisons onto stable constants as domain
     work continues.
 
-- Season and schedule workflow completion.
-  - Resolve `SCHEDULES-Q001`.
-  - Decide which manual edits are allowed during schedule preview.
-  - Preserve completed match history during schedule changes.
+- Season and schedule workflow completion (remaining items).
+  - Preserve completed match history during other schedule changes (pushback, etc.).
   - Clarify how next-week preparation should work operationally.
 
 - Player quick-add workflow.
@@ -174,6 +172,11 @@ follow-up.
   `web/domains/handicaps/handicap-codes.js`).
 - Documentation alignment — roadmap and domain READMEs updated to reflect
   completed extraction phases and remove stale file/function references.
+- Schedule preview policy and enforcement. Close Week blocked for draft seasons
+  (`WEEK_CLOSE_SEASON_DRAFT`, 409); regeneration blocked for active seasons
+  once any match is completed (`SCHEDULE_ACTIVE_HAS_COMPLETED`, 409). Draft
+  season UX clarified in schedule page and season management panel. Resolves
+  `SCHEDULES-Q001`.
 
 ## Open Questions To Resolve
 
@@ -183,7 +186,7 @@ follow-up.
 | `PLAYERS-Q001` | Players | What fields and handicap value are required for quick-add players? |
 | `USERS-Q001` | Users | How does the invitation and account-linking workflow operate? |
 | `CODES-Q001` | Codes | What physical code-table design best supports all approved code sets? |
-| `SCHEDULES-Q001` | Schedules | Which manual edits are allowed during schedule preview? |
+| `SCHEDULES-Q001` | Schedules | Resolved 2026-07-13 - preview policy and enforcement complete. |
 | `MATCHES-Q002` | Matches | How will online score entry, permissions, drafts, and review work? |
 
 ## Parking Lot

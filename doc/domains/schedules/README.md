@@ -67,9 +67,9 @@ is displayed instead.
 Draft-season schedules remain accessible through **Seasons → Manage**. Admins
 can generate, preview, and adjust a draft schedule from there before activating
 the season. When navigating from Seasons → Manage to the Schedule view (e.g.,
-via "Go to Schedule"), `populateScheduleSeasonSelect(previewSeasonId)` is called
-with the target season ID so the admin sees that specific season — even if it is
-not yet active.
+via "Go to Schedule"), `loadForSeason(previewSeasonId)` is called on the
+`<schedule-page>` component so the admin sees that specific season, even if it
+is not yet active.
 
 This separation keeps the public-facing schedule clean while allowing full
 pre-activation workflow on draft seasons.
@@ -85,7 +85,9 @@ Current confirmed behavior:
 - A skipped date applies only to its season.
 - Schedule generation omits skipped dates and shifts later league weeks forward.
 - Consecutive skipped dates are supported.
-- Regeneration deletes unplayed matches only; completed matches are preserved.
+- For draft seasons (and active seasons with no completed matches), regeneration
+  deletes unplayed matches only. Active seasons with any completed match block
+  regeneration entirely (see Schedule Regeneration Guards below).
 
 ## Date Contract
 
@@ -93,6 +95,18 @@ API and form-control dates use `YYYY-MM-DD`. The backend normalizes SQLite DATE
 values and accepts legacy ISO timestamps when reading skip dates. User-visible
 dates use the shared frontend `displayDate()` formatter; compact poster dates
 remain a deliberate print-layout exception.
+
+## Schedule Regeneration Guards
+
+Backend guards enforced at the service layer before any schedule generation runs:
+
+| Code | Status | Condition |
+|------|--------|-----------|
+| `SCHEDULE_HAS_CLOSED_WEEKS` | 409 | The season has any league week with status `closed`. Reopen the affected week before regenerating. |
+| `SCHEDULE_ACTIVE_HAS_COMPLETED` | 409 | The season is active (`active=1`) **and** at least one match has `completed=1`. Draft seasons are not subject to this guard. |
+
+The `SCHEDULE_ACTIVE_HAS_COMPLETED` guard fires after `SCHEDULE_HAS_CLOSED_WEEKS`.
+A season with closed weeks hits the first guard regardless of active status.
 
 ## Pushback
 
@@ -112,16 +126,24 @@ The operation:
 
 ### SCHEDULES-Q001 - Preview editing controls
 
-**Status:** `open`
+**Status:** `resolved`
 **Opened:** `2026-06-08`
-**Resolved:** `pending`
-**Related commit:** `pending`
+**Resolved:** `2026-07-13`
 
 **Context:** The admin must be able to review a generated schedule before
 activation.
 
-**Resolution:** Define which manual team, date, table, and regeneration actions
-are allowed during preview.
+**Resolution:** Schedule preview policy finalized across Phases F-H:
+- Draft seasons may generate or regenerate freely; unplayed matches are replaced,
+  completed matches are preserved.
+- Active seasons with no completed matches may still regenerate.
+- Active seasons with any completed match block regeneration entirely
+  (`SCHEDULE_ACTIVE_HAS_COMPLETED`, 409).
+- Close Week is only available for active seasons; draft seasons return
+  `WEEK_CLOSE_SEASON_DRAFT` (409).
+- The schedule page shows a draft-season banner and a disabled "Review & Close"
+  button for open weeks on draft seasons. The seasons panel preview note and
+  generate info text reflect the active-season lock.
 
 ## Decision History
 
@@ -159,3 +181,14 @@ processing to guarantee deterministic output.
 
 Pushback means every unplayed scheduled week moves together rather than moving
 individual matches independently.
+
+### 2026-07-13 - Schedule preview policy and enforcement
+
+**Status:** `accepted`
+
+Draft seasons may generate or regenerate freely. Active seasons with no
+completed matches may also regenerate. Once an active season has any completed
+match the regeneration endpoint returns 409 (`SCHEDULE_ACTIVE_HAS_COMPLETED`).
+Close Week returns 409 (`WEEK_CLOSE_SEASON_DRAFT`) for draft seasons; activation
+is required before any week can be officially closed. The schedule page enforces
+these constraints in the UX with a draft banner and a disabled close-week button.
