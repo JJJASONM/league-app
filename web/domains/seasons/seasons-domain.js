@@ -627,7 +627,7 @@ class SeasonsPage extends HTMLElement {
     } catch(e) {
       const msg = e.message || '';
       if (msg.includes('active') && msg.includes('completed matches')) {
-        toast('This season is active and has completed matches — the schedule cannot be regenerated once play has begun.', 'danger');
+        toast('This season is active and has completed matches. The schedule cannot be regenerated once play has begun.', 'danger');
       } else {
         toast(msg || 'Schedule generation failed', 'danger');
       }
