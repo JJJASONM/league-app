@@ -122,6 +122,41 @@ The operation:
 - Applies atomically
 - Creates an audit entry
 
+### Phase M — Preview endpoint (accepted 2026-07-15)
+
+`POST /api/seasons/{id}/schedule/pushback-preview` is a read-only preview.
+It returns which unplayed matches would shift and which completed matches at
+or after the cutoff would be preserved, along with the projected new end date.
+No data is written.
+
+Request:
+```json
+{ "cutoff_week": 5, "weeks_to_add": 1 }
+```
+
+Response `shifted` contains unplayed matches at or after the cutoff with their
+new week numbers and shifted dates. Response `preserved` contains completed
+matches at or after the cutoff that will not move. Matches before the cutoff
+are outside the preview range and are omitted from both lists.
+
+Validation codes:
+- `PUSHBACK_INVALID_CUTOFF` (400) — `cutoff_week < 1`
+- `PUSHBACK_INVALID_WEEKS_TO_ADD` (400) — `weeks_to_add < 1`
+- `PUSHBACK_HAS_CLOSED_WEEKS` (409) — closed week at or after the cutoff
+- `PUSHBACK_SEASON_NOT_FOUND` (404) — season not found
+
+**Not mutated by the preview:** `skipped_weeks`, `bye_requests`, any match row,
+any season column. The apply step that would commit these changes is deferred to
+Phase N.
+
+**Audit write deferred:** The approved apply workflow requires an audit entry.
+This will be wired when the apply endpoint and audit system are implemented.
+
+**Apply endpoint deferred to Phase N** (`schedule-workflow-phase-n-pushback-apply`):
+the apply step adds the `UPDATE` statements for `matches.week_number`,
+`matches.match_date`, `seasons.end_date`, and `seasons.schedule_stale=0`,
+plus the Phase N preview-token safety check and the deferred audit entry.
+
 ## Deferred Schedule UI Polish
 
 The following schedule-screen ideas are parked until the current admin workflow

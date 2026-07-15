@@ -87,6 +87,12 @@ type ScheduleManager interface {
 	GenerateSchedule(ctx context.Context, req matches.GenerateRequest) (matches.GenerateResult, error)
 }
 
+// PushbackPreviewer computes a read-only pushback preview for a season.
+// Routes are registered only when non-nil.
+type PushbackPreviewer interface {
+	Preview(ctx context.Context, req matches.PushbackPreviewRequest) (matches.PushbackPreviewResult, error)
+}
+
 // LineupManager handles lineup plan listing, atomic save, and deletion.
 // Routes are registered only when non-nil.
 type LineupManager interface {
@@ -201,6 +207,9 @@ type Dependencies struct {
 	// ScheduleMgr handles schedule generation.
 	// Routes are registered only when non-nil.
 	ScheduleMgr ScheduleManager
+	// PushbackMgr handles the pushback preview.
+	// Routes are registered only when non-nil.
+	PushbackMgr PushbackPreviewer
 	// LineupMgr handles lineup plan listing, atomic save, and deletion.
 	// Routes are registered only when non-nil.
 	LineupMgr LineupManager

@@ -115,6 +115,8 @@ func main() {
 	matchSvc := matches.NewMatchService(matchStore)
 	lineupStore := sqlite.NewLineupStore(db.DB)
 	lineupSvc := matches.NewLineupService(lineupStore)
+	pushbackStore := sqlite.NewPushbackStore(db.DB)
+	pushbackSvc := matches.NewPushbackService(pushbackStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
@@ -130,6 +132,7 @@ func main() {
 		MatchMgr:        matchSvc,
 		ScheduleMgr:     scheduleSvc,
 		LineupMgr:       lineupSvc,
+		PushbackMgr:     pushbackSvc,
 	}
 
 	// API routes
