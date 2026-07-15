@@ -264,6 +264,14 @@ Potential code sets include:
 The physical design of the code system remains pending until these sets and
 their overlap are reviewed together.
 
+**Phase 1 decision (2026-07-14):** Behavior-driving codes remain developer-owned
+constants in each domain package. No DB-backed `code_sets` or `code_values`
+tables are implemented. DB-backed labels, display order, and active flags are
+deferred until a real admin workflow requires runtime editing without a deploy.
+A read-only backend codes registry and `/api/codes/{set}` endpoint are possible
+future work, not current implementation. See `doc/domains/codes/README.md` for
+the full inventory and deferred items. Resolves `CODES-Q001`.
+
 ## Audit Log
 
 Use one append-only audit log across all domains. Entries include:
@@ -308,7 +316,7 @@ a user account is created for an existing player.
 | `RULES-Q001` | on hold | How are emergency or mid-season rule amendments handled? |
 | `PLAYERS-Q001` | on hold | What fields and handicap value are required for quick-add players? |
 | `USERS-Q001` | open | How does the email invitation and account-linking workflow operate? |
-| `CODES-Q001` | open | What physical code-table design best supports all approved code sets? |
+| `CODES-Q001` | resolved 2026-07-14 | What physical code-table design best supports all approved code sets? |
 | `SCHEDULES-Q001` | open | Which manual edits are allowed during schedule preview? |
 | `MATCHES-Q001` | on hold | What match status follows completed score entry before week close? |
 | `MATCHES-Q002` | on hold | How will online score entry, permissions, drafts, and review work? |
@@ -394,3 +402,13 @@ All domain documents under `doc/domains/` (rules, seasons, schedules, matches,
 players, teams, standings, users, codes, audit) are approved as authoritative
 targets. Implementation may proceed domain by domain using these as the design
 reference.
+
+### 2026-07-14 - Defer physical code storage; adopt developer-owned constants
+
+**Status:** accepted
+
+Behavior-driving codes remain stable developer-owned constants in each domain
+package. No DB-backed code tables are implemented in Phase 1. The `rules`
+domain's Definition registry is the approved pattern analog. Admin-editable
+labels and a read-only codes API are deferred until a real admin workflow
+creates the need. Resolves `CODES-Q001`.
