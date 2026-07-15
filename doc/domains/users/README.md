@@ -4,8 +4,8 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.1`
-**Last reviewed:** `2026-06-08`
+**Current version:** `0.2`
+**Last reviewed:** `2026-07-14`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
@@ -19,6 +19,13 @@ users.player_id NULL UNIQUE -> players.id
 This supports players without accounts and admins who are not players. Review
 the design before implementation for household accounts, guardians, shared
 email addresses, and account transfers.
+
+## Future User Screens
+
+A future users screen may show account status together with linked player and
+statistics context. This belongs after `USERS-Q001` defines account invitation,
+player linking, roles, and permissions. Until then, player statistics remain in
+the standings/player-stats workflows rather than a users domain screen.
 
 ## Questions
 

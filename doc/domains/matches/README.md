@@ -1658,6 +1658,14 @@ only.
 - A dedicated next-week preparation checklist page.
 - Captain-facing lineup submission (requires auth and the online score-entry workflow).
 
+## Week-End Recap (Deferred)
+
+A future week-end recap may summarize what changed when a week closes. Candidate
+content includes handicap changes, team results, team statistics, and links back
+to the official standings/player-stats views. This is deferred until the Close
+Week workflow has more real operational use and the admin-facing recap needs are
+clear.
+
 ## Decision History
 
 ### 2026-07-14 - Next-week readiness is informational, not a close blocker

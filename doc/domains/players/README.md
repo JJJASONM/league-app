@@ -4,8 +4,8 @@
 
 **Owner:** `players`
 **Status:** `draft`
-**Current version:** `0.1`
-**Last reviewed:** `2026-06-08`
+**Current version:** `0.2`
+**Last reviewed:** `2026-07-14`
 
 Players are shared system-wide identities. They are not owned by one league or
 team and are separate from authenticated user accounts.
@@ -28,6 +28,16 @@ are optional and can be completed later using the standard Edit Player modal.
 
 Deferred: INCOMPLETE profile status, close-week blocking for incomplete
 profiles, and match-entry quick-add integration are not yet implemented.
+
+## Deferred Player Maintenance
+
+The following player-record maintenance items are parked until the Phase 1
+quick-add flow has real usage:
+
+- Duplicate detection for quick-added players.
+- Safe merge workflow for accidental duplicate player records.
+- INCOMPLETE profile status and close-week blocking for incomplete profiles.
+- Match-entry quick-add integration.
 
 ## Questions
 

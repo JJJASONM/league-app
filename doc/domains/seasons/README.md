@@ -481,6 +481,15 @@ Additional guards enforced at the service layer before generation runs:
 
 ## Deferred Enhancements
 
+### SEASONS-TODO-002 - Default lineup setup
+
+**Status:** `deferred`
+
+Operators may eventually want to set default lineups during season creation or
+immediately after creating a season. This should remain an optional setup aid,
+not a Close Week requirement, because next-week lineup readiness is
+informational and last-minute substitutions are common.
+
 ### SEASONS-TODO-001 — Team-selection UI
 
 **Status:** `deferred`

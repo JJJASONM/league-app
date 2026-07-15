@@ -4,8 +4,8 @@
 
 **Owner:** `schedules`
 **Status:** `draft`
-**Current version:** `0.1`
-**Last reviewed:** `2026-06-09`
+**Current version:** `0.2`
+**Last reviewed:** `2026-07-14`
 
 The Schedules domain generates, previews, adjusts, and shifts season schedules.
 It applies scheduling rules but does not define their meaning.
@@ -121,6 +121,16 @@ The operation:
 - Previews every affected match before applying
 - Applies atomically
 - Creates an audit entry
+
+## Deferred Schedule UI Polish
+
+The following schedule-screen ideas are parked until the current admin workflow
+has more usage:
+
+- Collapsible week sections or accordions after scoresheets are created, so the
+  current week stays easier to scan.
+- Verification and improvement of Schedule page navigation into Match Entry,
+  including any "Open" button behavior that does not route correctly.
 
 ## Questions
 

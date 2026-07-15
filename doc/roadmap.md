@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-07-10
+**Last reviewed:** 2026-07-14
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -54,26 +54,17 @@ These items should stay small enough to review and ship independently.
 These are the next build targets after the current workflow foundation is
 stable.
 
-- Controlled codes foundation.
-  - Resolve `CODES-Q001`.
-  - In-domain Go constants are established for statuses and reasons. Physical
-    DB storage design (code sets, labels, display order, active flags, admin
-    management screens) remains open.
-  - Move any remaining free-text comparisons onto stable constants as domain
-    work continues.
-
 - Season and schedule workflow completion (remaining items).
   - Preserve completed match history during other schedule changes (pushback, etc.).
-
-- Player quick-add workflow.
-  - Resolve `PLAYERS-Q001`.
-  - Define required quick-add fields, duplicate detection, and initial handicap.
-  - Add the admin review path for incomplete player profiles.
 
 - Continue backend/domain extraction where workflows are already active.
   - Reduce monolithic handler/shell ownership further.
   - Keep new work inside domain boundaries rather than adding more temporary
     logic to shared files.
+
+- Keep roadmap and domain documentation aligned with accepted decisions.
+  - Promote useful TODO inbox items into the relevant roadmap or domain README.
+  - Keep resolved questions out of the active Open Questions list.
 
 ## Then
 
@@ -89,9 +80,26 @@ stable.
 
 - Broader operational polish.
   - Tighten schedule usability.
+  - Improve Schedule page navigation into Match Entry and verify any "Open"
+    button issues before changing behavior.
+  - Review whether weekly schedule sections should collapse after scoresheets
+    are created, so the current work stays easier to scan.
   - Improve admin review flows around seasons, matches, and lineups.
+  - Consider a week-end recap view showing handicap changes and team statistics
+    after the Close Week workflow is stable in real operation.
   - Address deferred workflow gaps that are already known but not
     architecture-critical.
+
+- Player record maintenance.
+  - Add duplicate detection for player quick-add after the Phase 1 Players page
+    flow has been used.
+  - Define a safe player-record merge workflow for accidental duplicates.
+  - Defer INCOMPLETE profile status and close-week blocking until match-night
+    quick-add or admin review creates a concrete need.
+
+- Season setup polish.
+  - Explore default lineup setup during season creation or immediately after
+    season creation, without making Close Week depend on future lineups.
 
 ## Later
 
@@ -111,6 +119,8 @@ admin workflows are stable.
   - Define account linking, invitations, permissions, and admin roles.
   - Treat current Handicap Apply personal-key auth as a bridge, not the final
     auth model.
+  - Consider a future Users screen that includes account status and linked
+    player/stat context after the users/accounts boundary is designed.
 
 - Online score entry workflow.
   - Resolve `MATCHES-Q002`.
@@ -126,7 +136,20 @@ admin workflows are stable.
 - Mobile or broader client expansion.
   - Consider only after core admin workflows, backend boundaries, and API
     contracts are stable.
+  - Treat any future Flutter/Dart mobile app as an API client, not a direct
+    database client.
+  - Plan for stable versioned API contracts, backend-authoritative rules,
+    secure token storage, offline draft/conflict handling, and API contract
+    tests before mobile implementation.
   - Do not treat this as an active roadmap driver yet.
+
+- Database portability and current-schema documentation.
+  - Update `doc/erd.mermaid` to match the current schema after the active
+    documentation alignment pass.
+  - Continue researching the longer-term production database direction while
+    keeping SQLite supported for local/dev/test.
+  - Reserve PostgreSQL adapter work until an explicit data-access phase calls
+    for it.
 
 - Historical import tooling.
   - Import teams, players, schedules, matches, and results from available
@@ -181,17 +204,30 @@ follow-up.
   assigned count, lineup status). Operational admin workflow documented in
   doc/domains/matches/README.md. Blocking close on missing next-week lineup is
   explicitly deferred.
+- Controlled-code storage decision. `CODES-Q001` resolved: behavior-driving
+  codes remain developer-owned constants; DB-backed code tables and admin
+  code-management screens are deferred until an admin workflow requires them.
+- Player quick-add Phase 1. Players page now has a simplified quick-add modal
+  using the existing player create endpoint. `PLAYERS-Q001` resolved for Phase
+  1: minimum fields are at least one name plus diff rating, with optional team.
+  Duplicate detection, INCOMPLETE profile status, and match-entry quick-add are
+  deferred.
 
 ## Open Questions To Resolve
 
 | ID | Area | Question |
 | --- | --- | --- |
 | `RULES-Q001` | Rules | How are emergency or mid-season rule amendments handled? |
-| `PLAYERS-Q001` | Players | What fields and handicap value are required for quick-add players? |
 | `USERS-Q001` | Users | How does the invitation and account-linking workflow operate? |
-| `CODES-Q001` | Codes | What physical code-table design best supports all approved code sets? |
-| `SCHEDULES-Q001` | Schedules | Resolved 2026-07-13 - preview policy and enforcement complete. |
 | `MATCHES-Q002` | Matches | How will online score entry, permissions, drafts, and review work? |
+
+## Resolved Questions
+
+| ID | Area | Resolution |
+| --- | --- | --- |
+| `PLAYERS-Q001` | Players | Resolved 2026-07-14 - Phase 1 quick-add uses at least one name, diff rating default 0, and optional team; duplicate detection and INCOMPLETE status deferred. |
+| `CODES-Q001` | Codes | Resolved 2026-07-14 - behavior-driving codes remain developer-owned constants; DB-backed code tables deferred. |
+| `SCHEDULES-Q001` | Schedules | Resolved 2026-07-13 - preview policy and enforcement complete. |
 
 ## Parking Lot
 

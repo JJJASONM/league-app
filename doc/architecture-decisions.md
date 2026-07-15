@@ -1,7 +1,7 @@
 # League App Architecture Decisions
 
 **Status:** Target design
-**Last reviewed:** 2026-06-08
+**Last reviewed:** 2026-07-14
 
 This document consolidates approved product and architecture decisions. It
 describes the target model, not necessarily the schema currently implemented in
@@ -131,17 +131,17 @@ current `players.team_id` field does not support the approved long-term model.
 
 ## Last-Minute Players
 
-An admin may search for an existing player or quick-add a new player during
-match entry. A quick-added player:
+Phase 1 quick-add is implemented on the Players page. An admin may create a
+player with at least one name and a diff rating (default 0), plus an optional
+team. Player number, contact fields, and admin hold can be completed later
+through Edit Player.
 
-- Becomes a real player record immediately
-- May play immediately
-- Receives an `INCOMPLETE` profile status
-- Appears in an Admin review queue
-- Prevents the league week from closing until reviewed
+The longer-term match-night flow remains deferred. Future work may add
+duplicate detection, match-entry quick-add, `INCOMPLETE` profile status, an
+Admin review queue, and close-week blocking for incomplete profiles.
 
-`PLAYERS-Q001` remains open: define minimum quick-add fields, duplicate
-detection, and initial handicap assignment.
+`PLAYERS-Q001` is resolved for Phase 1. Deferred follow-ups are tracked in
+`doc/domains/players/README.md`.
 
 ## Schedule Workflow
 
@@ -314,10 +314,10 @@ a user account is created for an existing player.
 | ID | Status | Question |
 | --- | --- | --- |
 | `RULES-Q001` | on hold | How are emergency or mid-season rule amendments handled? |
-| `PLAYERS-Q001` | on hold | What fields and handicap value are required for quick-add players? |
+| `PLAYERS-Q001` | resolved 2026-07-14 | What fields and handicap value are required for quick-add players? |
 | `USERS-Q001` | open | How does the email invitation and account-linking workflow operate? |
 | `CODES-Q001` | resolved 2026-07-14 | What physical code-table design best supports all approved code sets? |
-| `SCHEDULES-Q001` | open | Which manual edits are allowed during schedule preview? |
+| `SCHEDULES-Q001` | resolved 2026-07-13 | Which manual edits are allowed during schedule preview? |
 | `MATCHES-Q001` | on hold | What match status follows completed score entry before week close? |
 | `MATCHES-Q002` | on hold | How will online score entry, permissions, drafts, and review work? |
 | `MATCHES-Q003` | open | Where are historical warnings and acknowledgments displayed? |
@@ -412,3 +412,13 @@ package. No DB-backed code tables are implemented in Phase 1. The `rules`
 domain's Definition registry is the approved pattern analog. Admin-editable
 labels and a read-only codes API are deferred until a real admin workflow
 creates the need. Resolves `CODES-Q001`.
+
+### 2026-07-14 - Resolve player quick-add Phase 1
+
+**Status:** accepted
+
+Quick-add starts on the Players page, not match entry. The minimum fields are
+at least one name and a diff rating defaulting to 0, with optional team
+assignment. Duplicate detection, INCOMPLETE profile status, close-week blocking,
+and match-entry integration are deferred until operational use justifies the
+additional backend and UI workflow.

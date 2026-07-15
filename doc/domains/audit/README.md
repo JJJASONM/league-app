@@ -4,8 +4,8 @@
 
 **Owner:** `audit`
 **Status:** `draft`
-**Current version:** `0.1`
-**Last reviewed:** `2026-06-08`
+**Current version:** `0.2`
+**Last reviewed:** `2026-07-14`
 
 The Audit domain records administrative and historically important changes
 across the application in one append-only log.
@@ -33,6 +33,13 @@ acknowledgments.
 
 Warning acknowledgments preserve the warning details, affected records, acting
 admin, controlled reason code, optional `notes`, and timestamp.
+
+## Deferred Planning
+
+Audit remains a broad future capability. Before implementation, review audit
+needs across rule changes, schedule changes, week close/reopen, handicap apply,
+roster changes, users, code administration, and season close as one picture so
+the system does not grow disconnected per-domain history tables.
 
 ## Decision History
 
