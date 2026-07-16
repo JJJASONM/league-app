@@ -12,12 +12,14 @@ import (
 // --- stub ---
 
 type stubPushbackStore struct {
-	exists     bool
-	existsErr  error
-	closed     bool
-	closedErr  error
-	rows       []matches.PushbackMatchRow
-	rowsErr    error
+	exists       bool
+	existsErr    error
+	closed       bool
+	closedErr    error
+	rows         []matches.PushbackMatchRow
+	rowsErr      error
+	applyErr     error
+	appliedInput *matches.PushbackApplyInput
 }
 
 func (s *stubPushbackStore) SeasonExists(_ context.Context, _ int64) (bool, error) {
@@ -28,6 +30,10 @@ func (s *stubPushbackStore) HasClosedWeeksAtOrAfter(_ context.Context, _ int64, 
 }
 func (s *stubPushbackStore) GetPushbackMatches(_ context.Context, _ int64) ([]matches.PushbackMatchRow, error) {
 	return s.rows, s.rowsErr
+}
+func (s *stubPushbackStore) ApplyPushback(_ context.Context, input matches.PushbackApplyInput) error {
+	s.appliedInput = &input
+	return s.applyErr
 }
 
 func strPtr(s string) *string { return &s }
@@ -312,6 +318,84 @@ func TestPushbackPreview_NoMatches_ReturnsEmptySlices(t *testing.T) {
 	}
 	if res.NewEndDate != nil {
 		t.Errorf("want nil NewEndDate when no matches, got %q", *res.NewEndDate)
+	}
+}
+
+// --- apply ---
+
+func TestApply_InvalidCutoff_ReturnsError(t *testing.T) {
+	svc := newPushbackSvc(baseStore())
+	_, err := svc.Apply(context.Background(), matches.PushbackPreviewRequest{
+		SeasonID: 1, CutoffWeek: 0, WeeksToAdd: 1,
+	})
+	if code(err) != "PUSHBACK_INVALID_CUTOFF" {
+		t.Errorf("want PUSHBACK_INVALID_CUTOFF, got %q", code(err))
+	}
+}
+
+func TestApply_ClosedWeek_ReturnsConflict(t *testing.T) {
+	store := &stubPushbackStore{exists: true, closed: true}
+	_, err := newPushbackSvc(store).Apply(context.Background(), matches.PushbackPreviewRequest{
+		SeasonID: 1, CutoffWeek: 5, WeeksToAdd: 1,
+	})
+	if !domainerr.IsCategory(err, domainerr.Conflict) {
+		t.Fatalf("want Conflict, got %v", err)
+	}
+}
+
+func TestApply_HappyPath_CallsStoreAndReturnsResult(t *testing.T) {
+	store := baseStore()
+	store.rows = []matches.PushbackMatchRow{
+		{ID: 10, WeekNumber: 5, MatchDate: strPtr("2026-10-06"), Completed: false, HomeTeamID: 1, AwayTeamID: 2},
+	}
+	res, err := newPushbackSvc(store).Apply(context.Background(), matches.PushbackPreviewRequest{
+		SeasonID: 1, CutoffWeek: 5, WeeksToAdd: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Shifted) != 1 {
+		t.Fatalf("want 1 shifted, got %d", len(res.Shifted))
+	}
+	if store.appliedInput == nil {
+		t.Fatal("want store.ApplyPushback called, got nil")
+	}
+	if len(store.appliedInput.ShiftedIDs) != 1 || store.appliedInput.ShiftedIDs[0] != 10 {
+		t.Errorf("want ShiftedIDs=[10], got %v", store.appliedInput.ShiftedIDs)
+	}
+	if store.appliedInput.WeeksToAdd != 1 {
+		t.Errorf("want WeeksToAdd=1, got %d", store.appliedInput.WeeksToAdd)
+	}
+	if store.appliedInput.DayShift != 7 {
+		t.Errorf("want DayShift=7, got %d", store.appliedInput.DayShift)
+	}
+}
+
+func TestApply_StoreError_IsReturned(t *testing.T) {
+	store := baseStore()
+	store.applyErr = errors.New("db down")
+	_, err := newPushbackSvc(store).Apply(context.Background(), matches.PushbackPreviewRequest{
+		SeasonID: 1, CutoffWeek: 1, WeeksToAdd: 1,
+	})
+	if err == nil {
+		t.Fatal("want error from store, got nil")
+	}
+}
+
+func TestApply_EmptyShifted_CallsStoreWithNoIDs(t *testing.T) {
+	store := baseStore()
+	store.rows = []matches.PushbackMatchRow{}
+	_, err := newPushbackSvc(store).Apply(context.Background(), matches.PushbackPreviewRequest{
+		SeasonID: 1, CutoffWeek: 1, WeeksToAdd: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.appliedInput == nil {
+		t.Fatal("want store.ApplyPushback called even with no matches")
+	}
+	if len(store.appliedInput.ShiftedIDs) != 0 {
+		t.Errorf("want empty ShiftedIDs, got %v", store.appliedInput.ShiftedIDs)
 	}
 }
 

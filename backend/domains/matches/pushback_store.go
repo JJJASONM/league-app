@@ -13,7 +13,17 @@ type PushbackMatchRow struct {
 	AwayTeamID int64
 }
 
-// PushbackStore is the read-only persistence interface for the pushback preview.
+// PushbackApplyInput carries the precomputed shift plan for an atomic apply.
+// The service computes this from preview results and passes it to the store.
+type PushbackApplyInput struct {
+	SeasonID   int64
+	ShiftedIDs []int64 // IDs of unplayed matches to shift; may be empty
+	WeeksToAdd int     // added to week_number for each shifted match
+	DayShift   int     // WeeksToAdd * 7; added to match_date when non-null
+	NewEndDate *string // new value for seasons.end_date; nil leaves it unchanged
+}
+
+// PushbackStore is the persistence interface for pushback preview and apply.
 // All methods accept a context and are safe for concurrent use.
 type PushbackStore interface {
 	// GetPushbackMatches returns all matches for the season with the columns
@@ -26,4 +36,10 @@ type PushbackStore interface {
 
 	// SeasonExists reports whether the season row exists.
 	SeasonExists(ctx context.Context, seasonID int64) (bool, error)
+
+	// ApplyPushback writes the precomputed shift plan atomically.
+	// It shifts unplayed matches by ShiftedIDs, updates seasons.end_date,
+	// and clears seasons.schedule_stale to 0. No validation is performed;
+	// callers must validate before calling.
+	ApplyPushback(ctx context.Context, input PushbackApplyInput) error
 }

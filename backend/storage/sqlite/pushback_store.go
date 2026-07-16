@@ -8,6 +8,49 @@ import (
 	"league_app/backend/domains/matches"
 )
 
+// ApplyPushback executes the precomputed shift plan atomically.
+// Completed matches are never touched. No validation is performed here;
+// the service validates before calling.
+func (s *PushbackStore) ApplyPushback(ctx context.Context, input matches.PushbackApplyInput) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("pushback apply: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	modifier := fmt.Sprintf("+%d days", input.DayShift)
+	for _, id := range input.ShiftedIDs {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE matches
+			SET    week_number = week_number + ?,
+			       match_date  = CASE WHEN match_date IS NOT NULL
+			                         THEN date(match_date, ?)
+			                         ELSE NULL END
+			WHERE  id = ?
+			  AND  season_id = ?
+			  AND  COALESCE(completed, 0) = 0`,
+			input.WeeksToAdd, modifier, id, input.SeasonID)
+		if err != nil {
+			return fmt.Errorf("pushback apply: shift match %d: %w", id, err)
+		}
+	}
+
+	if input.NewEndDate != nil {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE seasons SET end_date = ?, schedule_stale = 0 WHERE id = ?`,
+			*input.NewEndDate, input.SeasonID)
+	} else {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE seasons SET schedule_stale = 0 WHERE id = ?`,
+			input.SeasonID)
+	}
+	if err != nil {
+		return fmt.Errorf("pushback apply: update season %d: %w", input.SeasonID, err)
+	}
+
+	return tx.Commit()
+}
+
 // PushbackStore implements matches.PushbackStore against a SQLite database.
 type PushbackStore struct {
 	db *sql.DB

@@ -8,7 +8,7 @@ import (
 	"league_app/backend/domainerr"
 )
 
-// PushbackPreviewRequest is the input for PushbackService.Preview.
+// PushbackPreviewRequest is the input for both Preview and Apply.
 type PushbackPreviewRequest struct {
 	SeasonID   int64 `json:"season_id"`
 	CutoffWeek int   `json:"cutoff_week"`
@@ -36,7 +36,7 @@ type PreservedMatch struct {
 	AwayTeamID int64   `json:"away_team_id"`
 }
 
-// PushbackPreviewResult is the response for a successful pushback preview.
+// PushbackPreviewResult is the response shape for both preview and apply.
 // Shifted and Preserved only contain matches at or after the cutoff week.
 // Matches before the cutoff are outside the preview range and are omitted.
 type PushbackPreviewResult struct {
@@ -45,7 +45,7 @@ type PushbackPreviewResult struct {
 	NewEndDate *string          `json:"new_end_date,omitempty"`
 }
 
-// PushbackService computes read-only pushback previews.
+// PushbackService computes pushback previews and applies them.
 type PushbackService struct {
 	store PushbackStore
 }
@@ -56,9 +56,38 @@ func NewPushbackService(store PushbackStore) *PushbackService {
 }
 
 // Preview computes what a pushback would affect without writing any data.
-// It returns shifted (unplayed matches at/after cutoff), preserved (completed
-// matches at/after cutoff), and the new season end date after the shift.
 func (s *PushbackService) Preview(ctx context.Context, req PushbackPreviewRequest) (PushbackPreviewResult, error) {
+	return s.compute(ctx, req)
+}
+
+// Apply validates the request, computes the shift plan, writes it atomically,
+// and returns the same result shape as Preview.
+// Audit write is deferred until the audit system is implemented.
+func (s *PushbackService) Apply(ctx context.Context, req PushbackPreviewRequest) (PushbackPreviewResult, error) {
+	result, err := s.compute(ctx, req)
+	if err != nil {
+		return PushbackPreviewResult{}, err
+	}
+	ids := make([]int64, len(result.Shifted))
+	for i, sm := range result.Shifted {
+		ids[i] = sm.ID
+	}
+	applyInput := PushbackApplyInput{
+		SeasonID:   req.SeasonID,
+		ShiftedIDs: ids,
+		WeeksToAdd: req.WeeksToAdd,
+		DayShift:   req.WeeksToAdd * 7,
+		NewEndDate: result.NewEndDate,
+	}
+	if err := s.store.ApplyPushback(ctx, applyInput); err != nil {
+		return PushbackPreviewResult{}, fmt.Errorf("pushback apply: %w", err)
+	}
+	return result, nil
+}
+
+// compute performs validation, season/closed-week checks, and match partitioning.
+// Both Preview and Apply use this to avoid duplicating logic.
+func (s *PushbackService) compute(ctx context.Context, req PushbackPreviewRequest) (PushbackPreviewResult, error) {
 	if req.CutoffWeek < 1 {
 		return PushbackPreviewResult{}, domainerr.New("PUSHBACK_INVALID_CUTOFF",
 			domainerr.InvalidInput, "cutoff_week must be at least 1")
@@ -70,7 +99,7 @@ func (s *PushbackService) Preview(ctx context.Context, req PushbackPreviewReques
 
 	exists, err := s.store.SeasonExists(ctx, req.SeasonID)
 	if err != nil {
-		return PushbackPreviewResult{}, fmt.Errorf("pushback preview: check season: %w", err)
+		return PushbackPreviewResult{}, fmt.Errorf("pushback compute: check season: %w", err)
 	}
 	if !exists {
 		return PushbackPreviewResult{}, domainerr.New("PUSHBACK_SEASON_NOT_FOUND",
@@ -79,7 +108,7 @@ func (s *PushbackService) Preview(ctx context.Context, req PushbackPreviewReques
 
 	closed, err := s.store.HasClosedWeeksAtOrAfter(ctx, req.SeasonID, req.CutoffWeek)
 	if err != nil {
-		return PushbackPreviewResult{}, fmt.Errorf("pushback preview: check closed weeks: %w", err)
+		return PushbackPreviewResult{}, fmt.Errorf("pushback compute: check closed weeks: %w", err)
 	}
 	if closed {
 		return PushbackPreviewResult{}, domainerr.New("PUSHBACK_HAS_CLOSED_WEEKS",
@@ -89,7 +118,7 @@ func (s *PushbackService) Preview(ctx context.Context, req PushbackPreviewReques
 
 	allMatches, err := s.store.GetPushbackMatches(ctx, req.SeasonID)
 	if err != nil {
-		return PushbackPreviewResult{}, fmt.Errorf("pushback preview: get matches: %w", err)
+		return PushbackPreviewResult{}, fmt.Errorf("pushback compute: get matches: %w", err)
 	}
 
 	shiftDays := req.WeeksToAdd * 7

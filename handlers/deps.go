@@ -93,6 +93,12 @@ type PushbackPreviewer interface {
 	Preview(ctx context.Context, req matches.PushbackPreviewRequest) (matches.PushbackPreviewResult, error)
 }
 
+// PushbackApplier executes the pushback apply for a season atomically.
+// Routes are registered only when non-nil.
+type PushbackApplier interface {
+	Apply(ctx context.Context, req matches.PushbackPreviewRequest) (matches.PushbackPreviewResult, error)
+}
+
 // LineupManager handles lineup plan listing, atomic save, and deletion.
 // Routes are registered only when non-nil.
 type LineupManager interface {
@@ -210,6 +216,9 @@ type Dependencies struct {
 	// PushbackMgr handles the pushback preview.
 	// Routes are registered only when non-nil.
 	PushbackMgr PushbackPreviewer
+	// PushbackApplyMgr handles the pushback apply.
+	// Routes are registered only when non-nil.
+	PushbackApplyMgr PushbackApplier
 	// LineupMgr handles lineup plan listing, atomic save, and deletion.
 	// Routes are registered only when non-nil.
 	LineupMgr LineupManager

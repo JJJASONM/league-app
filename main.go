@@ -132,7 +132,8 @@ func main() {
 		MatchMgr:        matchSvc,
 		ScheduleMgr:     scheduleSvc,
 		LineupMgr:       lineupSvc,
-		PushbackMgr:     pushbackSvc,
+		PushbackMgr:      pushbackSvc,
+		PushbackApplyMgr: pushbackSvc,
 	}
 
 	// API routes

@@ -247,6 +247,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 			pushbackPreview(w, r, pushbackMgr)
 		})
 	}
+	if deps.PushbackApplyMgr != nil {
+		pushbackApplyMgr := deps.PushbackApplyMgr
+		mux.HandleFunc("POST /api/seasons/{id}/schedule/pushback-apply", func(w http.ResponseWriter, r *http.Request) {
+			pushbackApply(w, r, pushbackApplyMgr)
+		})
+	}
 
 	// Lineup plans — pre-game slot assignments per team/week
 	if deps.LineupMgr != nil {
@@ -984,6 +990,32 @@ func pushbackPreview(w http.ResponseWriter, r *http.Request, mgr PushbackPreview
 		return
 	}
 	result, err := mgr.Preview(r.Context(), matches.PushbackPreviewRequest{
+		SeasonID:   seasonID,
+		CutoffWeek: body.CutoffWeek,
+		WeeksToAdd: body.WeeksToAdd,
+	})
+	if err != nil {
+		mapScheduleErr(w, err)
+		return
+	}
+	jsonOK(w, result)
+}
+
+func pushbackApply(w http.ResponseWriter, r *http.Request, mgr PushbackApplier) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid season id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		CutoffWeek int `json:"cutoff_week"`
+		WeeksToAdd int `json:"weeks_to_add"`
+	}
+	if err := decode(r, &body); err != nil {
+		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	result, err := mgr.Apply(r.Context(), matches.PushbackPreviewRequest{
 		SeasonID:   seasonID,
 		CutoffWeek: body.CutoffWeek,
 		WeeksToAdd: body.WeeksToAdd,

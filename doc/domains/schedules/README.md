@@ -152,10 +152,35 @@ Phase N.
 **Audit write deferred:** The approved apply workflow requires an audit entry.
 This will be wired when the apply endpoint and audit system are implemented.
 
-**Apply endpoint deferred to Phase N** (`schedule-workflow-phase-n-pushback-apply`):
-the apply step adds the `UPDATE` statements for `matches.week_number`,
-`matches.match_date`, `seasons.end_date`, and `seasons.schedule_stale=0`,
-plus the Phase N preview-token safety check and the deferred audit entry.
+**Apply endpoint implemented in Phase N** (see Phase N section below).
+
+### Phase N -- Apply endpoint (accepted 2026-07-15)
+
+`POST /api/seasons/{id}/schedule/pushback-apply` applies the shift atomically
+and returns the same response shape as the preview endpoint.
+
+Request:
+```json
+{ "cutoff_week": 5, "weeks_to_add": 1 }
+```
+
+Behavior:
+- Validation and closed-week guard are the same as the preview endpoint.
+- Completed matches at or after the cutoff are preserved: `week_number`,
+  `match_date`, `completed`, `week_closed`, results, rounds, and history
+  are never modified.
+- Unplayed matches at or after the cutoff are shifted atomically:
+  `week_number += weeks_to_add` and `match_date += weeks_to_add * 7 days`
+  when non-null (null stays null).
+- Unplayed matches before the cutoff are not touched.
+- `seasons.end_date` is recomputed to `MAX(match_date)` after the shift.
+- `seasons.schedule_stale` is cleared to 0.
+- `skipped_weeks` and `bye_requests` are not mutated.
+- The response `shifted` and `preserved` arrays mirror what the preview
+  would have returned for the same request.
+
+**Audit write deferred:** An audit entry will be added when the audit system
+is implemented. The apply currently writes no audit/history row.
 
 ## Deferred Schedule UI Polish
 
