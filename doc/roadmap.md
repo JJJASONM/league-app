@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-07-14
+**Last reviewed:** 2026-07-16
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -53,9 +53,6 @@ These items should stay small enough to review and ship independently.
 
 These are the next build targets after the current workflow foundation is
 stable.
-
-- Season and schedule workflow completion (remaining items).
-  - Preserve completed match history during other schedule changes (pushback, etc.).
 
 - Continue backend/domain extraction where workflows are already active.
   - Reduce monolithic handler/shell ownership further.
@@ -212,6 +209,12 @@ follow-up.
   1: minimum fields are at least one name plus diff rating, with optional team.
   Duplicate detection, INCOMPLETE profile status, and match-entry quick-add are
   deferred.
+- Schedule pushback workflow (Phases M/N/O). Read-only preview endpoint, atomic
+  apply endpoint, and Schedule page admin UI. Unplayed matches at or after the
+  cutoff shift week number and date atomically; completed matches are preserved;
+  closed weeks at or after the cutoff block the operation. skipped_weeks and
+  bye_requests are not mutated. Audit write deferred until the broader audit
+  system exists.
 
 ## Open Questions To Resolve
 

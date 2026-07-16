@@ -4,8 +4,8 @@
 
 **Owner:** `schedules`
 **Status:** `draft`
-**Current version:** `0.2`
-**Last reviewed:** `2026-07-14`
+**Current version:** `0.3`
+**Last reviewed:** `2026-07-16`
 
 The Schedules domain generates, previews, adjusts, and shifts season schedules.
 It applies scheduling rules but does not define their meaning.
@@ -120,7 +120,7 @@ The operation:
 - Extends the season end date
 - Previews every affected match before applying
 - Applies atomically
-- Creates an audit entry
+- Audit write deferred until the audit system is implemented
 
 ### Phase M — Preview endpoint (accepted 2026-07-15)
 
@@ -146,11 +146,10 @@ Validation codes:
 - `PUSHBACK_SEASON_NOT_FOUND` (404) — season not found
 
 **Not mutated by the preview:** `skipped_weeks`, `bye_requests`, any match row,
-any season column. The apply step that would commit these changes is deferred to
-Phase N.
+any season column.
 
 **Audit write deferred:** The approved apply workflow requires an audit entry.
-This will be wired when the apply endpoint and audit system are implemented.
+This will be added when the audit system is implemented.
 
 **Apply endpoint implemented in Phase N** (see Phase N section below).
 
@@ -181,6 +180,30 @@ Behavior:
 
 **Audit write deferred:** An audit entry will be added when the audit system
 is implemented. The apply currently writes no audit/history row.
+
+### Phase O -- Schedule page admin UI (accepted 2026-07-15)
+
+The Schedule page contains a "Pushback No-Play Week" panel above the week list.
+The panel is visible only when a season is selected. Admin workflow:
+
+1. Enter Cutoff Week and Weeks to Add.
+2. Click Preview. The panel shows shifted matches, preserved completed matches,
+   and the projected new end date.
+3. Apply is enabled only after a successful preview run.
+4. If Cutoff Week or Weeks to Add changes after a preview, Apply is disabled
+   until Preview is run again.
+5. Click Apply Pushback. A confirm dialog appears before the apply call is made.
+6. On success: the schedule list refreshes and a success toast shows the shifted
+   match count.
+7. On error: a toast shows the error message. For the closed-week backend message,
+   the UI remaps it to: "Closed weeks exist at or after the cutoff. Reopen those
+   weeks before pushing back."
+
+**schedule-data-changed is not dispatched after apply.** Pushback shifts only
+unplayed future matches and does not change completed match data, standings, or
+player stats. The schedule list is refreshed via a direct reload.
+
+**Audit write deferred** until the audit system is implemented.
 
 ## Deferred Schedule UI Polish
 
