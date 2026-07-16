@@ -91,6 +91,11 @@ init();
 // Cross-domain navigation entry point; delegates to activateSection.
 function navTo(sec) { activateSection(sec); }
 
+function openMatchEntry(matchId, seasonId) {
+  appContext.setEntryPreselect(seasonId, matchId);
+  navTo('entry');
+}
+
 // --- Seasons domain bridge ----------------------------------------------------
 // The seasons domain component fires these events; the shell updates cross-domain
 // state (allSeasons, activeSeason) and responds to navigation requests.

@@ -225,6 +225,7 @@ class SchedulePage extends HTMLElement {
       ?.addEventListener('click', e => {
         const entryBtn = e.target.closest('[data-action="open-match-entry"]');
         if (entryBtn) {
+          bootstrap.Modal.getInstance(document.getElementById('close-week-modal'))?.hide();
           openMatchEntry(parseInt(entryBtn.dataset.matchId, 10), parseInt(entryBtn.dataset.seasonId, 10) || null);
           return;
         }
