@@ -35,3 +35,11 @@ export async function assignMatchTeams(matchId, body) {
 export async function fetchLeaguePlayers(leagueId) {
   return api('GET', `/players?league_id=${leagueId}`);
 }
+
+export async function previewPushback(seasonId, request) {
+  return api('POST', `/seasons/${seasonId}/schedule/pushback-preview`, request);
+}
+
+export async function applyPushback(seasonId, request) {
+  return api('POST', `/seasons/${seasonId}/schedule/pushback-apply`, request);
+}

@@ -18,6 +18,8 @@ import {
   reopenWeek,
   assignMatchTeams,
   fetchLeaguePlayers,
+  previewPushback,
+  applyPushback,
 } from './schedule-api-service.js';
 import { fmtDate } from '../../components/date-display.js';
 import {
@@ -66,11 +68,14 @@ function pocketHTML() {
 }
 
 class SchedulePage extends HTMLElement {
-  #allSeasons    = [];
-  #allTeams      = [];
-  #activeLeague  = null;
-  #reopenWeekCtx = null;
-  #assignMatchId = null;
+  #allSeasons             = [];
+  #allTeams               = [];
+  #activeLeague           = null;
+  #reopenWeekCtx          = null;
+  #assignMatchId          = null;
+  #pushbackPreviewResult  = null;
+  #pushbackLastCutoff     = null;
+  #pushbackLastWeeks      = null;
 
   connectedCallback() {
     this.innerHTML = `
@@ -82,6 +87,29 @@ class SchedulePage extends HTMLElement {
             <button class="btn btn-sm btn-outline-success" data-action="open-poster">
               <i class="bi bi-image"></i> Poster View
             </button>
+          </div>
+        </div>
+        <div class="sp-pushback-area d-none mb-3">
+          <div class="card border-0 bg-light">
+            <div class="card-body py-2">
+              <p class="fw-semibold small text-secondary mb-1">Pushback No-Play Week</p>
+              <p class="small text-muted mb-2">Insert no-play weeks at a cutoff. Unplayed matches at or after the cutoff shift forward; completed matches are not moved.</p>
+              <div class="d-flex flex-wrap gap-2 align-items-end">
+                <div>
+                  <label class="form-label small mb-1" for="sp-pb-cutoff">Cutoff Week</label>
+                  <input type="number" id="sp-pb-cutoff" class="form-control form-control-sm sp-pb-cutoff" min="1" value="1" style="width:90px">
+                </div>
+                <div>
+                  <label class="form-label small mb-1" for="sp-pb-weeks">Weeks to Add</label>
+                  <input type="number" id="sp-pb-weeks" class="form-control form-control-sm sp-pb-weeks" min="1" value="1" style="width:90px">
+                </div>
+                <div class="d-flex gap-2 align-items-end pb-1">
+                  <button class="btn btn-sm btn-outline-secondary" data-action="pushback-preview">Preview</button>
+                  <button class="btn btn-sm btn-primary" data-action="pushback-apply" disabled>Apply Pushback</button>
+                </div>
+              </div>
+              <div class="sp-pb-result mt-2"></div>
+            </div>
           </div>
         </div>
         <div class="sp-content"></div>
@@ -107,10 +135,21 @@ class SchedulePage extends HTMLElement {
       </div>`;
 
     this.addEventListener('change', e => {
-      if (e.target.matches('.sp-season-sel')) this.#loadSchedule();
+      if (e.target.matches('.sp-season-sel')) {
+        this.#clearPushbackState();
+        this.#loadSchedule();
+      }
+    });
+
+    this.addEventListener('input', e => {
+      if (e.target.matches('.sp-pb-cutoff, .sp-pb-weeks')) {
+        this.#clearPushbackState();
+      }
     });
 
     this.addEventListener('click', e => {
+      if (e.target.closest('[data-action="pushback-preview"]')) { this.#previewPushback(); return; }
+      if (e.target.closest('[data-action="pushback-apply"]'))   { this.#applyPushback();   return; }
       if (e.target.closest('[data-action="open-poster"]'))  { this.#openPosterView(); return; }
       if (e.target.closest('[data-action="close-poster"]')) { this.#closePosterView(); return; }
       if (e.target.closest('[data-action="print-poster"]')) { window.print(); return; }
@@ -248,6 +287,7 @@ class SchedulePage extends HTMLElement {
         <div class="mt-2 fw-semibold">No active season</div>
         <div class="small mt-1">Go to <a href="#" data-action="go-seasons" class="text-decoration-none">Seasons</a> to activate one.</div>
       </div>`;
+      this.querySelector('.sp-pushback-area')?.classList.add('d-none');
       return;
     }
     sel.innerHTML = active.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
@@ -257,7 +297,11 @@ class SchedulePage extends HTMLElement {
   async #loadSchedule() {
     const seasonId = this.querySelector('.sp-season-sel')?.value;
     const contentEl = this.querySelector('.sp-content');
-    if (!seasonId) { contentEl.innerHTML = '<div class="text-muted">No season selected.</div>'; return; }
+    if (!seasonId) {
+      contentEl.innerHTML = '<div class="text-muted">No season selected.</div>';
+      this.querySelector('.sp-pushback-area')?.classList.add('d-none');
+      return;
+    }
 
     let matches, weekList;
     try {
@@ -269,6 +313,8 @@ class SchedulePage extends HTMLElement {
       contentEl.innerHTML = `<div class="text-danger">${esc(e.message)}</div>`;
       return;
     }
+
+    this.querySelector('.sp-pushback-area')?.classList.remove('d-none');
 
     const weekStatusMap = {};
     (weekList || []).forEach(ws => { weekStatusMap[ws.week_number] = ws; });
@@ -809,6 +855,132 @@ class SchedulePage extends HTMLElement {
   #closePosterView() {
     this.querySelector('.sp-poster-view').classList.add('d-none');
     this.querySelector('.sp-table-view').classList.remove('d-none');
+  }
+
+  // --- Pushback ---
+
+  #clearPushbackState() {
+    this.#pushbackPreviewResult = null;
+    this.#pushbackLastCutoff    = null;
+    this.#pushbackLastWeeks     = null;
+    const applyBtn = this.querySelector('[data-action="pushback-apply"]');
+    const resultEl = this.querySelector('.sp-pb-result');
+    if (applyBtn) applyBtn.disabled = true;
+    if (resultEl) resultEl.innerHTML = '';
+  }
+
+  async #previewPushback() {
+    const seasonId = this.querySelector('.sp-season-sel')?.value;
+    const cutoff   = parseInt(this.querySelector('.sp-pb-cutoff')?.value, 10);
+    const weeksAdd = parseInt(this.querySelector('.sp-pb-weeks')?.value, 10);
+    const resultEl = this.querySelector('.sp-pb-result');
+    const applyBtn = this.querySelector('[data-action="pushback-apply"]');
+    if (!seasonId || !resultEl || !applyBtn) return;
+
+    this.#clearPushbackState();
+    resultEl.innerHTML = '<span class="text-muted small">Loading preview...</span>';
+
+    try {
+      const result = await previewPushback(seasonId, { cutoff_week: cutoff, weeks_to_add: weeksAdd });
+      this.#pushbackPreviewResult = result;
+      this.#pushbackLastCutoff    = cutoff;
+      this.#pushbackLastWeeks     = weeksAdd;
+      resultEl.innerHTML = this.#renderPushbackResult(result);
+      applyBtn.disabled  = false;
+    } catch (e) {
+      resultEl.innerHTML = `<div class="alert alert-danger py-2 small mb-0">${esc(this.#pushbackErrMsg(e.message || String(e)))}</div>`;
+    }
+  }
+
+  async #applyPushback() {
+    if (!this.#pushbackPreviewResult) return;
+    const seasonId = this.querySelector('.sp-season-sel')?.value;
+    const cutoff   = parseInt(this.querySelector('.sp-pb-cutoff')?.value, 10);
+    const weeksAdd = parseInt(this.querySelector('.sp-pb-weeks')?.value, 10);
+    if (!seasonId) return;
+
+    if (cutoff !== this.#pushbackLastCutoff || weeksAdd !== this.#pushbackLastWeeks) {
+      toast('Inputs changed since preview. Run Preview again before applying.', 'warning');
+      return;
+    }
+
+    const shifted   = this.#pushbackPreviewResult.shifted?.length ?? 0;
+    const weeksWord = weeksAdd === 1 ? '1 week' : weeksAdd + ' weeks';
+    const prompt    = 'Apply pushback: shift ' + shifted + ' unplayed match' + (shifted !== 1 ? 'es' : '') +
+                      ' starting at week ' + cutoff + ' by ' + weeksWord + '?';
+    if (!confirm(prompt)) return;
+
+    const applyBtn = this.querySelector('[data-action="pushback-apply"]');
+    if (applyBtn) applyBtn.disabled = true;
+
+    try {
+      const result = await applyPushback(seasonId, { cutoff_week: cutoff, weeks_to_add: weeksAdd });
+      const count  = result.shifted?.length ?? 0;
+      this.#clearPushbackState();
+      toast('Pushback applied. ' + count + ' match' + (count !== 1 ? 'es' : '') + ' shifted.', 'success');
+      await this.#loadSchedule();
+    } catch (e) {
+      if (applyBtn) applyBtn.disabled = false;
+      toast('Apply failed: ' + this.#pushbackErrMsg(e.message || String(e)), 'danger');
+    }
+  }
+
+  #pushbackErrMsg(raw) {
+    const msg   = raw || '';
+    const lower = msg.toLowerCase();
+    if (lower.includes('closed') && lower.includes('cutoff')) {
+      return 'Closed weeks exist at or after the cutoff. Reopen those weeks before pushing back.';
+    }
+    return msg;
+  }
+
+  #renderPushbackResult(result) {
+    const shifted   = result.shifted   || [];
+    const preserved = result.preserved || [];
+    const endDate   = result.new_end_date || null;
+
+    const shiftSummary = shifted.length === 1 ? '1 match will shift' : shifted.length + ' matches will shift';
+    const prevSummary  = preserved.length === 1 ? '1 completed match preserved in place' :
+                         preserved.length + ' completed matches preserved in place';
+    let html = '<div class="alert alert-info py-2 small mb-2"><strong>Preview:</strong> ' +
+               esc(shiftSummary) + '; ' + esc(prevSummary) + '.';
+    if (endDate) html += ' New end date: <strong>' + esc(endDate) + '</strong>.';
+    html += '</div>';
+
+    if (shifted.length > 0) {
+      const rows = shifted.map(m =>
+        '<tr>' +
+        '<td>' + esc(String(m.week_number)) + '</td>' +
+        '<td>' + (m.match_date ? esc(fmtDate(m.match_date)) : '<span class="text-muted">--</span>') + '</td>' +
+        '<td>' + esc(String(m.new_week_number)) + '</td>' +
+        '<td>' + (m.new_match_date ? esc(fmtDate(m.new_match_date)) : '<span class="text-muted">--</span>') + '</td>' +
+        '</tr>'
+      ).join('');
+      html += '<p class="small fw-semibold mb-1">Unplayed matches that will shift:</p>' +
+              '<div class="table-responsive">' +
+              '<table class="table table-sm table-borderless small mb-2">' +
+              '<thead><tr><th>Week</th><th>Date</th><th>New Week</th><th>New Date</th></tr></thead>' +
+              '<tbody>' + rows + '</tbody></table></div>';
+    } else {
+      html += '<p class="small text-muted mb-1">No unplayed matches at or after the cutoff will shift.</p>';
+    }
+
+    if (preserved.length > 0) {
+      const rows = preserved.map(m =>
+        '<tr>' +
+        '<td>' + esc(String(m.week_number)) + '</td>' +
+        '<td>' + (m.match_date ? esc(fmtDate(m.match_date)) : '<span class="text-muted">--</span>') + '</td>' +
+        '<td><span class="badge bg-success">Completed - not moved</span></td>' +
+        '</tr>'
+      ).join('');
+      html += '<p class="small fw-semibold mb-1">Completed matches at or after cutoff (not moved):</p>' +
+              '<div class="table-responsive">' +
+              '<table class="table table-sm table-borderless small mb-0">' +
+              '<thead><tr><th>Week</th><th>Date</th><th>Status</th></tr></thead>' +
+              '<tbody>' + rows + '</tbody></table></div>';
+    }
+
+    return html;
   }
 
   #dispatchDataChanged() {
