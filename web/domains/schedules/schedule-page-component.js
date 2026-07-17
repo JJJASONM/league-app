@@ -76,6 +76,8 @@ class SchedulePage extends HTMLElement {
   #pushbackPreviewResult  = null;
   #pushbackLastCutoff     = null;
   #pushbackLastWeeks      = null;
+  #collapsedWeeks         = new Set();
+  #collapsedWeeksSeason   = null;
 
   connectedCallback() {
     this.innerHTML = `
@@ -137,6 +139,8 @@ class SchedulePage extends HTMLElement {
     this.addEventListener('change', e => {
       if (e.target.matches('.sp-season-sel')) {
         this.#clearPushbackState();
+        this.#collapsedWeeks       = new Set();
+        this.#collapsedWeeksSeason = null;
         this.#loadSchedule();
       }
     });
@@ -150,6 +154,24 @@ class SchedulePage extends HTMLElement {
     this.addEventListener('click', e => {
       if (e.target.closest('[data-action="pushback-preview"]')) { this.#previewPushback(); return; }
       if (e.target.closest('[data-action="pushback-apply"]'))   { this.#applyPushback();   return; }
+
+      const collapseBtn = e.target.closest('[data-action="toggle-week-collapse"]');
+      if (collapseBtn) {
+        const wk   = collapseBtn.dataset.weekNum;
+        const body = this.querySelector('#week-body-' + wk);
+        if (!body) return;
+        if (this.#collapsedWeeks.has(wk)) {
+          this.#collapsedWeeks.delete(wk);
+          body.classList.remove('d-none');
+          collapseBtn.querySelector('i').className = 'bi bi-chevron-down';
+        } else {
+          this.#collapsedWeeks.add(wk);
+          body.classList.add('d-none');
+          collapseBtn.querySelector('i').className = 'bi bi-chevron-right';
+        }
+        return;
+      }
+
       if (e.target.closest('[data-action="open-poster"]'))  { this.#openPosterView(); return; }
       if (e.target.closest('[data-action="close-poster"]')) { this.#closePosterView(); return; }
       if (e.target.closest('[data-action="print-poster"]')) { window.print(); return; }
@@ -324,6 +346,16 @@ class SchedulePage extends HTMLElement {
     matches.forEach(m => { (byWeek[m.week_number] = byWeek[m.week_number] || []).push(m); });
     const weeks = Object.keys(byWeek).sort((a, b) => a - b);
 
+    if (this.#collapsedWeeksSeason !== String(seasonId)) {
+      this.#collapsedWeeks       = new Set();
+      this.#collapsedWeeksSeason = String(seasonId);
+      weeks.forEach(w => {
+        if (weekStatusMap[w]?.status === WEEK_STATUS_CLOSED) {
+          this.#collapsedWeeks.add(w);
+        }
+      });
+    }
+
     const seasonTeamIds   = new Set();
     const seasonTeamNames = {};
     matches.forEach(m => {
@@ -383,6 +415,9 @@ class SchedulePage extends HTMLElement {
       ? `<div class="px-3 pb-2 d-none" id="week-acks-${w}" data-loaded="0"></div>`
       : '';
 
+    const isCollapsed = this.#collapsedWeeks.has(w);
+    const chevron     = isCollapsed ? 'bi-chevron-right' : 'bi-chevron-down';
+
     const rows = weekMatches.map(m => `<tr>
       <td class="text-truncate">${m.home_team_name || '<span class="text-muted fst-italic">(unassigned)</span>'}</td>
       <td class="text-center text-muted">vs</td>
@@ -400,10 +435,13 @@ class SchedulePage extends HTMLElement {
     return `
     <div class="card mb-2">
       <div class="card-header week-header py-1 d-flex align-items-center justify-content-between">
-        <span>Week ${w} - ${fmtDate(weekMatches[0].match_date)}</span>
+        <span class="d-flex align-items-center gap-2">
+          <button class="btn btn-link btn-sm p-0 text-secondary" data-action="toggle-week-collapse" data-week-num="${w}" title="Collapse/expand"><i class="bi ${chevron}"></i></button>
+          Week ${w} - ${fmtDate(weekMatches[0].match_date)}
+        </span>
         <span class="d-flex align-items-center">${countBadge}${statusChip}${ackToggle}${closeBtn}</span>
       </div>
-      <div class="card-body p-0">
+      <div class="card-body p-0${isCollapsed ? ' d-none' : ''}" id="week-body-${w}">
         <table class="table table-sm mb-0" style="table-layout:fixed">
           <colgroup>
             <col style="width:37%">
