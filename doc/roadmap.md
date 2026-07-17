@@ -32,8 +32,8 @@ These items should stay small enough to review and ship independently.
     handlers to their extracted services; ensure all domain boundaries are
     explicit before adding further logic.
   - Continue moving workflow UI out of `web/app.js` into domain-owned frontend
-    modules. Remaining work: skipped-weeks, bye-requests, and remaining season
-    CRUD workflows.
+    modules. Seasons, skipped-weeks, bye-requests, and season CRUD are extracted.
+    Remaining `web/app.js` content is shell-level event wiring.
   - Keep backend/domain/store/adapter boundaries explicit and purpose-built for
     any new work added.
 
