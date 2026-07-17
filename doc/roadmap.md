@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-07-16
+**Last reviewed:** 2026-07-17
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -77,10 +77,6 @@ stable.
 
 - Broader operational polish.
   - Tighten schedule usability.
-  - Improve Schedule page navigation into Match Entry and verify any "Open"
-    button issues before changing behavior.
-  - Review whether weekly schedule sections should collapse after scoresheets
-    are created, so the current work stays easier to scan.
   - Improve admin review flows around seasons, matches, and lineups.
   - Consider a week-end recap view showing handicap changes and team statistics
     after the Close Week workflow is stable in real operation.
@@ -215,6 +211,13 @@ follow-up.
   closed weeks at or after the cutoff block the operation. skipped_weeks and
   bye_requests are not mutated. Audit write deferred until the broader audit
   system exists.
+- Schedule page navigation and accordion polish. Restored the openMatchEntry
+  bridge from Schedule to Match Entry (missing function caused a ReferenceError
+  on every Score Entry click). Close Week modal match-error links now dismiss
+  the modal before navigating. Week cards are collapsible: closed weeks
+  auto-collapse on first season load; open weeks default expanded. Collapse
+  state persists across same-season refreshes and resets when the season
+  selector changes.
 
 ## Open Questions To Resolve
 

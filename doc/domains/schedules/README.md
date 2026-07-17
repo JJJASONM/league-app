@@ -4,8 +4,8 @@
 
 **Owner:** `schedules`
 **Status:** `draft`
-**Current version:** `0.3`
-**Last reviewed:** `2026-07-16`
+**Current version:** `0.4`
+**Last reviewed:** `2026-07-17`
 
 The Schedules domain generates, previews, adjusts, and shifts season schedules.
 It applies scheduling rules but does not define their meaning.
@@ -205,15 +205,33 @@ player stats. The schedule list is refreshed via a direct reload.
 
 **Audit write deferred** until the audit system is implemented.
 
-## Deferred Schedule UI Polish
+## Schedule Navigation and Accordion
 
-The following schedule-screen ideas are parked until the current admin workflow
-has more usage:
+### Match Entry navigation
 
-- Collapsible week sections or accordions after scoresheets are created, so the
-  current week stays easier to scan.
-- Verification and improvement of Schedule page navigation into Match Entry,
-  including any "Open" button behavior that does not route correctly.
+Score Entry buttons and Close Week modal match-error links both navigate to
+Match Entry via the shell's openMatchEntry bridge in web/app.js. openMatchEntry
+calls appContext.setEntryPreselect(seasonId, matchId) then navTo('entry'), so
+the shell preselects the correct season and match when Match Entry loads.
+
+The Close Week modal is dismissed before navigation
+(bootstrap.Modal.getInstance(...).hide()). This prevents the modal from
+remaining visible behind the Match Entry section.
+
+### Collapsible week cards
+
+Week cards on the Schedule page have a chevron toggle button in each card
+header. Clicking it collapses or expands the card body (match table and
+prior-ack section). The header - status chip, ack-history button,
+Reopen / Review & Close - remains always visible.
+
+Default collapse state at season load:
+- Closed weeks: auto-collapsed.
+- Open weeks: expanded.
+
+Collapse state persists across same-season refreshes (after close, reopen, or
+assign). State resets to defaults when the season selector changes or when a
+different season is loaded via loadForSeason().
 
 ## Questions
 
