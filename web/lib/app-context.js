@@ -95,14 +95,6 @@
       return state;
     }
 
-    function getLeagueQuery() {
-      return state.activeLeague ? '?league_id=' + state.activeLeague.id : '';
-    }
-
-    function getLeagueQueryAmp() {
-      return state.activeLeague ? '&league_id=' + state.activeLeague.id : '';
-    }
-
     function setEntryPreselect(seasonId, matchId) {
       state.entryPreSelectSeasonId = seasonId;
       state.entryPreSelectMatchId = matchId;
@@ -155,8 +147,6 @@
       applyPlayersState: applyPlayersState,
       applySeasonState: applySeasonState,
       consumeEntryPreselect: consumeEntryPreselect,
-      getLeagueQuery: getLeagueQuery,
-      getLeagueQueryAmp: getLeagueQueryAmp,
       getState: getState,
       init: init,
       loadLeagueData: loadLeagueData,
