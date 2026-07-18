@@ -20,5 +20,10 @@ Thumbs.db
 .claude/
 .codex/
 
+# Local operator / assistant instruction files (not part of the public repo)
+AGENTS.md
+CLAUDE.md
+.cursorrules
+
 # Project-internal transcripts and working documents
 doc/project-manager-developer-transcript.md
