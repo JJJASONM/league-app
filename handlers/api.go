@@ -1,4 +1,4 @@
-// Package handlers wires HTTP routes to database operations.
+// Package handlers wires HTTP routes to domain services.
 package handlers
 
 import (

@@ -28,9 +28,8 @@ These items should stay small enough to review and ship independently.
 
 - Domain and data-access restructuring.
   - Major domains (matches, handicaps, seasons, leagues, players, teams) have
-    purpose-built service/store layers. Remaining work: wire remaining CRUD
-    handlers to their extracted services; ensure all domain boundaries are
-    explicit before adding further logic.
+    purpose-built service/store layers. All CRUD handlers delegate to domain
+    services; no direct DB access remains in production handler code.
   - Continue moving workflow UI out of `web/app.js` into domain-owned frontend
     modules. Seasons, skipped-weeks, bye-requests, and season CRUD are extracted.
     Remaining `web/app.js` content is shell-level event wiring.
