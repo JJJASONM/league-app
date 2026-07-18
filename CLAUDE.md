@@ -9,8 +9,11 @@ league operations. The primary game format is 8-ball.
 
 ## Architecture Status
 
-The current codebase is a working monolithic implementation. The approved
-target is documented in:
+Major backend and frontend extraction is complete. `handlers/api.go` delegates
+all routes to domain services with no direct DB access. `web/app.js` is now
+shell-level coordination: navigation, shared league/season context, and
+cross-domain event wiring. Domain screens, API services, and components live
+under `web/domains/`. The approved target is documented in:
 
 - `AGENTS.md` - engineering and documentation conventions
 - `doc/architecture-decisions.md` - cross-domain workflows and open questions
@@ -18,8 +21,7 @@ target is documented in:
 - `doc/erd.mermaid` - physical schema implemented today
 
 Do not treat target tables or workflows as already implemented. Migrate one
-domain at a time, beginning with `rules`, while preserving behavior during the
-first architecture pass.
+domain at a time and preserve behavior during each architecture pass.
 
 ## Tech Stack
 
@@ -40,16 +42,47 @@ league_app/
   db/
     db.go                    — Init(), migrate(), Backup(), Seed(); holds var DB *sql.DB
   models/
-    models.go                — all struct definitions, no logic
+    models.go                — shared struct definitions, no logic
   logic/
     handicap.go              — authoritative handicap formula (CalcSpot, CalcSpotM)
-    handicap_test.go         — 11 Go tests for handicap functions
+    handicap_test.go         — handicap formula tests
+  backend/
+    domains/
+      handicaps/             — handicap formula, review, apply service + store interfaces
+      matches/               — scoresheet, week close/reopen, round/match/lineup/schedule services
+      rules/                 — rule definitions, ValidateValue, RuleStore interface
+      seasons/               — season CRUD, rosters, bye requests, skipped weeks
+      leagues/               — league CRUD service
+      players/               — player CRUD service
+      teams/                 — team CRUD service
+    storage/
+      sqlite/                — SQLite adapter implementations for all domain store interfaces
   handlers/
-    api.go                   — all HTTP handlers, route registration, domain service delegation
+    api.go                   — thin HTTP delegation layer; route registration
+    deps.go                  — Dependencies struct; domain manager interfaces
   web/
-    index.html               — HTML skeleton only (~642 lines), references styles.css + app.js
-    styles.css               — all CSS (~382 lines), including scoresheet, poster, rules
-    app.js                   — all JavaScript (~2251 lines), full SPA logic
+    index.html               — app shell; loads lib/ utilities, app.js, and domain modules
+    styles.css               — all CSS, including scoresheet, poster, rules, print media
+    app.js                   — shell coordination: navigation, context sync, event wiring
+    domains/
+      dashboard/             — dashboard page component
+      handicaps/             — handicap review/apply component, API service, code constants
+      leagues/               — leagues modal, API service, game-format codes
+      lineups/               — lineup planning page and components
+      matches/               — match entry and scoresheet components
+      players/               — players page, API service
+      rules/                 — rules editor component and system rule definitions
+      schedules/             — schedule page, week management
+      seasons/               — seasons domain components
+      standings/             — standings page
+      teams/                 — teams page and components
+    lib/
+      api-client.js          — api() global: shared fetch wrapper
+      app-context.js         — appContext: shell shared state (league/season/player/preselect)
+      html-escape.js         — escapeHTML() global for XSS-safe HTML rendering
+      ui-feedback.js         — toast(), openModal(), closeModal() globals
+    components/
+      date-display.js        — fmtDate(), fmtDateRange(), displayDate() — ES module exports
 ```
 
 ## Database Schema
@@ -111,7 +144,7 @@ for _, stmt := range additiveMigrations {
 
 ## API Routes (handlers/api.go)
 
-All routes registered by `handlers.Register(mux, dataDir)`:
+All routes registered by `handlers.Register(mux, dataDir, deps)`:
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -130,8 +163,17 @@ All routes registered by `handlers.Register(mux, dataDir)`:
 | DELETE | `/api/seasons/{id}/skipped-weeks/{sid}` | remove |
 | GET/POST | `/api/seasons/{id}/bye-requests` | list / add |
 | PUT/DELETE | `/api/seasons/{id}/bye-requests/{bid}` | update / delete |
+| GET/POST | `/api/seasons/{id}/teams` | list / add season teams |
+| PUT/DELETE | `/api/seasons/{id}/teams/{tid}` | update / remove season team |
+| GET/POST | `/api/seasons/{id}/teams/{tid}/roster` | list / add roster player |
+| DELETE | `/api/seasons/{id}/teams/{tid}/roster/{pid}` | remove roster player |
+| GET | `/api/seasons/{id}/players/available` | available players for roster |
+| GET | `/api/seasons/{id}/previous` | previous season teams |
+| GET | `/api/seasons/{id}/checklist` | setup checklist |
 | GET | `/api/matches` | list (`?season_id=`) |
 | POST | `/api/matches/generate` | generate schedule |
+| POST | `/api/seasons/{id}/schedule/pushback-preview` | pushback preview (read-only) |
+| POST | `/api/seasons/{id}/schedule/pushback-apply` | apply pushback atomically |
 | GET | `/api/matches/{id}` | get match detail |
 | PATCH | `/api/matches/{id}/assign` | assign home/away teams |
 | POST/DELETE | `/api/matches/{id}/results` | submit / clear results |
@@ -139,7 +181,18 @@ All routes registered by `handlers.Register(mux, dataDir)`:
 | GET/POST | `/api/lineup-plans` | list / save team lineup |
 | DELETE | `/api/lineup-plans/{id}` | delete plan |
 | GET | `/api/standings` | standings (`?season_id=`) |
-| GET | `/api/stats` | player stats (`?season_id=`) |
+| GET | `/api/player-stats` | player stats (`?season_id=`) |
+| GET | `/api/rules/definitions` | system rule definitions (developer-owned) |
+| GET | `/api/seasons/{id}/weeks` | list weeks with status and ack counts |
+| GET | `/api/seasons/{id}/weeks/{week}/validate` | dry-run week validation |
+| POST | `/api/seasons/{id}/weeks/{week}/close` | validate + commit week close |
+| POST | `/api/seasons/{id}/weeks/{week}/reopen` | reopen a closed week |
+| GET | `/api/seasons/{id}/weeks/{week}/advance-preview` | pre-close advance preview |
+| GET | `/api/seasons/{id}/weeks/{week}/acknowledgments` | list prior close acks |
+| GET | `/api/seasons/{id}/handicap-recommendations` | season handicap review (read-only) |
+| POST | `/api/seasons/{id}/handicap-apply` | apply handicap recommendations (bearer auth) |
+| POST | `/api/users` | create user with one-time API key (static admin token gated) |
+| GET | `/api/users` | list users without hash (static admin token gated) |
 
 ## Handicap Formula (logic/handicap.go)
 
@@ -187,15 +240,14 @@ away = away[(p + r) % 3]
 ```
 This ensures each team faces each other team exactly once in a single round-robin.
 
-## Current System Rules (SYSTEM_RULES in app.js)
+## Current System Rules
 
-This section describes the implementation today. The approved target moves rule
-definitions and validation to the backend, supports system -> league -> season
-inheritance, and locks a season snapshot at activation. See
-`doc/domains/rules/README.md`.
-
-Three groups rendered in the Rules tab. Keys stored as `season_rules.rule_key`.
-Defaults are shown by the UI from `SYSTEM_RULES`; no DB row is required.
+System rules are defined and rendered by the rules domain component
+(`web/domains/rules/rules-domain.js`). Keys are stored as `season_rules.rule_key`.
+When no DB row exists for a key the frontend shows the default value. The
+approved target moves rule definitions and validation fully to the backend,
+supporting system -> league -> season inheritance and a snapshot at activation.
+See `doc/domains/rules/README.md`.
 
 **All rules are approved for backend enforcement.** Migration is on hold pending
 the domain-first architecture rebuild. Do not add new frontend-only rule logic.
@@ -217,21 +269,32 @@ the domain-first architecture rebuild. Do not add new frontend-only rule logic.
 - `allow_bye_requests` — boolean, default true — backend pending
 - `require_bye_approval` — boolean, default true — backend pending
 
-System rule keys are tracked in `SYSTEM_RULE_KEYS` Set for O(1) lookup; any key not in
-that set is rendered as a custom rule in a freeform section below the groups.
+Known system rule keys are tracked inside the rules domain component; any key not
+recognized as a system rule is rendered as a custom rule in a freeform section.
 
 ## Current Frontend Architecture (web/)
 
-Single-page app — Bootstrap 5, no build step. Three files:
+Single-page app — Bootstrap 5, no build step. The app shell (`index.html`) mounts
+domain components registered via ES modules. `app.js` is shell-level coordination
+only; domain screens live under `web/domains/`.
 
-- **index.html** — HTML skeleton only. No inline `<script>` or `<style>` tags.
-  Loads `<link rel="stylesheet" href="/styles.css">` and `<script src="/app.js" defer>`.
+- **index.html** — App shell. No inline `<script>` or `<style>` tags. Loads
+  `<link rel="stylesheet" href="/styles.css">` and `<script src="/app.js" defer>`.
+  Domain component `<script type="module">` tags added for each extracted domain.
 - **styles.css** — All CSS. Sections: layout, nav, scoresheet (`.ss-*`), poster (`.poster-*`),
   rules (`.rule-*`), print media queries.
-- **app.js** — All JS. Key globals: `currentLeagueId`, `currentSeasonId`, `SYSTEM_RULES`,
-  `SYSTEM_RULE_KEYS`. Key functions: `loadSeasonRules`, `renderRuleGroup`,
-  `renderCustomRulesSection`, `saveSystemRule`, `openSchedulePoster`, `renderScoresheet`,
-  `saveScoresheet`, `fmtDate`, `fmtDateRange`.
+- **app.js** — Shell coordination only. Owns navigation (`navTo`, `activateSection`,
+  `loadSection`), cross-domain event wiring (season, players, leagues, schedule,
+  dashboard events), and shell bridge functions (`openMatchEntry`). No domain
+  workflow logic remains here. State lives in `appContext` from `web/lib/app-context.js`.
+- **web/lib/** — Shared browser utilities loaded as classic `defer` scripts before
+  any domain module runs: `api-client.js` (`api()` fetch wrapper), `app-context.js`
+  (`appContext` with league/season/player state and entry preselect), `ui-feedback.js`
+  (`toast`, `openModal`, `closeModal`), `html-escape.js` (`escapeHTML()`).
+- **web/domains/** — Extracted domain Web Components and named API services.
+  Handicaps, schedules, matches, players, leagues, seasons, and standings are
+  domain-owned here. Each domain folder has a `*-domain.js` entry point,
+  `*-page-component.js` or similar, and `*-api-service.js`.
 
 The target frontend uses native Web Components, ES modules, light DOM, and
 shared CSS organized by domain. `index.html` becomes the app shell. Use small,
@@ -325,7 +388,7 @@ team rosters at bottom.
 
 ```bash
 # From Windows terminal in C:\Users\admin\source\league_app
-go test ./...                    # run all tests (11 handicap tests in logic/)
+go test ./...                    # run all tests (logic/, backend/domains/*, backend/storage/sqlite/*, handlers/)
 go build ./...                   # verify compilation
 go run . -data ./data            # start server (default port :8080)
 go run . -data ./data -seed      # seed starter leagues/teams/players then exit
@@ -374,6 +437,44 @@ Branch policy:
 - The developer role is to implement, test, document, and provide commit-ready
   handoff notes. Do not assume push, merge, deploy, or branch-cleanup steps are
   developer-owned unless the Project Manager explicitly delegates them.
+- The Project Manager also owns local learning-journal maintenance in
+  `PROJECT_LOG.log`. After major accepted phases, the PM may add or backfill
+  entries that explain what changed, why it mattered, how the relevant code now
+  works, what stayed intentionally unchanged, and what should be remembered for
+  future work.
+- `PROJECT_LOG.log` may include short code examples for complex patterns. It is
+  local-only teaching material and is not a commit target.
+- Default workflow responsibilities:
+  1. Project Manager creates or switches the named feature branch.
+  2. Developer implements the phase, runs verification, and prepares the review
+     handoff.
+  3. Project Manager reviews the handoff and approves corrections or commit.
+  4. Developer creates the approved commit and reports the hash, staged files,
+     and post-commit status.
+  5. Project Manager pushes the feature branch.
+  6. Project Manager merges the accepted branch into `main`.
+  7. Project Manager pushes `main`.
+  8. Project Manager runs `DEPLOY-STAGING` when deployment is needed.
+  9. Project Manager verifies staging health and closes out the branch.
+  10. Project Manager deletes the merged branch locally and on `origin` unless
+      there is a short-term documented reason to keep it.
+- Strict PM mode is the default. PM directions such as "next", "go ahead", or
+  "keep moving" mean continue only through PM-owned steps unless the PM
+  explicitly asks the same agent to perform Developer work too.
+- Do not treat a clear next coding slice as permission to start implementation.
+  Implementation, code edits, and developer-side verification still require an
+  explicit request to act as Developer.
+- Developer memos should clearly distinguish implementation completion from
+  PM-owned repository or environment steps.
+- Handoff commands:
+  - PM may use `.claude/commands/handoff.md` via `/handoff "branch-name: next task description"`
+    to write `.claude/pending-task.md` as the next-session primer.
+  - Developer may use `.claude/commands/pickup.md` via `/pickup` to load that
+    pending-task file at session start when the developer session is also
+    Claude Code.
+  - If the developer session is in Cursor instead, the PM should still create
+    the handoff file and paste its contents into Cursor manually.
+  - `.claude/pending-task.md` is workflow state, not a commit target.
 
 ## Pending / Planned Work
 
@@ -389,17 +490,19 @@ Roadmap direction check:
 - If a proposed phase does not clearly fit the roadmap's Now or Next sections,
   defer it unless the Project Manager explicitly reprioritizes it.
 
-- **Domain-first migration:** Begin with `rules`; keep frontend/backend domain
-  names aligned and expose small public interfaces.
-- **Season workflow:** Add explicit season teams and rosters, rule snapshots,
-  schedule preview/pushback, match finalization, week close/reopen, and season
-  closing with final standings snapshots.
+- **Domain extraction:** Backend and frontend extraction substantially complete. All
+  handlers delegate to domain services. `web/app.js` is now shell coordination only.
+  Remaining: rule snapshot at activation, any new domains not yet extracted.
+- **Season workflow:** Season teams/rosters, schedule pushback (Phases M/N/O), and
+  week close/reopen are implemented. Remaining: rule snapshot at activation, match
+  finalization, and season closing with final standings snapshots.
 - **Controlled codes and audit:** Design code sets as a whole, use optional
   `notes` for free text, and add one append-only system audit log.
 - **Users and roles:** Keep users separate from players. Review the provisional
   optional one-to-one link and invitation workflow before implementation.
-- **Open design questions:** Track `RULES-Q001`, `PLAYERS-Q001`, `USERS-Q001`,
-  `CODES-Q001`, and `SCHEDULES-Q001` in `doc/architecture-decisions.md`.
+- **Open design questions:** Track `RULES-Q001` and `USERS-Q001` in
+  `doc/architecture-decisions.md`. (`PLAYERS-Q001`, `CODES-Q001`, and
+  `SCHEDULES-Q001` are resolved — see `doc/roadmap.md` Resolved Questions.)
 
 - **Mobile scorekeeping:** The scoresheet entry screen may need a separate mobile-optimized
   view for live scoring at the table. Not yet started.

@@ -4,8 +4,8 @@
 
 **Owner:** `seasons`
 **Status:** `draft`
-**Current version:** `0.3`
-**Last reviewed:** `2026-07-04`
+**Current version:** `0.4`
+**Last reviewed:** `2026-07-18`
 
 The Seasons domain owns setup, activation, league-week workflow, closing,
 reopening, and final standings snapshots.
@@ -79,16 +79,40 @@ for a draft season returns 409 with code `WEEK_CLOSE_SEASON_DRAFT`. The
 schedule page reflects this with a disabled "Review & Close" button and a
 draft-season banner.
 
-## Closing
+## Season-End Clearance
 
-A season cannot close while matches remain unresolved. Each match must be
-completed or receive a controlled resolution. Closing calculates placements,
-requires admin approval, and stores an immutable final standings snapshot.
+Season closing is a future workflow and should be designed before implementation.
+The intended direction is:
 
-Corrections to a closed season require audited reopening, recalculation, review,
-and closing again.
+- All scheduled weeks must be closed before the season can close.
+- Unresolved matches must either remain excluded from official results or receive
+  a controlled admin resolution before final standings are accepted.
+- Final standings and placements must be reviewed by an admin.
+- Closing stores an immutable final standings snapshot.
+- Closing locks schedule changes, roster changes, score edits, handicap apply,
+  and rule edits by default.
+- Corrections require reopening the season through an explicit admin action,
+  recalculating affected results, reviewing the result, and closing again.
+
+Payment status is not part of the app's current close-season requirements. It is
+tracked outside the app for now, but should be brought into the product soon as a
+login reminder or related account-status signal for unpaid players.
+
+Activating a new season does not require the prior active season to be closed.
+The app may eventually warn when an earlier season remains unclosed, but it must
+not silently close or hard-block activation until the season-end workflow is
+implemented.
 
 ## Decision History
+
+### 2026-07-18 - Season close creates a locked final snapshot
+
+**Status:** `accepted`
+
+Season close should create an immutable final standings snapshot and lock
+schedule, roster, score, handicap, and rule changes. Reopening a closed season
+must be an explicit admin action. Activating a new season remains separate from
+closing the previous season.
 
 ### 2026-06-08 - Separate activation and closing
 

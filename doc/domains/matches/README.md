@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.4`
-**Last reviewed:** `2026-07-03`
+**Current version:** `0.5`
+**Last reviewed:** `2026-07-18`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -1008,7 +1008,10 @@ remains draft, or uses another controlled status.
 validation, approval, and the Close Week preview.
 
 **Resolution:** Design the online score-entry workflow before finalizing match
-statuses or calculation-preview behavior.
+statuses or calculation-preview behavior. Current direction: only rostered
+players assigned to the match should be able to submit scores for that match,
+with admin override. Processing individual matchups before the whole night is
+finished is a likely direction, but requires more research.
 
 ### MATCHES-Q003 - Historical warning display
 
@@ -1658,15 +1661,53 @@ only.
 - A dedicated next-week preparation checklist page.
 - Captain-facing lineup submission (requires auth and the online score-entry workflow).
 
-## Week-End Recap (Deferred)
+## Week-End Clearance And Recap
 
-A future week-end recap may summarize what changed when a week closes. Candidate
-content includes handicap changes, team results, team statistics, and links back
-to the official standings/player-stats views. This is deferred until the Close
-Week workflow has more real operational use and the admin-facing recap needs are
-clear.
+Close Week remains the official week-clearance action. There is no separate
+`cleared` state at this time; the state model stays `open` and `closed`.
+
+A week may close even when some scheduled matches have no result. Those missing
+matches should be recorded and shown in the week breakdown as `no_result` or
+`missing`, not as forfeits. Missing matches are excluded from standings and
+player stats until they are later resolved. The weekly breakdown must make that
+clear so an admin can move to the next week without losing visibility into what
+was not played.
+
+The week-end recap should be available immediately after Close Week succeeds and
+also from a closed week card later. The recap should include:
+
+- Match results summary
+- Missing or no-result matches
+- Team record changes
+- Team statistics
+- Player statistics changes
+- Handicap recommendation changes
+- Handicap changes actually applied
+- Warning acknowledgments
+- Next-week readiness signals
+- Links to official standings and player-stats views
+
+Handicap application should remain a separate explicit admin step, but it is
+part of the week-end recap flow. Updated handicaps should be applied for
+completed matches before the next week's scoresheets are printed or used.
+Future online scoring may allow processing individual matchups before the full
+night is finished, but that requires additional workflow research.
+
+Reopening a week after handicap changes were applied should be allowed only
+through an explicit admin action. The exact audit, reversal, and recalculation
+policy is deferred until the broader audit/reopen design exists.
 
 ## Decision History
+
+### 2026-07-18 - Week-end clearance uses Close Week plus recap
+
+**Status:** `accepted`
+
+The app keeps a simple week state model: `open` and `closed`. Closing a week can
+move operations forward even when some matches have no result, as long as those
+matches are recorded in the recap and excluded from standings/player stats until
+resolved. Handicap Apply remains an explicit admin step in the recap flow and
+should happen before next-week scoresheets are used.
 
 ### 2026-07-14 - Next-week readiness is informational, not a close blocker
 

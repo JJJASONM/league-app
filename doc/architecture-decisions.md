@@ -1,7 +1,7 @@
 # League App Architecture Decisions
 
 **Status:** Target design
-**Last reviewed:** 2026-07-14
+**Last reviewed:** 2026-07-18
 
 This document consolidates approved product and architecture decisions. It
 describes the target model, not necessarily the schema currently implemented in
@@ -160,7 +160,7 @@ A schedule pushback:
 - Honors existing No Play dates
 - Extends the season end date
 - Shows all affected matches before approval
-- Creates an audit entry
+- Defers audit entry creation until the audit system exists
 
 ## Match And Week Workflow
 
@@ -212,6 +212,13 @@ Unaffected matches remain locked. Every reopen, change, warning acknowledgment,
 and close is audited. Standings and statistics remain available throughout the
 season and reflect only results committed through successful week close.
 
+Week-end clearance uses Close Week as the official boundary. There is no
+separate `cleared` status at this time. A week can be closed while some matches
+have no result, but those matches are recorded in the week recap and excluded
+from standings and player stats until resolved. Handicap Apply remains a
+separate explicit admin step in the recap flow and should happen before the next
+week's scoresheets are printed or used.
+
 ## Season Closing
 
 Season closing is a separate Admin workflow. It does not happen automatically
@@ -219,15 +226,19 @@ when another season activates.
 
 Closing a season:
 
-- Verifies every match is complete or has a controlled resolution
+- Requires all scheduled weeks to be closed
+- Excludes unresolved matches from official results or requires a controlled
+  admin resolution before final standings are accepted
 - Calculates standings and placements
 - Lets the admin review and approve the results
 - Creates an immutable final standings snapshot
 - Marks the season closed
 - Creates an audit entry
+- Locks schedule, roster, score, handicap, and rule edits
 
-A closed season may be reopened through an audited admin action. Corrections
-require recalculation, review, and closing again.
+A closed season may be reopened through an explicit audited admin action.
+Corrections require recalculation, review, and closing again. Activating a new
+season does not require or silently trigger closing the previous season.
 
 ## Controlled Codes
 
@@ -307,7 +318,11 @@ Review this before authentication is implemented, especially for household
 accounts, guardians, shared emails, and account transfers.
 
 `USERS-Q001` remains open: define email invitation and account activation when
-a user account is created for an existing player.
+a user account is created for an existing player. That design pass must also
+define roles, permissions, route-level authorization, and API access. Most
+clearance and administration workflows default to league-admin or system-admin
+ownership. Future score submission should be tied to rostered players assigned
+to the match, with admin override, rather than a generic scorekeeper role.
 
 ## Open Questions
 
@@ -315,11 +330,11 @@ a user account is created for an existing player.
 | --- | --- | --- |
 | `RULES-Q001` | on hold | How are emergency or mid-season rule amendments handled? |
 | `PLAYERS-Q001` | resolved 2026-07-14 | What fields and handicap value are required for quick-add players? |
-| `USERS-Q001` | open | How does the email invitation and account-linking workflow operate? |
+| `USERS-Q001` | open | How do invitation, account linking, roles, permissions, and API access operate? |
 | `CODES-Q001` | resolved 2026-07-14 | What physical code-table design best supports all approved code sets? |
 | `SCHEDULES-Q001` | resolved 2026-07-13 | Which manual edits are allowed during schedule preview? |
 | `MATCHES-Q001` | on hold | What match status follows completed score entry before week close? |
-| `MATCHES-Q002` | on hold | How will online score entry, permissions, drafts, and review work? |
+| `MATCHES-Q002` | on hold | How will online score entry, permissions, drafts, individual matchup processing, and review work? |
 | `MATCHES-Q003` | open | Where are historical warnings and acknowledgments displayed? |
 
 ## Decision History
@@ -422,3 +437,13 @@ at least one name and a diff rating defaulting to 0, with optional team
 assignment. Duplicate detection, INCOMPLETE profile status, close-week blocking,
 and match-entry integration are deferred until operational use justifies the
 additional backend and UI workflow.
+
+### 2026-07-18 - Sequence clearance before roles and online entry
+
+**Status:** accepted
+
+Week-end and season-end clearance decisions come before roles, permissions, API
+access, the Users screen, and online score entry. Close Week remains the
+week-clearance state boundary, missing/no-result matches are excluded from
+standings until resolved, Handicap Apply stays explicit before next-week
+scoresheets are used, and season close creates a locked final snapshot.

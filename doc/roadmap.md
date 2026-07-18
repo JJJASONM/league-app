@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-07-17
+**Last reviewed:** 2026-07-18
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -17,7 +17,9 @@ Stabilize current admin workflows
 -> finish week-close, standings, and handicap operational workflows
 -> continue domain and data-access restructuring
 -> add controlled codes and season workflow completion
+-> define week-end and season-end clearance
 -> add broader audit/history capabilities later
+-> define roles, permissions, and API access
 -> explore simple browser match-entry prototypes
 -> consider larger user/mobile expansion only after core workflows are stable
 ```
@@ -53,6 +55,26 @@ These items should stay small enough to review and ship independently.
 These are the next build targets after the current workflow foundation is
 stable.
 
+- Week-end clearance and recap.
+  - Treat Close Week as the official week-clearance action; do not add a
+    separate `cleared` state yet.
+  - Support closing a week with missing or no-result matches while excluding
+    those matches from standings and player stats until resolved.
+  - Build or design a recap that shows match results, missing matches, team
+    records, team statistics, player-stat changes, handicap recommendation
+    changes, handicap changes actually applied, warning acknowledgments, and
+    next-week readiness.
+  - Keep Handicap Apply as an explicit recap step before next-week scoresheets
+    are printed or used.
+
+- Season-end clearance discovery.
+  - Define the final-season close workflow before implementation.
+  - Require all scheduled weeks to be closed before season close.
+  - Store immutable final standings and placements.
+  - Lock schedule, roster, score, handicap, and rule edits after close.
+  - Treat paid/unpaid player status as outside the app for now, but plan for a
+    future login reminder or account-status signal.
+
 - Continue backend/domain extraction where workflows are already active.
   - Reduce monolithic handler/shell ownership further.
   - Keep new work inside domain boundaries rather than adding more temporary
@@ -67,20 +89,22 @@ stable.
 These items broaden the workflow foundation after the current admin flows are
 stable.
 
-- Season closing.
-  - Verify all matches are complete or resolved.
-  - Calculate placements.
-  - Store immutable final standings snapshots.
-  - Support audited reopen and recalculation only after the workflow is clearly
-    defined.
-
 - Broader operational polish.
   - Tighten schedule usability.
   - Improve admin review flows around seasons, matches, and lineups.
-  - Consider a week-end recap view showing handicap changes and team statistics
-    after the Close Week workflow is stable in real operation.
   - Address deferred workflow gaps that are already known but not
     architecture-critical.
+
+- Roles, permissions, and API access discovery.
+  - Resolve `USERS-Q001` after week-end and season-end clearance are clear.
+  - Define account linking, invitations, permissions, admin roles, and route
+    authorization.
+  - Treat most clearance/admin operations as league-admin or system-admin
+    actions by default.
+  - For future online score entry, prefer rostered players assigned to the
+    match over a generic scorekeeper role.
+  - Decide how the current API-key bridge evolves into browser login and
+    route-level authorization.
 
 - Player record maintenance.
   - Add duplicate detection for player quick-add after the Phase 1 Players page
@@ -105,19 +129,20 @@ admin workflows are stable.
   - Use it across week close, reopen, handicap apply, roster changes, schedule
     changes, and season close.
 
-- Users, roles, and account invitations.
-  - Resolve `USERS-Q001`.
+- Users screen and account management.
   - Separate player records from authenticated user accounts.
-  - Define account linking, invitations, permissions, and admin roles.
-  - Treat current Handicap Apply personal-key auth as a bridge, not the final
-    auth model.
+  - Implement account linking, invitations, permissions, and admin roles after
+    `USERS-Q001` is resolved.
   - Consider a future Users screen that includes account status and linked
     player/stat context after the users/accounts boundary is designed.
 
 - Online score entry workflow.
   - Resolve `MATCHES-Q002`.
   - Define competing edits, draft saves, permissions, review, and submission.
-  - Decide how captains or scorekeepers authenticate and submit results.
+  - Research whether individual matchups can be processed before the full night
+    is finished.
+  - Current direction: only rostered players assigned to a match can submit that
+    match's scores, with admin override.
 
 - Simple browser-based match-entry prototype.
   - Prototype a lightweight browser match-entry screen.
@@ -223,8 +248,8 @@ follow-up.
 | ID | Area | Question |
 | --- | --- | --- |
 | `RULES-Q001` | Rules | How are emergency or mid-season rule amendments handled? |
-| `USERS-Q001` | Users | How does the invitation and account-linking workflow operate? |
-| `MATCHES-Q002` | Matches | How will online score entry, permissions, drafts, and review work? |
+| `USERS-Q001` | Users | How do invitation, account linking, roles, permissions, and API access operate? |
+| `MATCHES-Q002` | Matches | How will online score entry, permissions, drafts, individual matchup processing, and review work? |
 
 ## Resolved Questions
 
