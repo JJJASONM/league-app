@@ -24,6 +24,8 @@ type stubWeekStore struct {
 	advanceSummaryErr error
 	isDraft           bool
 	isDraftErr        error
+	recapData         matches.WeekRecapData
+	recapDataErr      error
 }
 
 func (s *stubWeekStore) ListWeekSummaries(_ context.Context, _ int64) ([]models.WeekSummary, error) {
@@ -72,6 +74,10 @@ func (s *stubWeekStore) GetWeekValidationData(_ context.Context, _, _ int64) (ma
 
 func (s *stubWeekStore) IsSeasonDraft(_ context.Context, _ int64) (bool, error) {
 	return s.isDraft, s.isDraftErr
+}
+
+func (s *stubWeekStore) GetWeekRecapData(_ context.Context, _, _ int64) (matches.WeekRecapData, error) {
+	return s.recapData, s.recapDataErr
 }
 
 // newTestSvc creates a WeekService backed by the stub store.
@@ -383,5 +389,75 @@ func TestWeekService_AdvancePreview_PopulatesSeasonAndWeek(t *testing.T) {
 	}
 	if preview.WeekNumber != 3 {
 		t.Errorf("want WeekNumber=3, got %d", preview.WeekNumber)
+	}
+}
+
+// --- WeekRecap ---
+
+func TestWeekService_WeekRecap_NotFoundWhenNoMatches(t *testing.T) {
+	store := &stubWeekStore{matchCount: 0}
+	svc := newTestSvc(t, store, nil)
+
+	_, err := svc.WeekRecap(context.Background(), 1, 1)
+
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Category != domainerr.NotFound {
+		t.Errorf("want NotFound domainerr, got %v", err)
+	}
+}
+
+func TestWeekService_WeekRecap_CountsMissingMatches(t *testing.T) {
+	homeID := int64(10)
+	awayID := int64(11)
+	store := &stubWeekStore{
+		matchCount: 1,
+		recapData: matches.WeekRecapData{
+			Status: "closed",
+			Matches: []models.RecapMatchRow{
+				{MatchID: 1, HomeTeamID: &homeID, AwayTeamID: &awayID, HasResult: true},
+				{MatchID: 2, HomeTeamID: &homeID, AwayTeamID: &awayID, HasResult: false},
+			},
+		},
+	}
+	svc := newTestSvc(t, store, nil)
+
+	recap, err := svc.WeekRecap(context.Background(), 1, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recap.MissingCount != 1 {
+		t.Errorf("want MissingCount=1, got %d", recap.MissingCount)
+	}
+	if len(recap.Matches) != 2 {
+		t.Errorf("want 2 matches, got %d", len(recap.Matches))
+	}
+}
+
+func TestWeekService_WeekRecap_PopulatesSeasonAndWeek(t *testing.T) {
+	store := &stubWeekStore{matchCount: 1, recapData: matches.WeekRecapData{Status: "open"}}
+	svc := newTestSvc(t, store, nil)
+
+	recap, err := svc.WeekRecap(context.Background(), 5, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recap.SeasonID != 5 {
+		t.Errorf("want SeasonID=5, got %d", recap.SeasonID)
+	}
+	if recap.WeekNumber != 2 {
+		t.Errorf("want WeekNumber=2, got %d", recap.WeekNumber)
+	}
+}
+
+func TestWeekService_WeekRecap_AcksNilBecomesEmptySlice(t *testing.T) {
+	store := &stubWeekStore{matchCount: 1, acks: nil}
+	svc := newTestSvc(t, store, nil)
+
+	recap, err := svc.WeekRecap(context.Background(), 1, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recap.Acknowledgments == nil {
+		t.Error("want non-nil Acknowledgments slice, got nil")
 	}
 }

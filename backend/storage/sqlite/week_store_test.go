@@ -498,3 +498,76 @@ func TestWeekStore_GetWeekAdvanceSummary_NextWeekDetected(t *testing.T) {
 		t.Errorf("want NextWeek.MatchCount=1, got %d", summary.NextWeek.MatchCount)
 	}
 }
+
+// --- GetWeekRecapData ---
+
+func TestWeekStore_GetWeekRecapData_OpenStatusWhenNoLeagueWeeksRow(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data.Status != matches.WeekStatusOpen {
+		t.Errorf("want status=%q when no league_weeks row, got %q", matches.WeekStatusOpen, data.Status)
+	}
+	if len(data.Matches) != 1 {
+		t.Fatalf("want 1 match, got %d", len(data.Matches))
+	}
+}
+
+func TestWeekStore_GetWeekRecapData_HasResultWhenCompleted(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Matches) != 1 {
+		t.Fatalf("want 1 match, got %d", len(data.Matches))
+	}
+	if !data.Matches[0].HasResult {
+		t.Error("want HasResult=true when completed=1")
+	}
+}
+
+func TestWeekStore_GetWeekRecapData_NoResultWhenNotCompleted(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Matches) != 1 {
+		t.Fatalf("want 1 match, got %d", len(data.Matches))
+	}
+	if data.Matches[0].HasResult {
+		t.Error("want HasResult=false when completed=0")
+	}
+}
+
+func TestWeekStore_GetWeekRecapData_ClosedStatusAfterClose(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	store.CloseWeek(context.Background(), seasonID, 1, nil)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data.Status != matches.WeekStatusClosed {
+		t.Errorf("want status=%q after close, got %q", matches.WeekStatusClosed, data.Status)
+	}
+	if data.ClosedAt == nil {
+		t.Error("want non-nil ClosedAt after close")
+	}
+}

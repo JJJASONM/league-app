@@ -394,6 +394,40 @@ type AdvanceResult struct {
 	Handicap       AdvancePreviewHandicap    `json:"handicap"`
 }
 
+// RecapMatchRow is one match entry in a week-end recap.
+// HasResult is true when completed=1 (scores were entered). Set and game counts
+// are 0 when HasResult is false. TeamIDs are nil for unassigned matches.
+type RecapMatchRow struct {
+	MatchID      int64   `json:"match_id"`
+	HomeTeamID   *int64  `json:"home_team_id"`
+	HomeTeamName string  `json:"home_team_name,omitempty"`
+	AwayTeamID   *int64  `json:"away_team_id"`
+	AwayTeamName string  `json:"away_team_name,omitempty"`
+	MatchDate    *string `json:"match_date,omitempty"`
+	HasResult    bool    `json:"has_result"`
+	HomeSetsWon  int     `json:"home_sets_won"`
+	AwaySetsWon  int     `json:"away_sets_won"`
+	HomeGamesWon int     `json:"home_games_won"`
+	AwayGamesWon int     `json:"away_games_won"`
+}
+
+// WeekRecap is the response for GET /api/seasons/{id}/weeks/{week}/recap.
+// Read-only; no data is modified by this endpoint.
+// Acknowledgments, next-week readiness, and handicap sections are included
+// so the frontend requires no additional requests to render the recap view.
+type WeekRecap struct {
+	SeasonID        int64                   `json:"season_id"`
+	WeekNumber      int                     `json:"week_number"`
+	Status          string                  `json:"status"`
+	ClosedAt        *string                 `json:"closed_at,omitempty"`
+	Matches         []RecapMatchRow         `json:"matches"`
+	MissingCount    int                     `json:"missing_count"`
+	Acknowledgments []CloseAck              `json:"acknowledgments"`
+	NextWeekNumber  *int                    `json:"next_week_number,omitempty"`
+	NextWeek        *AdvancePreviewNextWeek `json:"next_week,omitempty"`
+	Handicap        AdvancePreviewHandicap  `json:"handicap"`
+}
+
 // SaveRoundsRequest is the body for POST /api/matches/{id}/rounds.
 type SaveRoundsRequest struct {
 	Rounds []RoundResult `json:"rounds"`

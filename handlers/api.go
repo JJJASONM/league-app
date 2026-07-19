@@ -294,6 +294,9 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/advance-preview", func(w http.ResponseWriter, r *http.Request) {
 			getAdvancePreview(w, r, weekMgr)
 		})
+		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/recap", func(w http.ResponseWriter, r *http.Request) {
+			recapWeekHandler(w, r, weekMgr)
+		})
 	}
 	hcSvc := deps.HandicapSvc
 	mux.HandleFunc("GET /api/seasons/{id}/handicap-recommendations", func(w http.ResponseWriter, r *http.Request) {
@@ -1547,6 +1550,31 @@ func getAdvancePreview(w http.ResponseWriter, r *http.Request, mgr WeekManager) 
 		return
 	}
 	jsonOK(w, preview)
+}
+
+func recapWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	weekNum, err := pathID(r, "week")
+	if err != nil {
+		jsonError(w, "invalid week", 400)
+		return
+	}
+
+	recap, err := mgr.WeekRecap(r.Context(), seasonID, weekNum)
+	if err != nil {
+		var de *domainerr.Err
+		if errors.As(err, &de) && de.Category == domainerr.NotFound {
+			jsonError(w, de.Message, http.StatusNotFound)
+		} else {
+			jsonError(w, err.Error(), 500)
+		}
+		return
+	}
+	jsonOK(w, recap)
 }
 
 // --- Handicap Review ---------------------------------------------------------

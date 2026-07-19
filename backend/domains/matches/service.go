@@ -219,6 +219,67 @@ func (s *WeekService) AdvanceData(ctx context.Context, seasonID, weekNum int64) 
 	}, nil
 }
 
+// WeekRecap assembles the full week-end recap for a season/week.
+// Returns domainerr.NotFound (404) when no matches exist for the week.
+// The recap includes match summaries, missing-match count, warning acknowledgments,
+// next-week readiness, and a handicap method/status section. All data is read-only.
+func (s *WeekService) WeekRecap(ctx context.Context, seasonID, weekNum int64) (models.WeekRecap, error) {
+	count, err := s.store.WeekMatchCount(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.WeekRecap{}, fmt.Errorf("week recap: %w", err)
+	}
+	if count == 0 {
+		return models.WeekRecap{}, domainerr.New("WEEK_NOT_FOUND", domainerr.NotFound,
+			"week not found: no matches for this season and week")
+	}
+
+	data, err := s.store.GetWeekRecapData(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.WeekRecap{}, fmt.Errorf("week recap: match data: %w", err)
+	}
+
+	advance, err := s.store.GetWeekAdvanceSummary(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.WeekRecap{}, fmt.Errorf("week recap: advance summary: %w", err)
+	}
+
+	acks, err := s.store.ListAcknowledgments(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.WeekRecap{}, fmt.Errorf("week recap: acknowledgments: %w", err)
+	}
+	if acks == nil {
+		acks = []models.CloseAck{}
+	}
+
+	var hc models.AdvancePreviewHandicap
+	if s.hcPreview != nil {
+		hc, err = s.hcPreview.HandicapPreview(ctx, seasonID)
+		if err != nil {
+			return models.WeekRecap{}, fmt.Errorf("week recap: handicap preview: %w", err)
+		}
+	}
+
+	missingCount := 0
+	for _, m := range data.Matches {
+		if !m.HasResult {
+			missingCount++
+		}
+	}
+
+	return models.WeekRecap{
+		SeasonID:        seasonID,
+		WeekNumber:      int(weekNum),
+		Status:          data.Status,
+		ClosedAt:        data.ClosedAt,
+		Matches:         data.Matches,
+		MissingCount:    missingCount,
+		Acknowledgments: acks,
+		NextWeekNumber:  advance.NextWeekNumber,
+		NextWeek:        advance.NextWeek,
+		Handicap:        hc,
+	}, nil
+}
+
 // AdvancePreview builds the full advance-preview response for a season/week.
 // Returns domainerr.NotFound (404) when no matches exist for the week.
 // Called from the getAdvancePreview handler.

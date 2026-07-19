@@ -1697,6 +1697,108 @@ Reopening a week after handicap changes were applied should be allowed only
 through an explicit admin action. The exact audit, reversal, and recalculation
 policy is deferred until the broader audit/reopen design exists.
 
+## Week-End Recap Phase A -- Read-Only Recap Endpoint (implemented 2026-07-18)
+
+### Goal
+
+Provide a single read-only endpoint that assembles the full week-end recap
+without requiring multiple client round-trips. The recap is available
+immediately after Close Week and from any closed (or open) week card.
+
+### Endpoint
+
+```
+GET /api/seasons/{id}/weeks/{week}/recap
+```
+
+- Read-only; no rows are inserted, updated, or deleted.
+- Returns 404 when no matches exist for the season/week.
+- Returns 200 with the recap object for both open and closed weeks.
+
+### Response shape
+
+```jsonc
+{
+  "season_id":    3,
+  "week_number":  1,
+  "status":       "closed",
+  "closed_at":    "2026-07-14T10:00:00Z",
+  "matches": [
+    {
+      "match_id":       42,
+      "home_team_id":   1,
+      "home_team_name": "Team A",
+      "away_team_id":   2,
+      "away_team_name": "Team B",
+      "match_date":     "2026-07-14",
+      "has_result":     true,
+      "home_sets_won":  3,
+      "away_sets_won":  0,
+      "home_games_won": 9,
+      "away_games_won": 4
+    }
+  ],
+  "missing_count":     0,
+  "acknowledgments":   [...],    // same shape as /acknowledgments endpoint
+  "next_week_number":  2,
+  "next_week":         { ... },  // same shape as advance-preview next_week
+  "handicap":          { ... }   // same shape as advance-preview handicap
+}
+```
+
+`closed_at` is omitted when the week is open. `next_week_number` and `next_week`
+are omitted when no further weeks are scheduled. Team IDs are null for unassigned
+matches. Team names prefer `season_teams.season_name`; fall back to `teams.name`
+for legacy seasons.
+
+### Response sections
+
+| Section | Description |
+|---------|-------------|
+| `status` / `closed_at` | Week open/closed state and timestamp |
+| `matches` | One entry per scheduled match with home/away set and game counts |
+| `has_result` | True when `matches.completed = 1` (scores were entered and saved) |
+| `missing_count` | Count of match rows where `has_result = false` |
+| `acknowledgments` | All `week_close_acknowledgments` rows for this week (same as `/acknowledgments` endpoint) |
+| `next_week_number` / `next_week` | Next-week readiness signals (same as advance-preview) |
+| `handicap` | Handicap method, status, and recommendations (same as advance-preview) |
+
+### Backend placement
+
+`WeekRecap` is a method on `WeekService` (not a separate manager). This is
+consistent with `AdvancePreview`, which also assembles a multi-section read-only
+response from existing store calls.
+
+`GetWeekRecapData` is a new `WeekStore` method that runs a single GROUP BY
+query joining `matches`, `match_results`, `season_teams`, and `teams`. It
+aggregates home/away set and game counts per match in one pass.
+
+The response reuses three existing store calls (`WeekMatchCount`,
+`GetWeekAdvanceSummary`, `ListAcknowledgments`) and the `HandicapPreviewer`
+interface -- no new network requests are needed from the client.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `models/models.go` | `RecapMatchRow`, `WeekRecap` structs |
+| `backend/domains/matches/store.go` | `WeekRecapData` type; `GetWeekRecapData` added to `WeekStore` interface |
+| `backend/domains/matches/service.go` | `WeekRecap` method on `WeekService` |
+| `backend/domains/matches/service_test.go` | `GetWeekRecapData` stub; 4 `WeekService_WeekRecap` tests |
+| `backend/storage/sqlite/week_store.go` | `GetWeekRecapData` SQLite implementation |
+| `backend/storage/sqlite/week_store_test.go` | 4 `GetWeekRecapData` integration tests |
+| `handlers/deps.go` | `WeekRecap` added to `WeekManager` interface |
+| `handlers/api.go` | Route `GET /api/seasons/{id}/weeks/{week}/recap`; `recapWeekHandler` |
+| `handlers/api_weeks_test.go` | `weekGetRecap` helper; 3 `TestRecapWeek_*` tests |
+
+### Deferred (not in Phase A)
+
+- Player-level stat deltas (sets and games per player this week)
+- Handicap changes actually applied (from `handicap_history`)
+- Frontend recap UI (week card component, recap modal or panel)
+- Persisted recap snapshots
+- Audit writes for recap views
+
 ## Decision History
 
 ### 2026-07-18 - Week-end clearance uses Close Week plus recap

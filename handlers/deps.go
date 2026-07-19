@@ -61,6 +61,7 @@ type WeekManager interface {
 	ListAcknowledgments(ctx context.Context, seasonID, weekNum int64) ([]models.CloseAck, error)
 	AdvanceData(ctx context.Context, seasonID, weekNum int64) (models.AdvanceResult, error)
 	AdvancePreview(ctx context.Context, seasonID, weekNum int64) (models.AdvancePreview, error)
+	WeekRecap(ctx context.Context, seasonID, weekNum int64) (models.WeekRecap, error)
 }
 
 // RoundManager is the subset of matches.RoundService used by the round/standings/stats handlers.

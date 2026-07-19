@@ -90,4 +90,16 @@ type WeekStore interface {
 	// (active=0 AND activated_at IS NULL). Returns false, nil when the
 	// season does not exist.
 	IsSeasonDraft(ctx context.Context, seasonID int64) (bool, error)
+
+	// GetWeekRecapData returns match summaries and week status for the recap.
+	// Team names prefer season_teams.season_name; falls back to teams.name for
+	// legacy seasons. HasResult is true when the match has completed=1.
+	GetWeekRecapData(ctx context.Context, seasonID, weekNum int64) (WeekRecapData, error)
+}
+
+// WeekRecapData holds match summaries and week status for the week-end recap.
+type WeekRecapData struct {
+	Status   string
+	ClosedAt *string
+	Matches  []models.RecapMatchRow
 }

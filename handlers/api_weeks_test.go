@@ -1279,6 +1279,15 @@ func weekGetAdvancePreview(t *testing.T, srvURL string, sid int64, weekNum int) 
 	return resp
 }
 
+func weekGetRecap(t *testing.T, srvURL string, sid int64, weekNum int) *http.Response {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/weeks/%d/recap", srvURL, sid, weekNum))
+	if err != nil {
+		t.Fatalf("weekGetRecap: %v", err)
+	}
+	return resp
+}
+
 func TestAdvancePreview_NotFound(t *testing.T) {
 	f := weekTestSeed(t)
 	resp := weekGetAdvancePreview(t, f.srv.URL, f.sid, 99)
@@ -1635,6 +1644,69 @@ func TestAdvancePreview_ResponseIncludesCurrentWeekAndHandicap(t *testing.T) {
 	}
 	if _, ok := preview["handicap"]; !ok {
 		t.Error("handicap must be present in advance-preview response")
+	}
+}
+
+// --- Recap Week ---
+
+func TestRecapWeek_NotFoundWhenNoMatches(t *testing.T) {
+	f := weekTestSeed(t)
+	resp := weekGetRecap(t, f.srv.URL, f.sid, 99)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("week with no matches must return 404, got %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestRecapWeek_OpenStatusForUnclosedWeek(t *testing.T) {
+	f := weekTestSeed(t)
+	resp := weekGetRecap(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, b)
+	}
+	var recap map[string]any
+	json.NewDecoder(resp.Body).Decode(&recap)
+	if recap["status"] != "open" {
+		t.Errorf("want status=open for unclosed week, got %v", recap["status"])
+	}
+	matches, _ := recap["matches"].([]any)
+	if len(matches) != 1 {
+		t.Errorf("want 1 match in recap, got %d", len(matches))
+	}
+}
+
+func TestRecapWeek_ClosedStatusAndMissingCount(t *testing.T) {
+	f := weekTestSeed(t)
+	// Close the week without entering results (match remains incomplete).
+	// The seeded match has no round results, so it will block close via validation.
+	// Instead, seed a valid round and close properly.
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+
+	resp := weekGetRecap(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200 after close, got %d: %s", resp.StatusCode, b)
+	}
+	var recap map[string]any
+	json.NewDecoder(resp.Body).Decode(&recap)
+	if recap["status"] != "closed" {
+		t.Errorf("want status=closed after CloseWeek, got %v", recap["status"])
+	}
+	// The one match has a result (completed=1 after seedRoundResult).
+	missing, _ := recap["missing_count"].(float64)
+	if int(missing) != 0 {
+		t.Errorf("want missing_count=0 when all matches have results, got %v", missing)
+	}
+	if _, ok := recap["acknowledgments"]; !ok {
+		t.Error("acknowledgments must be present in recap response")
+	}
+	if _, ok := recap["handicap"]; !ok {
+		t.Error("handicap must be present in recap response")
 	}
 }
 

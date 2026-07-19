@@ -450,6 +450,104 @@ func (s *WeekStore) GetWeekValidationData(ctx context.Context, seasonID, weekNum
 	return result, nil
 }
 
+// GetWeekRecapData returns match summaries and week status for the week-end recap.
+// Team names prefer season_teams.season_name; falls back to teams.name for legacy seasons.
+// HasResult is true when the match has completed=1.
+func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int64) (matches.WeekRecapData, error) {
+	var status string
+	var closedAt *string
+	switch err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(status, ?), closed_at FROM league_weeks
+		WHERE season_id=? AND week_number=?`,
+		matches.WeekStatusOpen, seasonID, weekNum).Scan(&status, &closedAt); err {
+	case nil:
+	case sql.ErrNoRows:
+		status = matches.WeekStatusOpen
+	default:
+		return matches.WeekRecapData{}, fmt.Errorf("get week recap data: week status: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+		    m.id,
+		    m.home_team_id,
+		    COALESCE(hst.season_name, ht.name, '') AS home_team_name,
+		    m.away_team_id,
+		    COALESCE(ast.season_name, awt.name, '') AS away_team_name,
+		    strftime('%Y-%m-%d', m.match_date) AS match_date,
+		    m.completed,
+		    COALESCE(SUM(CASE WHEN mr.team_id = m.home_team_id THEN mr.sets_won ELSE 0 END), 0) AS home_sets_won,
+		    COALESCE(SUM(CASE WHEN mr.team_id = m.away_team_id THEN mr.sets_won ELSE 0 END), 0) AS away_sets_won,
+		    COALESCE(SUM(CASE WHEN mr.team_id = m.home_team_id THEN mr.games_won ELSE 0 END), 0) AS home_games_won,
+		    COALESCE(SUM(CASE WHEN mr.team_id = m.away_team_id THEN mr.games_won ELSE 0 END), 0) AS away_games_won
+		FROM matches m
+		LEFT JOIN season_teams hst ON hst.season_id = m.season_id AND hst.team_id = m.home_team_id
+		LEFT JOIN teams ht ON ht.id = m.home_team_id
+		LEFT JOIN season_teams ast ON ast.season_id = m.season_id AND ast.team_id = m.away_team_id
+		LEFT JOIN teams awt ON awt.id = m.away_team_id
+		LEFT JOIN match_results mr ON mr.match_id = m.id
+		WHERE m.season_id = ? AND m.week_number = ?
+		GROUP BY m.id
+		ORDER BY m.id`, seasonID, weekNum)
+	if err != nil {
+		return matches.WeekRecapData{}, fmt.Errorf("get week recap data: matches: %w", err)
+	}
+	defer rows.Close()
+
+	matchRows := []models.RecapMatchRow{}
+	for rows.Next() {
+		var (
+			mid                                    int64
+			homeID                                 sql.NullInt64
+			homeName                               string
+			awayID                                 sql.NullInt64
+			awayName                               string
+			matchDate                              sql.NullString
+			completed                              int
+			homeSets, awaySets, homeGames, awayGames int
+		)
+		if err := rows.Scan(
+			&mid, &homeID, &homeName, &awayID, &awayName,
+			&matchDate, &completed,
+			&homeSets, &awaySets, &homeGames, &awayGames,
+		); err != nil {
+			return matches.WeekRecapData{}, fmt.Errorf("get week recap data: scan: %w", err)
+		}
+		row := models.RecapMatchRow{
+			MatchID:      mid,
+			HomeTeamName: homeName,
+			AwayTeamName: awayName,
+			HasResult:    completed == 1,
+			HomeSetsWon:  homeSets,
+			AwaySetsWon:  awaySets,
+			HomeGamesWon: homeGames,
+			AwayGamesWon: awayGames,
+		}
+		if homeID.Valid {
+			v := homeID.Int64
+			row.HomeTeamID = &v
+		}
+		if awayID.Valid {
+			v := awayID.Int64
+			row.AwayTeamID = &v
+		}
+		if matchDate.Valid && matchDate.String != "" {
+			dateStr := matchDate.String
+			row.MatchDate = &dateStr
+		}
+		matchRows = append(matchRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return matches.WeekRecapData{}, fmt.Errorf("get week recap data: rows: %w", err)
+	}
+
+	return matches.WeekRecapData{
+		Status:   status,
+		ClosedAt: closedAt,
+		Matches:  matchRows,
+	}, nil
+}
+
 // IsSeasonDraft reports whether the season is in draft state
 // (active=0 AND activated_at IS NULL).
 func (s *WeekStore) IsSeasonDraft(ctx context.Context, seasonID int64) (bool, error) {
