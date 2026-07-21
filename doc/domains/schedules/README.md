@@ -4,8 +4,8 @@
 
 **Owner:** `schedules`
 **Status:** `draft`
-**Current version:** `0.4`
-**Last reviewed:** `2026-07-17`
+**Current version:** `0.5`
+**Last reviewed:** `2026-07-19`
 
 The Schedules domain generates, previews, adjusts, and shifts season schedules.
 It applies scheduling rules but does not define their meaning.
@@ -232,6 +232,57 @@ Default collapse state at season load:
 Collapse state persists across same-season refreshes (after close, reopen, or
 assign). State resets to defaults when the season selector changes or when a
 different season is loaded via loadForSeason().
+
+## Week-End Recap UI (implemented 2026-07-19)
+
+### Goal
+
+Let admins review a week-end recap from the Schedule page without calling the
+API directly. Consumes the read-only Phase A backend endpoint:
+`GET /api/seasons/{id}/weeks/{week}/recap`
+
+### Behavior
+
+Each week card header gains a **Recap** button (icon: `bi-clipboard2-data`).
+The button is available for all weeks (both open and closed) since the endpoint
+supports both states.
+
+Clicking **Recap**:
+
+1. If the week card body is collapsed, it is expanded first.
+2. A recap panel is toggled inside the card body, below the match table and
+   prior-ack section.
+3. The panel is loaded on first open and cached for subsequent toggles within
+   the same schedule render.
+4. Clicking **Recap** again collapses the panel without re-fetching.
+
+The panel shows:
+
+| Section | Content |
+|---------|---------|
+| Status badge + closed_at | Week open/closed state and formatted close date when present |
+| Match summaries table | Home / sets / away / games columns; "No result" badge for matches with `has_result=false` |
+| Missing-result warning | Alert when `missing_count > 0` |
+| Acknowledgments note | Count of warnings acknowledged at close |
+| Next-week readiness | Week number, match count, unassigned/missing-lineup warnings or "Ready" |
+| Handicap note | `handicap.message` from the recap response |
+
+Close Week behavior, the Reopen button, and all other week-card controls are
+unchanged.
+
+### Implementation
+
+| File | Change |
+|------|--------|
+| `web/domains/schedules/schedule-api-service.js` | `fetchWeekRecap(seasonId, weekNum)` added |
+| `web/domains/schedules/schedule-page-component.js` | Import `fetchWeekRecap`; `data-action="view-week-recap"` case in click delegation; `#toggleWeekRecap` and `#renderRecapPanel` private methods; Recap button and recap panel added to `#renderWeekCard` |
+
+### Deferred
+
+- Player-level stat deltas in the recap panel
+- Handicap changes applied (from `handicap_history`)
+- Recap panel accessible from outside the Schedule page (e.g., a dedicated recap route)
+- Print/export of the recap panel
 
 ## Questions
 

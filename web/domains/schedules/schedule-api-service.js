@@ -20,6 +20,10 @@ export async function fetchWeekAcknowledgments(seasonId, weekNum) {
   return api('GET', `/seasons/${seasonId}/weeks/${weekNum}/acknowledgments`);
 }
 
+export async function fetchWeekRecap(seasonId, weekNum) {
+  return api('GET', `/seasons/${seasonId}/weeks/${weekNum}/recap`);
+}
+
 export async function closeWeek(seasonId, weekNum, body) {
   return api('POST', `/seasons/${seasonId}/weeks/${weekNum}/close`, body);
 }

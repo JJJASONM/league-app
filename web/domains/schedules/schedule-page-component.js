@@ -14,6 +14,7 @@ import {
   fetchWeekValidation,
   fetchAdvancePreview,
   fetchWeekAcknowledgments,
+  fetchWeekRecap,
   closeWeek,
   reopenWeek,
   assignMatchTeams,
@@ -220,6 +221,14 @@ class SchedulePage extends HTMLElement {
         } else {
           container.classList.add('d-none');
         }
+        return;
+      }
+
+      const recapBtn = e.target.closest('[data-action="view-week-recap"]');
+      if (recapBtn) {
+        const sid = parseInt(this.querySelector('.sp-season-sel')?.value, 10);
+        this.#toggleWeekRecap(sid, parseInt(recapBtn.dataset.weekNum, 10));
+        return;
       }
     });
 
@@ -414,6 +423,8 @@ class SchedulePage extends HTMLElement {
     const ackSection = ackCount > 0
       ? `<div class="px-3 pb-2 d-none" id="week-acks-${w}" data-loaded="0"></div>`
       : '';
+    const recapToggleBtn = '<button class="btn btn-link btn-sm py-0 ms-1 text-secondary" data-action="view-week-recap" data-week-num="' + w + '" title="View week recap"><i class="bi bi-clipboard2-data"></i> Recap</button>';
+    const recapSection   = '<div class="d-none" id="week-recap-' + w + '" data-loaded="0"></div>';
 
     const isCollapsed = this.#collapsedWeeks.has(w);
     const chevron     = isCollapsed ? 'bi-chevron-right' : 'bi-chevron-down';
@@ -439,7 +450,7 @@ class SchedulePage extends HTMLElement {
           <button class="btn btn-link btn-sm p-0 text-secondary" data-action="toggle-week-collapse" data-week-num="${w}" title="Collapse/expand"><i class="bi ${chevron}"></i></button>
           Week ${w} - ${fmtDate(weekMatches[0].match_date)}
         </span>
-        <span class="d-flex align-items-center">${countBadge}${statusChip}${ackToggle}${closeBtn}</span>
+        <span class="d-flex align-items-center">${countBadge}${statusChip}${ackToggle}${recapToggleBtn}${closeBtn}</span>
       </div>
       <div class="card-body p-0${isCollapsed ? ' d-none' : ''}" id="week-body-${w}">
         <table class="table table-sm mb-0" style="table-layout:fixed">
@@ -463,6 +474,7 @@ class SchedulePage extends HTMLElement {
           </tbody>
         </table>
         ${ackSection}
+        ${recapSection}
       </div>
     </div>`;
   }
@@ -492,6 +504,116 @@ class SchedulePage extends HTMLElement {
     } catch (_) {
       container.innerHTML = '<p class="text-danger small mb-0">Failed to load acknowledgment history.</p>';
     }
+  }
+
+  async #toggleWeekRecap(seasonId, weekNum) {
+    const w    = String(weekNum);
+    const body = this.querySelector('#week-body-' + w);
+    if (body && body.classList.contains('d-none')) {
+      this.#collapsedWeeks.delete(w);
+      body.classList.remove('d-none');
+      const colBtn = this.querySelector('[data-action="toggle-week-collapse"][data-week-num="' + w + '"]');
+      if (colBtn) colBtn.querySelector('i').className = 'bi bi-chevron-down';
+    }
+    const container = this.querySelector('#week-recap-' + w);
+    if (!container) return;
+    if (container.classList.contains('d-none')) {
+      container.classList.remove('d-none');
+      if (container.dataset.loaded !== '1') {
+        container.innerHTML = '<div class="px-3 pb-2 text-muted small">Loading recap...</div>';
+        try {
+          const recap = await fetchWeekRecap(seasonId, weekNum);
+          container.dataset.loaded = '1';
+          container.innerHTML = this.#renderRecapPanel(recap);
+        } catch (_) {
+          container.innerHTML = '<div class="px-3 pb-2 text-danger small">Failed to load recap.</div>';
+        }
+      }
+    } else {
+      container.classList.add('d-none');
+    }
+  }
+
+  #renderRecapPanel(recap) {
+    const isClosed   = recap.status === WEEK_STATUS_CLOSED;
+    const statusBadge = isClosed
+      ? '<span class="badge bg-success ms-1">Closed</span>'
+      : '<span class="badge bg-secondary ms-1">Open</span>';
+    const closedAt = recap.closed_at
+      ? ' <span class="text-muted small">' + esc(fmtDate(recap.closed_at)) + '</span>'
+      : '';
+
+    const matchRows = (recap.matches || []).map(m => {
+      const hName = esc(m.home_team_name || '(unassigned)');
+      const aName = esc(m.away_team_name || '(unassigned)');
+      if (!m.has_result) {
+        return '<tr class="text-muted fst-italic">'
+          + '<td>' + hName + '</td>'
+          + '<td class="text-center">vs</td>'
+          + '<td>' + aName + '</td>'
+          + '<td><span class="badge bg-secondary">No result</span></td>'
+          + '</tr>';
+      }
+      return '<tr>'
+        + '<td>' + hName + '</td>'
+        + '<td class="text-center text-muted">' + esc(String(m.home_sets_won)) + '-' + esc(String(m.away_sets_won)) + '</td>'
+        + '<td>' + aName + '</td>'
+        + '<td class="text-muted small">' + esc(String(m.home_games_won)) + '-' + esc(String(m.away_games_won)) + ' games</td>'
+        + '</tr>';
+    }).join('');
+
+    const missingNote = recap.missing_count > 0
+      ? '<div class="alert alert-warning py-1 mb-2 small"><i class="bi bi-exclamation-triangle me-1"></i>'
+        + esc(String(recap.missing_count)) + ' match' + (recap.missing_count !== 1 ? 'es have' : ' has')
+        + ' no result recorded.</div>'
+      : '';
+
+    const ackCount = Array.isArray(recap.acknowledgments) ? recap.acknowledgments.length : 0;
+    const ackNote  = ackCount > 0
+      ? '<p class="small text-muted mb-1"><i class="bi bi-clock-history me-1"></i>'
+        + esc(String(ackCount)) + ' warning' + (ackCount !== 1 ? 's' : '') + ' acknowledged at close.</p>'
+      : '';
+
+    let nextNote = '';
+    if (recap.next_week_number) {
+      const nw    = recap.next_week || {};
+      const parts = [];
+      if (nw.unassigned_count > 0) {
+        parts.push('<span class="text-warning">' + esc(String(nw.unassigned_count)) + ' unassigned</span>');
+      }
+      if (nw.missing_lineup_team_ids && nw.missing_lineup_team_ids.length > 0) {
+        parts.push('<span class="text-warning">' + esc(String(nw.missing_lineup_team_ids.length)) + ' missing lineup</span>');
+      }
+      const readiness = parts.length ? parts.join(' &middot; ') : '<span class="text-success">Ready</span>';
+      nextNote = '<p class="small text-muted mb-1"><i class="bi bi-arrow-right-circle me-1"></i>Week '
+        + esc(String(recap.next_week_number)) + ': '
+        + esc(String(nw.match_count || 0)) + ' match' + ((nw.match_count || 0) !== 1 ? 'es' : '')
+        + ' &middot; ' + readiness + '</p>';
+    }
+
+    const hcNote = (recap.handicap && recap.handicap.message)
+      ? '<p class="small text-muted mb-0"><i class="bi bi-graph-up me-1"></i>'
+        + esc(recap.handicap.message) + '</p>'
+      : '';
+
+    return '<div class="px-3 py-2 border-top">'
+      + '<div class="d-flex align-items-center gap-1 mb-2">'
+      + '<span class="fw-semibold small">Week Recap</span>'
+      + statusBadge + closedAt
+      + '</div>'
+      + missingNote
+      + '<table class="table table-sm table-borderless small mb-2"><thead><tr>'
+      + '<th class="text-muted fw-normal">Home</th>'
+      + '<th class="text-muted fw-normal text-center">Sets</th>'
+      + '<th class="text-muted fw-normal">Away</th>'
+      + '<th class="text-muted fw-normal">Games</th>'
+      + '</tr></thead><tbody>'
+      + matchRows
+      + '</tbody></table>'
+      + ackNote
+      + nextNote
+      + hcNote
+      + '</div>';
   }
 
   #renderHandicapRecs(hc) {
