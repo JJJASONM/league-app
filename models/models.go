@@ -411,6 +411,20 @@ type RecapMatchRow struct {
 	AwayGamesWon int     `json:"away_games_won"`
 }
 
+// RecapPlayerStat is one player's stat totals for a week in a week-end recap.
+// Derived from match_results joined to matches by season_id and week_number.
+// No schema changes are required; all fields come from existing columns.
+type RecapPlayerStat struct {
+	PlayerID   int64   `json:"player_id"`
+	PlayerName string  `json:"player_name"`
+	TeamName   string  `json:"team_name,omitempty"`
+	SetsWon    int     `json:"sets_won"`
+	SetsLost   int     `json:"sets_lost"`
+	GamesWon   int     `json:"games_won"`
+	GamesLost  int     `json:"games_lost"`
+	Diff       float64 `json:"diff"`
+}
+
 // WeekRecap is the response for GET /api/seasons/{id}/weeks/{week}/recap.
 // Read-only; no data is modified by this endpoint.
 // Acknowledgments, next-week readiness, and handicap sections are included
@@ -422,6 +436,7 @@ type WeekRecap struct {
 	ClosedAt        *string                 `json:"closed_at,omitempty"`
 	Matches         []RecapMatchRow         `json:"matches"`
 	MissingCount    int                     `json:"missing_count"`
+	PlayerStats     []RecapPlayerStat       `json:"player_stats"`
 	Acknowledgments []CloseAck              `json:"acknowledgments"`
 	NextWeekNumber  *int                    `json:"next_week_number,omitempty"`
 	NextWeek        *AdvancePreviewNextWeek `json:"next_week,omitempty"`

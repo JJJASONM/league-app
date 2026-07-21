@@ -548,6 +548,53 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 	}, nil
 }
 
+// GetWeekPlayerStats returns per-player stat totals derived from match_results
+// for the given season/week. Player name comes from the players table. Team name
+// prefers season_teams.season_name and falls back to teams.name for legacy seasons.
+// Returns a non-nil empty slice when no match_results rows exist for the week.
+func (s *WeekStore) GetWeekPlayerStats(ctx context.Context, seasonID, weekNum int64) ([]models.RecapPlayerStat, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+		    p.id,
+		    TRIM(p.first_name || ' ' || p.last_name) AS player_name,
+		    COALESCE(st.season_name, t.name, '') AS team_name,
+		    COALESCE(SUM(mr.sets_won), 0),
+		    COALESCE(SUM(mr.sets_lost), 0),
+		    COALESCE(SUM(mr.games_won), 0),
+		    COALESCE(SUM(mr.games_lost), 0),
+		    COALESCE(SUM(mr.diff), 0)
+		FROM match_results mr
+		JOIN matches m ON m.id = mr.match_id
+		JOIN players p ON p.id = mr.player_id
+		LEFT JOIN teams t ON t.id = mr.team_id
+		LEFT JOIN season_teams st ON st.season_id = m.season_id AND st.team_id = mr.team_id
+		WHERE m.season_id = ? AND m.week_number = ?
+		GROUP BY mr.player_id, mr.team_id
+		ORDER BY team_name, player_name`, seasonID, weekNum)
+	if err != nil {
+		return nil, fmt.Errorf("get week player stats: %w", err)
+	}
+	defer rows.Close()
+
+	out := []models.RecapPlayerStat{}
+	for rows.Next() {
+		var stat models.RecapPlayerStat
+		if err := rows.Scan(
+			&stat.PlayerID, &stat.PlayerName, &stat.TeamName,
+			&stat.SetsWon, &stat.SetsLost,
+			&stat.GamesWon, &stat.GamesLost,
+			&stat.Diff,
+		); err != nil {
+			return nil, fmt.Errorf("get week player stats: scan: %w", err)
+		}
+		out = append(out, stat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get week player stats: rows: %w", err)
+	}
+	return out, nil
+}
+
 // IsSeasonDraft reports whether the season is in draft state
 // (active=0 AND activated_at IS NULL).
 func (s *WeekStore) IsSeasonDraft(ctx context.Context, seasonID int64) (bool, error) {

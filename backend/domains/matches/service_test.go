@@ -26,6 +26,8 @@ type stubWeekStore struct {
 	isDraftErr        error
 	recapData         matches.WeekRecapData
 	recapDataErr      error
+	playerStats       []models.RecapPlayerStat
+	playerStatsErr    error
 }
 
 func (s *stubWeekStore) ListWeekSummaries(_ context.Context, _ int64) ([]models.WeekSummary, error) {
@@ -78,6 +80,10 @@ func (s *stubWeekStore) IsSeasonDraft(_ context.Context, _ int64) (bool, error) 
 
 func (s *stubWeekStore) GetWeekRecapData(_ context.Context, _, _ int64) (matches.WeekRecapData, error) {
 	return s.recapData, s.recapDataErr
+}
+
+func (s *stubWeekStore) GetWeekPlayerStats(_ context.Context, _, _ int64) ([]models.RecapPlayerStat, error) {
+	return s.playerStats, s.playerStatsErr
 }
 
 // newTestSvc creates a WeekService backed by the stub store.
@@ -459,5 +465,40 @@ func TestWeekService_WeekRecap_AcksNilBecomesEmptySlice(t *testing.T) {
 	}
 	if recap.Acknowledgments == nil {
 		t.Error("want non-nil Acknowledgments slice, got nil")
+	}
+}
+
+func TestWeekService_WeekRecap_PlayerStatsPopulated(t *testing.T) {
+	stats := []models.RecapPlayerStat{
+		{PlayerID: 1, PlayerName: "Alice", SetsWon: 2, SetsLost: 1, GamesWon: 6, GamesLost: 3},
+	}
+	store := &stubWeekStore{matchCount: 1, playerStats: stats}
+	svc := newTestSvc(t, store, nil)
+
+	recap, err := svc.WeekRecap(context.Background(), 10, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(recap.PlayerStats) != 1 {
+		t.Fatalf("want 1 player stat, got %d", len(recap.PlayerStats))
+	}
+	if recap.PlayerStats[0].PlayerName != "Alice" {
+		t.Errorf("want PlayerName=%q, got %q", "Alice", recap.PlayerStats[0].PlayerName)
+	}
+}
+
+func TestWeekService_WeekRecap_PlayerStatsNilBecomesEmptySlice(t *testing.T) {
+	store := &stubWeekStore{matchCount: 1, playerStats: nil}
+	svc := newTestSvc(t, store, nil)
+
+	recap, err := svc.WeekRecap(context.Background(), 10, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recap.PlayerStats == nil {
+		t.Error("want non-nil PlayerStats slice, got nil")
+	}
+	if len(recap.PlayerStats) != 0 {
+		t.Errorf("want empty PlayerStats, got %d entries", len(recap.PlayerStats))
 	}
 }

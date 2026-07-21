@@ -275,12 +275,11 @@ unchanged.
 | File | Change |
 |------|--------|
 | `web/domains/schedules/schedule-api-service.js` | `fetchWeekRecap(seasonId, weekNum)` added |
-| `web/domains/schedules/schedule-page-component.js` | Import `fetchWeekRecap`; `data-action="view-week-recap"` case in click delegation; `#toggleWeekRecap` and `#renderRecapPanel` private methods; Recap button and recap panel added to `#renderWeekCard` |
+| `web/domains/schedules/schedule-page-component.js` | Import `fetchWeekRecap`; `data-action="view-week-recap"` case in click delegation; `#toggleWeekRecap` and `#renderRecapPanel` private methods; Recap button and recap panel added to `#renderWeekCard`; player-stats table added to `#renderRecapPanel` in Phase C |
 
 ### Deferred
 
-- Player-level stat deltas in the recap panel
-- Handicap changes applied (from `handicap_history`)
+- Handicap changes applied (from `handicap_history`): handicap_history has season_id but no week_number; effective_date heuristic not used for recap/audit-adjacent data; pending PM schema decision
 - Recap panel accessible from outside the Schedule page (e.g., a dedicated recap route)
 - Print/export of the recap panel
 

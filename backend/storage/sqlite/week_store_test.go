@@ -571,3 +571,67 @@ func TestWeekStore_GetWeekRecapData_ClosedStatusAfterClose(t *testing.T) {
 		t.Error("want non-nil ClosedAt after close")
 	}
 }
+
+// --- GetWeekPlayerStats ---
+
+func TestWeekStore_GetWeekPlayerStats_EmptyWhenNoResults(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	stats, err := store.GetWeekPlayerStats(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats == nil {
+		t.Fatal("want non-nil empty slice, got nil")
+	}
+	if len(stats) != 0 {
+		t.Errorf("want 0 stats, got %d", len(stats))
+	}
+}
+
+func TestWeekStore_GetWeekPlayerStats_ReturnsTotalsForPlayer(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+
+	var teamID int64
+	db.DB.QueryRow(`SELECT home_team_id FROM matches WHERE id=?`, matchID).Scan(&teamID)
+
+	rp, err := db.DB.Exec(
+		`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Jane','Doe',?,0,1)`,
+		teamID)
+	if err != nil {
+		t.Fatalf("seed player: %v", err)
+	}
+	playerID, _ := rp.LastInsertId()
+
+	_, err = db.DB.Exec(
+		`INSERT INTO match_results (match_id, player_id, team_id, sets_won, sets_lost, games_won, games_lost, diff) VALUES (?,?,?,2,1,6,3,1.5)`,
+		matchID, playerID, teamID)
+	if err != nil {
+		t.Fatalf("seed match_result: %v", err)
+	}
+
+	store := sqlite.NewWeekStore(db.DB)
+	stats, err := store.GetWeekPlayerStats(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("want 1 stat, got %d", len(stats))
+	}
+	s := stats[0]
+	if s.PlayerID != playerID {
+		t.Errorf("want PlayerID=%d, got %d", playerID, s.PlayerID)
+	}
+	if s.PlayerName != "Jane Doe" {
+		t.Errorf("want PlayerName=%q, got %q", "Jane Doe", s.PlayerName)
+	}
+	if s.SetsWon != 2 || s.SetsLost != 1 {
+		t.Errorf("want sets 2/1, got %d/%d", s.SetsWon, s.SetsLost)
+	}
+	if s.GamesWon != 6 || s.GamesLost != 3 {
+		t.Errorf("want games 6/3, got %d/%d", s.GamesWon, s.GamesLost)
+	}
+}

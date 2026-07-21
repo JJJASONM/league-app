@@ -596,6 +596,26 @@ class SchedulePage extends HTMLElement {
         + esc(recap.handicap.message) + '</p>'
       : '';
 
+    let playerStatsSection = '';
+    if (Array.isArray(recap.player_stats) && recap.player_stats.length > 0) {
+      const statRows = recap.player_stats.map(ps =>
+        '<tr>'
+        + '<td>' + esc(ps.player_name || '') + '</td>'
+        + '<td class="text-muted small">' + esc(ps.team_name || '') + '</td>'
+        + '<td class="text-center">' + esc(String(ps.sets_won)) + '-' + esc(String(ps.sets_lost)) + '</td>'
+        + '<td class="text-center">' + esc(String(ps.games_won)) + '-' + esc(String(ps.games_lost)) + '</td>'
+        + '</tr>'
+      ).join('');
+      playerStatsSection = '<table class="table table-sm table-borderless small mb-2"><thead><tr>'
+        + '<th class="text-muted fw-normal">Player</th>'
+        + '<th class="text-muted fw-normal">Team</th>'
+        + '<th class="text-muted fw-normal text-center">Sets</th>'
+        + '<th class="text-muted fw-normal text-center">Games</th>'
+        + '</tr></thead><tbody>'
+        + statRows
+        + '</tbody></table>';
+    }
+
     return '<div class="px-3 py-2 border-top">'
       + '<div class="d-flex align-items-center gap-1 mb-2">'
       + '<span class="fw-semibold small">Week Recap</span>'
@@ -610,6 +630,7 @@ class SchedulePage extends HTMLElement {
       + '</tr></thead><tbody>'
       + matchRows
       + '</tbody></table>'
+      + playerStatsSection
       + ackNote
       + nextNote
       + hcNote

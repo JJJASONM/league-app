@@ -95,6 +95,12 @@ type WeekStore interface {
 	// Team names prefer season_teams.season_name; falls back to teams.name for
 	// legacy seasons. HasResult is true when the match has completed=1.
 	GetWeekRecapData(ctx context.Context, seasonID, weekNum int64) (WeekRecapData, error)
+
+	// GetWeekPlayerStats returns per-player stat totals for all players with
+	// match_results in the given season/week. Player name comes from the players
+	// table; team name prefers season_teams.season_name and falls back to
+	// teams.name. Returns a non-nil empty slice when no match_results exist.
+	GetWeekPlayerStats(ctx context.Context, seasonID, weekNum int64) ([]models.RecapPlayerStat, error)
 }
 
 // WeekRecapData holds match summaries and week status for the week-end recap.

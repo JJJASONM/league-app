@@ -251,6 +251,14 @@ func (s *WeekService) WeekRecap(ctx context.Context, seasonID, weekNum int64) (m
 		acks = []models.CloseAck{}
 	}
 
+	playerStats, err := s.store.GetWeekPlayerStats(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.WeekRecap{}, fmt.Errorf("week recap: player stats: %w", err)
+	}
+	if playerStats == nil {
+		playerStats = []models.RecapPlayerStat{}
+	}
+
 	var hc models.AdvancePreviewHandicap
 	if s.hcPreview != nil {
 		hc, err = s.hcPreview.HandicapPreview(ctx, seasonID)
@@ -273,6 +281,7 @@ func (s *WeekService) WeekRecap(ctx context.Context, seasonID, weekNum int64) (m
 		ClosedAt:        data.ClosedAt,
 		Matches:         data.Matches,
 		MissingCount:    missingCount,
+		PlayerStats:     playerStats,
 		Acknowledgments: acks,
 		NextWeekNumber:  advance.NextWeekNumber,
 		NextWeek:        advance.NextWeek,

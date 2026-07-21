@@ -1739,6 +1739,18 @@ GET /api/seasons/{id}/weeks/{week}/recap
     }
   ],
   "missing_count":     0,
+  "player_stats": [
+    {
+      "player_id":   7,
+      "player_name": "Jane Doe",
+      "team_name":   "Team A",  // omitted when empty
+      "sets_won":    2,
+      "sets_lost":   1,
+      "games_won":   6,
+      "games_lost":  3,
+      "diff":        1.5
+    }
+  ],
   "acknowledgments":   [...],    // same shape as /acknowledgments endpoint
   "next_week_number":  2,
   "next_week":         { ... },  // same shape as advance-preview next_week
@@ -1759,6 +1771,7 @@ for legacy seasons.
 | `matches` | One entry per scheduled match with home/away set and game counts |
 | `has_result` | True when `matches.completed = 1` (scores were entered and saved) |
 | `missing_count` | Count of match rows where `has_result = false` |
+| `player_stats` | Per-player stat totals (sets, games) derived from match_results; empty array when no results recorded |
 | `acknowledgments` | All `week_close_acknowledgments` rows for this week (same as `/acknowledgments` endpoint) |
 | `next_week_number` / `next_week` | Next-week readiness signals (same as advance-preview) |
 | `handicap` | Handicap method, status, and recommendations (same as advance-preview) |
@@ -1793,11 +1806,47 @@ interface -- no new network requests are needed from the client.
 
 ### Deferred (not in Phase A)
 
-- Player-level stat deltas (sets and games per player this week)
-- Handicap changes actually applied (from `handicap_history`)
-- Frontend recap UI (week card component, recap modal or panel)
+- Player-level stat deltas: implemented in Phase C (RecapPlayerStat, GetWeekPlayerStats)
+- Handicap changes actually applied (from `handicap_history`): still deferred; handicap_history has season_id but no week_number; effective_date heuristic not used for recap/audit-adjacent data; pending PM schema decision
+- Frontend recap UI: implemented in Phase B (schedules domain, schedule-page-component.js)
 - Persisted recap snapshots
 - Audit writes for recap views
+
+## Week-End Recap Phase C -- Player Stat Deltas (implemented 2026-07-21)
+
+### Goal
+
+Enrich the week-end recap response with per-player stat totals (sets won/lost,
+games won/lost) derived from match_results for the week. No schema changes or
+new API routes are required.
+
+### Data source
+
+`match_results` (player_id, team_id, sets_won, sets_lost, games_won, games_lost,
+diff) is joined to `matches` (season_id, week_number) via match_id. A GROUP BY
+player_id + team_id aggregates multi-match players. Player names come from the
+players table; team names prefer season_teams.season_name and fall back to
+teams.name for legacy seasons.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `models/models.go` | `RecapPlayerStat` struct added; `WeekRecap.PlayerStats` field added |
+| `backend/domains/matches/store.go` | `GetWeekPlayerStats` added to `WeekStore` interface |
+| `backend/domains/matches/service.go` | `GetWeekPlayerStats` call and nil-guard in `WeekRecap` |
+| `backend/domains/matches/service_test.go` | `GetWeekPlayerStats` stub; 2 `WeekRecap` player-stats tests |
+| `backend/storage/sqlite/week_store.go` | `GetWeekPlayerStats` SQLite implementation |
+| `backend/storage/sqlite/week_store_test.go` | 2 `GetWeekPlayerStats` integration tests |
+| `web/domains/schedules/schedule-page-component.js` | Player-stats table in `#renderRecapPanel` |
+| `doc/domains/matches/README.md` | Phase A deferred list updated; Phase C section added |
+| `doc/domains/schedules/README.md` | Week-End Recap UI deferred list updated |
+
+### Deferred (not in Phase C)
+
+- Handicap changes actually applied: handicap_history has season_id but no week_number; effective_date heuristic not used for recap/audit-adjacent data; pending PM schema decision
+- Recap panel accessible from outside the Schedule page
+- Print/export of the recap panel
 
 ## Decision History
 
