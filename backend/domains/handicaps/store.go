@@ -23,7 +23,7 @@ type AppliedHistory struct {
 }
 
 // HandicapHistoryRow is the full set of columns for one InsertHandicapHistory call.
-// All ten Phase B columns are included; nil AppliedByUserID becomes SQL NULL.
+// Nil pointer fields (AppliedByUserID, WeekNumber) become SQL NULL.
 type HandicapHistoryRow struct {
 	PlayerID           int64
 	PlayerNameSnapshot string
@@ -34,6 +34,7 @@ type HandicapHistoryRow struct {
 	ApplyRequestID     string
 	RequestHash        string
 	SeasonID           int64
+	WeekNumber         *int
 	Method             string
 	WindowSize         int
 	WindowRacks        int

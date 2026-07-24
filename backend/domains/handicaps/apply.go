@@ -91,8 +91,11 @@ type ApplyEntry struct {
 
 // ApplyRequest is the validated domain request for Service.Apply.
 // Handler-layer DTOs are decoded separately and converted to this type.
+// WeekNumber is optional: when non-nil it identifies the recap week being processed
+// and is stored in handicap_history.week_number for future linkage.
 type ApplyRequest struct {
 	ApplyRequestID string
+	WeekNumber     *int
 	Entries        []ApplyEntry
 }
 
@@ -421,6 +424,7 @@ func (s *Service) Apply(ctx context.Context, seasonID int64, req ApplyRequest) (
 				ApplyRequestID:     req.ApplyRequestID,
 				RequestHash:        requestHash,
 				SeasonID:           seasonID,
+				WeekNumber:         req.WeekNumber,
 				Method:             MethodGameDiffAverage,
 				WindowSize:         liveRec.WindowSize,
 				WindowRacks:        liveRec.WindowRacks,

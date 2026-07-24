@@ -182,6 +182,7 @@ CREATE TABLE IF NOT EXISTS handicap_history (
     effective_date DATE   NOT NULL,
     admin_hold    INTEGER NOT NULL DEFAULT 0,
     note          TEXT,
+    week_number   INTEGER,
     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -353,6 +354,8 @@ CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash);
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hc_history_apply_idempotent
 		 ON handicap_history(apply_request_id, player_id)
 		 WHERE apply_request_id IS NOT NULL`,
+		// Phase D: week_number links an apply batch to the recap week being processed.
+		`ALTER TABLE handicap_history ADD COLUMN week_number INTEGER`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs

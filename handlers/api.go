@@ -1630,6 +1630,7 @@ type applyEntryDTO struct {
 // applyRequestDTO is the handler-local JSON shape for the apply request body.
 type applyRequestDTO struct {
 	ApplyRequestID *string         `json:"apply_request_id"`
+	WeekNumber     *int            `json:"week_number,omitempty"`
 	Entries        []applyEntryDTO `json:"entries"`
 }
 
@@ -1708,6 +1709,7 @@ func postHandicapApply(w http.ResponseWriter, r *http.Request, svc HandicapAppli
 
 	req := handicaps.ApplyRequest{
 		ApplyRequestID: *dto.ApplyRequestID,
+		WeekNumber:     dto.WeekNumber,
 		Entries:        entries,
 	}
 

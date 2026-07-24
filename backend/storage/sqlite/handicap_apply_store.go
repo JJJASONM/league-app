@@ -139,21 +139,21 @@ func (s *HandicapStore) UpdatePlayerHandicap(ctx context.Context, playerID int64
 	return n == 1, nil
 }
 
-// InsertHandicapHistory inserts one row into handicap_history with all Phase B columns.
-// All fifteen values are written; AppliedByUserID becomes SQL NULL when nil.
+// InsertHandicapHistory inserts one row into handicap_history with all Phase B+D columns.
+// Nil pointer fields (AppliedByUserID, WeekNumber) become SQL NULL.
 func (s *HandicapStore) InsertHandicapHistory(ctx context.Context, row handicaps.HandicapHistoryRow) error {
 	_, err := s.q.ExecContext(ctx,
 		`INSERT INTO handicap_history
 		 (player_id, player_name_snapshot,
 		  old_handicap, new_handicap, effective_date, admin_hold,
 		  apply_request_id, request_hash,
-		  season_id, method, window_size, window_racks, lifetime_racks,
+		  season_id, week_number, method, window_size, window_racks, lifetime_racks,
 		  rec_token, applied_by_user_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.PlayerID, row.PlayerNameSnapshot,
 		row.OldHandicap, row.NewHandicap, row.EffectiveDate, row.AdminHold,
 		row.ApplyRequestID, row.RequestHash,
-		row.SeasonID, row.Method, row.WindowSize, row.WindowRacks, row.LifetimeRacks,
+		row.SeasonID, row.WeekNumber, row.Method, row.WindowSize, row.WindowRacks, row.LifetimeRacks,
 		row.RecToken, row.AppliedByUserID,
 	)
 	if err != nil {

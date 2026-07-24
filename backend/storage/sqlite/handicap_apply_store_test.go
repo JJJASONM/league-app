@@ -566,6 +566,104 @@ func TestInsertHandicapHistory_AllColumnsWritten(t *testing.T) {
 	}
 }
 
+// TestInsertHandicapHistory_WeekNumberStored verifies that a non-nil WeekNumber
+// is written to handicap_history.week_number.
+func TestInsertHandicapHistory_WeekNumberStored(t *testing.T) {
+	testDB, store := newSingleConnTestDB(t, 0)
+	playerID := seedApplyPlayer(t, testDB, 1.0)
+
+	var leagueID, seasonID int64
+	testDB.QueryRow(`INSERT INTO leagues (name, game_format) VALUES ('L2','8ball') RETURNING id`).Scan(&leagueID)
+	testDB.QueryRow(`INSERT INTO seasons (league_id, name, start_date, schedule_type, num_weeks) VALUES (?, 'S2', '2026-01-01', 'single_rr', 8) RETURNING id`, leagueID).Scan(&seasonID)
+
+	wn := 3
+	row := handicaps.HandicapHistoryRow{
+		PlayerID:           playerID,
+		PlayerNameSnapshot: "Bob Jones",
+		OldHandicap:        2.0,
+		NewHandicap:        3.0,
+		EffectiveDate:      "2026-06-15",
+		AdminHold:          0,
+		ApplyRequestID:     "660e8400-e29b-41d4-a716-446655440000",
+		RequestHash:        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		SeasonID:           seasonID,
+		WeekNumber:         &wn,
+		Method:             "game_diff_average",
+		WindowSize:         10,
+		WindowRacks:        8,
+		LifetimeRacks:      30,
+		RecToken:           "tok2",
+		AppliedByUserID:    nil,
+	}
+
+	err := store.RunWriteTx(context.Background(), func(tx handicaps.Store) error {
+		return tx.InsertHandicapHistory(context.Background(), row)
+	})
+	if err != nil {
+		t.Fatalf("InsertHandicapHistory: %v", err)
+	}
+
+	var gotWeek *int
+	if err := testDB.QueryRow(
+		`SELECT week_number FROM handicap_history WHERE player_id = ?`, playerID,
+	).Scan(&gotWeek); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if gotWeek == nil {
+		t.Fatal("week_number: want 3, got NULL")
+	}
+	if *gotWeek != 3 {
+		t.Errorf("week_number: want 3, got %d", *gotWeek)
+	}
+}
+
+// TestInsertHandicapHistory_WeekNumberNULL verifies that a nil WeekNumber stores
+// SQL NULL in handicap_history.week_number.
+func TestInsertHandicapHistory_WeekNumberNULL(t *testing.T) {
+	testDB, store := newSingleConnTestDB(t, 0)
+	playerID := seedApplyPlayer(t, testDB, 1.0)
+
+	var leagueID, seasonID int64
+	testDB.QueryRow(`INSERT INTO leagues (name, game_format) VALUES ('L3','8ball') RETURNING id`).Scan(&leagueID)
+	testDB.QueryRow(`INSERT INTO seasons (league_id, name, start_date, schedule_type, num_weeks) VALUES (?, 'S3', '2026-01-01', 'single_rr', 8) RETURNING id`, leagueID).Scan(&seasonID)
+
+	row := handicaps.HandicapHistoryRow{
+		PlayerID:           playerID,
+		PlayerNameSnapshot: "Carol King",
+		OldHandicap:        1.5,
+		NewHandicap:        2.5,
+		EffectiveDate:      "2026-06-20",
+		AdminHold:          0,
+		ApplyRequestID:     "770e8400-e29b-41d4-a716-446655440000",
+		RequestHash:        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		SeasonID:           seasonID,
+		WeekNumber:         nil,
+		Method:             "game_diff_average",
+		WindowSize:         10,
+		WindowRacks:        8,
+		LifetimeRacks:      30,
+		RecToken:           "tok3",
+		AppliedByUserID:    nil,
+	}
+
+	err := store.RunWriteTx(context.Background(), func(tx handicaps.Store) error {
+		return tx.InsertHandicapHistory(context.Background(), row)
+	})
+	if err != nil {
+		t.Fatalf("InsertHandicapHistory: %v", err)
+	}
+
+	var gotWeek *int
+	if err := testDB.QueryRow(
+		`SELECT week_number FROM handicap_history WHERE player_id = ?`, playerID,
+	).Scan(&gotWeek); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if gotWeek != nil {
+		t.Errorf("week_number: want NULL, got %d", *gotWeek)
+	}
+}
+
 // ============================================================================
 // AppliedChangesByRequestID
 // ============================================================================

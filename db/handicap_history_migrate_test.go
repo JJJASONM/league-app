@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS handicap_history (
     created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
 )`
 
+// phaseDColumns lists Phase D column names that must be present after migration.
+var phaseDColumns = []string{"week_number"}
+
 // phaseBAuditColumns lists all ten Phase B column names that must be present
 // after migration. Used by both fresh-DB and upgrade-path tests.
 var phaseBAuditColumns = []string{
@@ -83,6 +86,11 @@ func TestHandicapHistoryMigration_FreshDB_AllColumnsPresent(t *testing.T) {
 	t.Cleanup(func() { db.DB.Close() })
 
 	for _, col := range phaseBAuditColumns {
+		if !hasColumn(t, "handicap_history", col) {
+			t.Errorf("fresh DB: missing column handicap_history.%s", col)
+		}
+	}
+	for _, col := range phaseDColumns {
 		if !hasColumn(t, "handicap_history", col) {
 			t.Errorf("fresh DB: missing column handicap_history.%s", col)
 		}
@@ -185,6 +193,113 @@ func TestHandicapHistoryMigration_Idempotent_SecondInitNoError(t *testing.T) {
 
 	if err := db.Init(dir); err != nil {
 		t.Errorf("second db.Init: want nil, got %v", err)
+	}
+}
+
+// prePhaseDHandicapHistorySchema is the handicap_history schema after Phase B
+// columns but before Phase D's week_number column. Used to simulate an existing
+// database that needs the Phase D additive migration.
+const prePhaseDHandicapHistorySchema = `
+CREATE TABLE IF NOT EXISTS handicap_history (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id           INTEGER NOT NULL REFERENCES players(id),
+    old_handicap        REAL    NOT NULL,
+    new_handicap        REAL    NOT NULL,
+    effective_date      DATE    NOT NULL,
+    admin_hold          INTEGER NOT NULL DEFAULT 0,
+    note                TEXT,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    apply_request_id    TEXT,
+    request_hash        TEXT,
+    player_name_snapshot TEXT,
+    season_id           INTEGER REFERENCES seasons(id),
+    method              TEXT,
+    window_size         INTEGER,
+    window_racks        INTEGER,
+    lifetime_racks      INTEGER,
+    rec_token           TEXT,
+    applied_by_user_id  INTEGER
+)`
+
+// TestHandicapHistoryMigration_PhaseDColumn_FreshDB verifies that a fresh
+// database has the week_number column from Phase D.
+func TestHandicapHistoryMigration_PhaseDColumn_FreshDB(t *testing.T) {
+	dir := t.TempDir()
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	t.Cleanup(func() { db.DB.Close() })
+
+	for _, col := range phaseDColumns {
+		if !hasColumn(t, "handicap_history", col) {
+			t.Errorf("fresh DB: missing column handicap_history.%s", col)
+		}
+	}
+}
+
+// TestHandicapHistoryMigration_PrePhaseDDB_UpgradesWithoutDataLoss simulates an
+// existing Phase-B database (no week_number). It verifies that re-running Init
+// adds week_number without disturbing existing rows.
+func TestHandicapHistoryMigration_PrePhaseDDB_UpgradesWithoutDataLoss(t *testing.T) {
+	dir := t.TempDir()
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("first db.Init: %v", err)
+	}
+	t.Cleanup(func() { db.DB.Close() })
+
+	var playerID int64
+	if err := db.DB.QueryRow(
+		`INSERT INTO players (first_name, last_name, handicap) VALUES ('C','D',2.0) RETURNING id`,
+	).Scan(&playerID); err != nil {
+		t.Fatalf("seed player: %v", err)
+	}
+
+	// Rebuild handicap_history without week_number (Phase B schema).
+	if _, err := db.DB.Exec(`DROP TABLE handicap_history`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := db.DB.Exec(prePhaseDHandicapHistorySchema); err != nil {
+		t.Fatalf("recreate pre-phase-D table: %v", err)
+	}
+
+	// Seed a row without week_number.
+	if _, err := db.DB.Exec(
+		`INSERT INTO handicap_history (player_id, old_handicap, new_handicap, effective_date)
+		 VALUES (?, 2.0, 3.5, '2026-01-15')`, playerID,
+	); err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+
+	if err := db.DB.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("second db.Init: %v", err)
+	}
+
+	for _, col := range phaseDColumns {
+		if !hasColumn(t, "handicap_history", col) {
+			t.Errorf("after upgrade: missing column handicap_history.%s", col)
+		}
+	}
+
+	// Legacy row must be intact; week_number is NULL.
+	var gotOld, gotNew float64
+	var gotWeek *int
+	if err := db.DB.QueryRow(
+		`SELECT old_handicap, new_handicap, week_number FROM handicap_history WHERE player_id = ?`, playerID,
+	).Scan(&gotOld, &gotNew, &gotWeek); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if gotOld != 2.0 {
+		t.Errorf("old_handicap: want 2.0, got %f", gotOld)
+	}
+	if gotNew != 3.5 {
+		t.Errorf("new_handicap: want 3.5, got %f", gotNew)
+	}
+	if gotWeek != nil {
+		t.Errorf("week_number: want NULL, got %v", *gotWeek)
 	}
 }
 

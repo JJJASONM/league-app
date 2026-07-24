@@ -4,8 +4,8 @@
 
 **Owner:** `handicaps`
 **Status:** `draft`
-**Current version:** `0.2`
-**Last reviewed:** `2026-06-30`
+**Current version:** `0.3`
+**Last reviewed:** `2026-07-21`
 
 The Handicaps domain owns the opponent-normalized rack formula, the read-only
 Handicap Review endpoint, the pure-Go calculation package, and the backend-only
@@ -351,6 +351,13 @@ Phase B1 expands `handicap_history` so applied changes can store:
 - recommendation token
 - optional applied-by user ID for later auth integration
 
+Phase D1 adds `week_number INTEGER` (nullable) to `handicap_history`. When the
+caller supplies `week_number` in the Apply request body, it is stored alongside
+the other audit columns so the apply batch can be linked to the recap week. The
+field is optional — existing callers that omit it receive `NULL`. The `ApplyRequest`
+domain type and `applyRequestDTO` handler type carry the value; no server-side
+inference of week from effective_date is performed.
+
 ### Write-transaction contract
 
 The SQLite adapter uses a dedicated connection plus `BEGIN IMMEDIATE` for Apply
@@ -454,6 +461,29 @@ directly without nesting.
 | adapter (integration) | `handicap_store_test.go` | real SQLite via `db.Init(tempDir)` |
 | handler (stub-based) | `handlers/api_test.go` | 404/500/200 error-mapping via `stubHandicapSvc` |
 | handler (integration) | `handlers/api_test.go` | existing `TestHandicapRecs_*` and `TestHandicapReview_*` tests now run through the real service+adapter |
+
+### 2026-07-21 - Phase D1: week_number added to handicap_history
+
+**Status:** `accepted`
+
+`handicap_history` gains an optional `week_number INTEGER` column (additive
+migration; NULL for all legacy rows). The Apply request body accepts an optional
+`"week_number"` field; the value flows through `applyRequestDTO` -> `ApplyRequest`
+-> `HandicapHistoryRow` -> `InsertHandicapHistory`. All rows in one Apply batch
+share the same `week_number`. Server-side inference is not performed; callers
+decide when to populate the field.
+
+| Layer | Change |
+|-------|--------|
+| `db/db.go` | `week_number INTEGER` in CREATE TABLE + additive migration |
+| `backend/domains/handicaps/store.go` | `WeekNumber *int` on `HandicapHistoryRow` |
+| `backend/storage/sqlite/handicap_apply_store.go` | 16-column INSERT includes `week_number` |
+| `backend/domains/handicaps/apply.go` | `WeekNumber *int` on `ApplyRequest`; passed to each row |
+| `handlers/api.go` | `WeekNumber *int \`json:"week_number,omitempty"\`` on `applyRequestDTO` |
+
+**Deferred:** Phase D2 wires `week_number` into the Schedule recap panel so the
+Handicap Review component receives and forwards the current recap week when
+submitting an Apply request.
 
 ### 2026-06-30 - Phase C1: personal API-key authorization and Apply attribution
 
