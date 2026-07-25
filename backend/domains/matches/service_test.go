@@ -28,6 +28,8 @@ type stubWeekStore struct {
 	recapDataErr      error
 	playerStats       []models.RecapPlayerStat
 	playerStatsErr    error
+	handicapChanges    []models.RecapHandicapChange
+	handicapChangesErr error
 }
 
 func (s *stubWeekStore) ListWeekSummaries(_ context.Context, _ int64) ([]models.WeekSummary, error) {
@@ -84,6 +86,10 @@ func (s *stubWeekStore) GetWeekRecapData(_ context.Context, _, _ int64) (matches
 
 func (s *stubWeekStore) GetWeekPlayerStats(_ context.Context, _, _ int64) ([]models.RecapPlayerStat, error) {
 	return s.playerStats, s.playerStatsErr
+}
+
+func (s *stubWeekStore) GetWeekHandicapChanges(_ context.Context, _, _ int64) ([]models.RecapHandicapChange, error) {
+	return s.handicapChanges, s.handicapChangesErr
 }
 
 // newTestSvc creates a WeekService backed by the stub store.
@@ -500,5 +506,46 @@ func TestWeekService_WeekRecap_PlayerStatsNilBecomesEmptySlice(t *testing.T) {
 	}
 	if len(recap.PlayerStats) != 0 {
 		t.Errorf("want empty PlayerStats, got %d entries", len(recap.PlayerStats))
+	}
+}
+
+func TestWeekService_WeekRecap_HandicapChangesPopulated(t *testing.T) {
+	changes := []models.RecapHandicapChange{
+		{PlayerName: "Alice Smith", OldHandicap: 1.5, NewHandicap: 2.0},
+	}
+	store := &stubWeekStore{matchCount: 1, handicapChanges: changes}
+	svc := newTestSvc(t, store, nil)
+
+	recap, err := svc.WeekRecap(context.Background(), 10, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(recap.HandicapChanges) != 1 {
+		t.Fatalf("want 1 handicap change, got %d", len(recap.HandicapChanges))
+	}
+	if recap.HandicapChanges[0].PlayerName != "Alice Smith" {
+		t.Errorf("player name: want %q, got %q", "Alice Smith", recap.HandicapChanges[0].PlayerName)
+	}
+	if recap.HandicapChanges[0].OldHandicap != 1.5 {
+		t.Errorf("old_handicap: want 1.5, got %f", recap.HandicapChanges[0].OldHandicap)
+	}
+	if recap.HandicapChanges[0].NewHandicap != 2.0 {
+		t.Errorf("new_handicap: want 2.0, got %f", recap.HandicapChanges[0].NewHandicap)
+	}
+}
+
+func TestWeekService_WeekRecap_HandicapChangesNilBecomesEmptySlice(t *testing.T) {
+	store := &stubWeekStore{matchCount: 1, handicapChanges: nil}
+	svc := newTestSvc(t, store, nil)
+
+	recap, err := svc.WeekRecap(context.Background(), 10, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recap.HandicapChanges == nil {
+		t.Error("want non-nil HandicapChanges slice, got nil")
+	}
+	if len(recap.HandicapChanges) != 0 {
+		t.Errorf("want empty HandicapChanges, got %d entries", len(recap.HandicapChanges))
 	}
 }

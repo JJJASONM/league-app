@@ -266,6 +266,7 @@ The panel shows:
 | Acknowledgments note | Count of warnings acknowledged at close |
 | Next-week readiness | Week number, match count, unassigned/missing-lineup warnings or "Ready" |
 | Handicap note | `handicap.message` from the recap response |
+| Handicap changes | Table of applied changes (player name, old HC, new HC) for the week, with "Review & Apply" deep-link; hidden when empty (Phase D2) |
 
 Close Week behavior, the Reopen button, and all other week-card controls are
 unchanged.
@@ -275,11 +276,10 @@ unchanged.
 | File | Change |
 |------|--------|
 | `web/domains/schedules/schedule-api-service.js` | `fetchWeekRecap(seasonId, weekNum)` added |
-| `web/domains/schedules/schedule-page-component.js` | Import `fetchWeekRecap`; `data-action="view-week-recap"` case in click delegation; `#toggleWeekRecap` and `#renderRecapPanel` private methods; Recap button and recap panel added to `#renderWeekCard`; player-stats table added to `#renderRecapPanel` in Phase C |
+| `web/domains/schedules/schedule-page-component.js` | Import `fetchWeekRecap`; `data-action="view-week-recap"` case in click delegation; `#toggleWeekRecap` and `#renderRecapPanel` private methods; Recap button and recap panel added to `#renderWeekCard`; player-stats table added to `#renderRecapPanel` in Phase C; `#renderHandicapChangesSection` + `open-handicap-for-week` deep-link added in Phase D2 |
 
 ### Deferred
 
-- Handicap changes applied (from `handicap_history`): handicap_history has season_id but no week_number; effective_date heuristic not used for recap/audit-adjacent data; pending PM schema decision
 - Recap panel accessible from outside the Schedule page (e.g., a dedicated recap route)
 - Print/export of the recap panel
 

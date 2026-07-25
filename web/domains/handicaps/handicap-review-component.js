@@ -41,14 +41,17 @@ class HandicapReview extends HTMLElement {
   #selected   = new Set(); // Set<player_id> — selectable rows checked by admin
   #adminToken = null;    // session memory only — cleared on reload, 401, 403
   #loadedAt   = null;    // Date of last successful fetch (for "Last loaded" display)
+  #weekNumber = null;    // set by setWeekContext() for recap-panel deep-link
 
   connectedCallback() {
     this.innerHTML = `
+      <div class="hc-week-context d-none alert alert-info py-1 mb-2 small" role="status"></div>
       <div class="hc-main-content"></div>
       ${this.#tokenModalHtml()}
       ${this.#confirmModalHtml()}
     `;
-    this._contentEl = this.querySelector('.hc-main-content');
+    this._contentEl    = this.querySelector('.hc-main-content');
+    this._weekCtxEl    = this.querySelector('.hc-week-context');
 
     // Bootstrap Modal instances — persistent across content re-renders
     this._tokenModal   = new bootstrap.Modal(this.querySelector('.hc-token-modal'));
@@ -80,17 +83,48 @@ class HandicapReview extends HTMLElement {
   // ─── Public API ───────────────────────────────────────────────────────────────
 
   async loadSeason(seasonId) {
-    this.#seasonId = String(seasonId);
+    this.#seasonId   = String(seasonId);
+    this.#weekNumber = null;
+    this.#hideWeekCtx();
     this.#selected.clear();
     this.#data = null;
     await this.#load();
   }
 
   reset() {
-    this.#seasonId = null;
-    this.#data = null;
+    this.#seasonId   = null;
+    this.#weekNumber = null;
+    this.#data       = null;
     this.#selected.clear();
+    this.#hideWeekCtx();
     if (this._contentEl) this._contentEl.innerHTML = '';
+  }
+
+  // Called by <handicaps-page>.openForWeek() after loadSeason() resolves. Sets
+  // the week context so applied rows are linked to the given week number. Shows
+  // a visible banner so the admin knows which week is active.
+  setWeekContext(weekNum) {
+    this.#weekNumber = weekNum != null ? Number(weekNum) : null;
+    if (this.#weekNumber != null) {
+      this.#showWeekCtx(this.#weekNumber);
+    } else {
+      this.#hideWeekCtx();
+    }
+  }
+
+  // ─── Week context note ───────────────────────────────────────────────────────
+
+  #showWeekCtx(weekNum) {
+    if (!this._weekCtxEl) return;
+    this._weekCtxEl.textContent =
+      'Week context: applying from Week ' + weekNum + ' recap. Applied rows will be linked to Week ' + weekNum + '.';
+    this._weekCtxEl.classList.remove('d-none');
+  }
+
+  #hideWeekCtx() {
+    if (!this._weekCtxEl) return;
+    this._weekCtxEl.classList.add('d-none');
+    this._weekCtxEl.textContent = '';
   }
 
   // ─── Loading ─────────────────────────────────────────────────────────────────
@@ -395,6 +429,7 @@ class HandicapReview extends HTMLElement {
       apply_request_id: makeApplyRequestId(),
       entries:          buildApplyEntries(selectedRecs),
     };
+    if (this.#weekNumber != null) body.week_number = this.#weekNumber;
 
     try {
       const result = await applyHandicaps(this.#seasonId, this.#adminToken, body);

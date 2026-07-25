@@ -1710,3 +1710,81 @@ func TestRecapWeek_ClosedStatusAndMissingCount(t *testing.T) {
 	}
 }
 
+func TestRecapWeek_HandicapChanges_PresentWhenHistoryRowMatches(t *testing.T) {
+	f := weekTestSeed(t)
+	// Seed a handicap_history row with matching season_id and week_number=1.
+	_, err := db.DB.Exec(`
+		INSERT INTO handicap_history
+		    (player_id, player_name_snapshot, old_handicap, new_handicap,
+		     effective_date, apply_request_id, request_hash,
+		     season_id, week_number, method, window_size, window_racks, lifetime_racks, rec_token)
+		VALUES (?, 'Home Player', 3.0, 3.5, '2026-01-01',
+		        '550e8400-e29b-41d4-a716-446655440099',
+		        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+		        ?, 1, 'game_diff_average', 15, 12, 45, 'tok1')`,
+		f.playerA, f.sid)
+	if err != nil {
+		t.Fatalf("seed handicap_history: %v", err)
+	}
+
+	resp := weekGetRecap(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, b)
+	}
+
+	var recap map[string]any
+	json.NewDecoder(resp.Body).Decode(&recap)
+
+	changes, ok := recap["handicap_changes"].([]any)
+	if !ok {
+		t.Fatalf("handicap_changes must be a JSON array, got %T", recap["handicap_changes"])
+	}
+	if len(changes) != 1 {
+		t.Fatalf("want 1 handicap change, got %d", len(changes))
+	}
+	ch, _ := changes[0].(map[string]any)
+	if ch["player_name"] != "Home Player" {
+		t.Errorf("player_name: want %q, got %v", "Home Player", ch["player_name"])
+	}
+	if ch["old_handicap"] != 3.0 {
+		t.Errorf("old_handicap: want 3.0, got %v", ch["old_handicap"])
+	}
+	if ch["new_handicap"] != 3.5 {
+		t.Errorf("new_handicap: want 3.5, got %v", ch["new_handicap"])
+	}
+}
+
+func TestRecapWeek_HandicapChanges_EmptyWhenNoHistoryRowForWeek(t *testing.T) {
+	f := weekTestSeed(t)
+	// Seed a row for a DIFFERENT week (week 2); recap is for week 1.
+	_, err := db.DB.Exec(`
+		INSERT INTO handicap_history
+		    (player_id, player_name_snapshot, old_handicap, new_handicap,
+		     effective_date, apply_request_id, request_hash,
+		     season_id, week_number, method, window_size, window_racks, lifetime_racks, rec_token)
+		VALUES (?, 'Home Player', 3.0, 3.5, '2026-01-01',
+		        '550e8400-e29b-41d4-a716-446655440098',
+		        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+		        ?, 2, 'game_diff_average', 15, 12, 45, 'tok2')`,
+		f.playerA, f.sid)
+	if err != nil {
+		t.Fatalf("seed handicap_history: %v", err)
+	}
+
+	resp := weekGetRecap(t, f.srv.URL, f.sid, 1)
+	defer resp.Body.Close()
+
+	var recap map[string]any
+	json.NewDecoder(resp.Body).Decode(&recap)
+
+	changes, ok := recap["handicap_changes"].([]any)
+	if !ok {
+		t.Fatalf("handicap_changes must be a JSON array, got %T", recap["handicap_changes"])
+	}
+	if len(changes) != 0 {
+		t.Errorf("want 0 handicap changes for week 1 when history row is for week 2, got %d", len(changes))
+	}
+}
+

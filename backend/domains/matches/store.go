@@ -101,6 +101,13 @@ type WeekStore interface {
 	// table; team name prefers season_teams.season_name and falls back to
 	// teams.name. Returns a non-nil empty slice when no match_results exist.
 	GetWeekPlayerStats(ctx context.Context, seasonID, weekNum int64) ([]models.RecapPlayerStat, error)
+
+	// GetWeekHandicapChanges returns all handicap_history rows for the given
+	// season+week (matched by the week_number column added in Phase D1).
+	// Player name comes from player_name_snapshot captured at apply time.
+	// Returns a non-nil empty slice when no rows exist (week_number was not
+	// supplied on the apply request, or no apply ran for this week).
+	GetWeekHandicapChanges(ctx context.Context, seasonID, weekNum int64) ([]models.RecapHandicapChange, error)
 }
 
 // WeekRecapData holds match summaries and week status for the week-end recap.

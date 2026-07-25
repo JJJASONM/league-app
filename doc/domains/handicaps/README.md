@@ -462,6 +462,42 @@ directly without nesting.
 | handler (stub-based) | `handlers/api_test.go` | 404/500/200 error-mapping via `stubHandicapSvc` |
 | handler (integration) | `handlers/api_test.go` | existing `TestHandicapRecs_*` and `TestHandicapReview_*` tests now run through the real service+adapter |
 
+### 2026-07-24 - Phase D2: week recap shows applied handicap changes; Apply forwards week number
+
+**Status:** `accepted`
+
+The Schedule week recap panel now lists handicap changes that were applied with
+a matching `week_number`. The Handicap Review component can receive a week number
+from the shell and forward it in Apply requests so the link is populated going
+forward.
+
+**Backend changes:**
+
+| Layer | Change |
+|-------|--------|
+| `models/models.go` | `RecapHandicapChange` struct; `WeekRecap.HandicapChanges []RecapHandicapChange` |
+| `backend/domains/matches/store.go` | `GetWeekHandicapChanges` added to `WeekStore` interface |
+| `backend/storage/sqlite/week_store.go` | `GetWeekHandicapChanges` implementation queries `handicap_history` by `season_id + week_number` |
+| `backend/domains/matches/service.go` | `WeekRecap` calls `GetWeekHandicapChanges`; populates `HandicapChanges` field |
+| `backend/domains/matches/service_test.go` | Two new unit tests: populated slice and nil-becomes-empty-slice |
+| `handlers/api_weeks_test.go` | Two new integration tests: present and absent history row cases |
+
+**Frontend changes:**
+
+| File | Change |
+|------|--------|
+| `web/domains/handicaps/handicap-review-component.js` | `#weekNumber` private field; `setWeekContext(weekNum)` public method; clears on `loadSeason`; conditionally adds `week_number` to Apply body |
+| `web/app.js` | `openHandicapForWeek(seasonId, weekNum)` shell bridge: calls `navTo('handicap')` then `widget.setWeekContext(weekNum)` |
+| `web/domains/schedules/schedule-page-component.js` | `#renderHandicapChangesSection` renders applied changes table with "Review & Apply" deep-link button; wired into `#renderRecapPanel`; click delegation handles `open-handicap-for-week` |
+
+**Ordering constraint:** `navTo('handicap')` triggers a synchronous `loadSeason`
+call that clears `#weekNumber`. `setWeekContext` must therefore be called AFTER
+`navTo` returns, not before. The shell bridge enforces this ordering.
+
+**NULL gap:** History rows with NULL `week_number` (pre-D1 applies, or any apply
+that omits `week_number`) never appear in the recap. The section is hidden when
+`handicap_changes` is empty, so there is no visible regression for old data.
+
 ### 2026-07-21 - Phase D1: week_number added to handicap_history
 
 **Status:** `accepted`

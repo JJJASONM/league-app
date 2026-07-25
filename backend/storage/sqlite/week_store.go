@@ -595,6 +595,34 @@ func (s *WeekStore) GetWeekPlayerStats(ctx context.Context, seasonID, weekNum in
 	return out, nil
 }
 
+// GetWeekHandicapChanges returns handicap_history rows where season_id and
+// week_number match, ordered by player_name_snapshot. The player name is the
+// snapshot captured at apply time (no players JOIN required).
+// Returns a non-nil empty slice when no rows exist.
+func (s *WeekStore) GetWeekHandicapChanges(ctx context.Context, seasonID, weekNum int64) ([]models.RecapHandicapChange, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT player_name_snapshot, old_handicap, new_handicap
+		FROM handicap_history
+		WHERE season_id = ? AND week_number = ?
+		ORDER BY player_name_snapshot`, seasonID, weekNum)
+	if err != nil {
+		return nil, fmt.Errorf("get week handicap changes: %w", err)
+	}
+	defer rows.Close()
+	out := []models.RecapHandicapChange{}
+	for rows.Next() {
+		var ch models.RecapHandicapChange
+		if err := rows.Scan(&ch.PlayerName, &ch.OldHandicap, &ch.NewHandicap); err != nil {
+			return nil, fmt.Errorf("get week handicap changes: scan: %w", err)
+		}
+		out = append(out, ch)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get week handicap changes: rows: %w", err)
+	}
+	return out, nil
+}
+
 // IsSeasonDraft reports whether the season is in draft state
 // (active=0 AND activated_at IS NULL).
 func (s *WeekStore) IsSeasonDraft(ctx context.Context, seasonID int64) (bool, error) {

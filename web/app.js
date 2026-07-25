@@ -96,6 +96,11 @@ function openMatchEntry(matchId, seasonId) {
   navTo('entry');
 }
 
+function openHandicapForWeek(seasonId, weekNum) {
+  navTo('handicap');
+  document.querySelector('handicaps-page')?.openForWeek(seasonId, weekNum);
+}
+
 // --- Seasons domain bridge ----------------------------------------------------
 // The seasons domain component fires these events; the shell updates cross-domain
 // state (allSeasons, activeSeason) and responds to navigation requests.

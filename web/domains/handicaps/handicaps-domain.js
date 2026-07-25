@@ -6,6 +6,10 @@
 //     load the active season's recommendations, or reset when no seasons exist.
 //     Called by the app shell when the Handicap tab is activated or when
 //     league/season context changes.
+//   openForWeek(seasonId, weekNum) — deep-link from the schedule recap panel:
+//     sets the season selector, loads recommendations for that season, then
+//     sets the week context on the review widget so applied rows are linked to
+//     the specified week. Called by the shell after navTo('handicap').
 
 import './handicap-review-component.js';
 
@@ -58,6 +62,15 @@ class HandicapsPage extends HTMLElement {
 
   #onSelectChange() {
     this.#syncWidget();
+  }
+
+  async openForWeek(seasonId, weekNum) {
+    const sel = this.querySelector('.hcp-season-select');
+    if (sel) sel.value = String(seasonId);
+    const widget = this.querySelector('.hcp-widget');
+    if (!widget) return;
+    await widget.loadSeason(String(seasonId));
+    widget.setWeekContext(weekNum);
   }
 }
 

@@ -259,6 +259,14 @@ func (s *WeekService) WeekRecap(ctx context.Context, seasonID, weekNum int64) (m
 		playerStats = []models.RecapPlayerStat{}
 	}
 
+	hcChanges, err := s.store.GetWeekHandicapChanges(ctx, seasonID, weekNum)
+	if err != nil {
+		return models.WeekRecap{}, fmt.Errorf("week recap: handicap changes: %w", err)
+	}
+	if hcChanges == nil {
+		hcChanges = []models.RecapHandicapChange{}
+	}
+
 	var hc models.AdvancePreviewHandicap
 	if s.hcPreview != nil {
 		hc, err = s.hcPreview.HandicapPreview(ctx, seasonID)
@@ -282,6 +290,7 @@ func (s *WeekService) WeekRecap(ctx context.Context, seasonID, weekNum int64) (m
 		Matches:         data.Matches,
 		MissingCount:    missingCount,
 		PlayerStats:     playerStats,
+		HandicapChanges: hcChanges,
 		Acknowledgments: acks,
 		NextWeekNumber:  advance.NextWeekNumber,
 		NextWeek:        advance.NextWeek,

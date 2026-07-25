@@ -230,6 +230,15 @@ class SchedulePage extends HTMLElement {
         this.#toggleWeekRecap(sid, parseInt(recapBtn.dataset.weekNum, 10));
         return;
       }
+
+      const hcWeekBtn = e.target.closest('[data-action="open-handicap-for-week"]');
+      if (hcWeekBtn) {
+        openHandicapForWeek(
+          parseInt(hcWeekBtn.dataset.seasonId, 10),
+          parseInt(hcWeekBtn.dataset.weekNum, 10)
+        );
+        return;
+      }
     });
 
     // Wire global modal event handlers.
@@ -596,6 +605,9 @@ class SchedulePage extends HTMLElement {
         + esc(recap.handicap.message) + '</p>'
       : '';
 
+    const hcChangesSection = this.#renderHandicapChangesSection(
+      recap.handicap_changes, recap.week_number, recap.season_id);
+
     let playerStatsSection = '';
     if (Array.isArray(recap.player_stats) && recap.player_stats.length > 0) {
       const statRows = recap.player_stats.map(ps =>
@@ -634,6 +646,43 @@ class SchedulePage extends HTMLElement {
       + ackNote
       + nextNote
       + hcNote
+      + hcChangesSection
+      + '</div>';
+  }
+
+  #renderHandicapChangesSection(changes, weekNum, seasonId) {
+    if (seasonId == null || weekNum == null) return '';
+    const link = '<button class="btn btn-link btn-sm py-0 px-1 small"'
+      + ' data-action="open-handicap-for-week"'
+      + ' data-season-id="' + esc(String(seasonId)) + '"'
+      + ' data-week-num="' + esc(String(weekNum)) + '"'
+      + ' title="Open Handicap Review for this week">Review &amp; Apply</button>';
+    const hasChanges = Array.isArray(changes) && changes.length > 0;
+    let body;
+    if (hasChanges) {
+      const rows = changes.map(ch =>
+        '<tr>'
+        + '<td class="small">' + esc(ch.player_name || '') + '</td>'
+        + '<td class="small text-end">' + esc(String(ch.old_handicap)) + '</td>'
+        + '<td class="small text-end fw-semibold">' + esc(String(ch.new_handicap)) + '</td>'
+        + '</tr>'
+      ).join('');
+      body = '<table class="table table-sm table-borderless small mb-0"><thead><tr>'
+        + '<th class="text-muted fw-normal">Player</th>'
+        + '<th class="text-muted fw-normal text-end">Old HC</th>'
+        + '<th class="text-muted fw-normal text-end">New HC</th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    } else {
+      body = '<p class="small text-muted mb-0">No handicap changes have been recorded for Week '
+        + esc(String(weekNum)) + ' yet.</p>';
+    }
+    const count = hasChanges
+      ? esc(String(changes.length)) + ' handicap change' + (changes.length !== 1 ? 's' : '') + ' applied this week'
+      : 'Handicap changes';
+    return '<div class="mt-1">'
+      + '<p class="small fw-semibold text-muted mb-1"><i class="bi bi-graph-up me-1"></i>'
+      + count + link + '</p>'
+      + body
       + '</div>';
   }
 

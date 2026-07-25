@@ -425,6 +425,15 @@ type RecapPlayerStat struct {
 	Diff       float64 `json:"diff"`
 }
 
+// RecapHandicapChange is one applied handicap change from handicap_history for a
+// specific season and week. PlayerName comes from player_name_snapshot (the name
+// at apply time). Returned in WeekRecap.HandicapChanges.
+type RecapHandicapChange struct {
+	PlayerName  string  `json:"player_name"`
+	OldHandicap float64 `json:"old_handicap"`
+	NewHandicap float64 `json:"new_handicap"`
+}
+
 // WeekRecap is the response for GET /api/seasons/{id}/weeks/{week}/recap.
 // Read-only; no data is modified by this endpoint.
 // Acknowledgments, next-week readiness, and handicap sections are included
@@ -437,6 +446,7 @@ type WeekRecap struct {
 	Matches         []RecapMatchRow         `json:"matches"`
 	MissingCount    int                     `json:"missing_count"`
 	PlayerStats     []RecapPlayerStat       `json:"player_stats"`
+	HandicapChanges []RecapHandicapChange   `json:"handicap_changes"`
 	Acknowledgments []CloseAck              `json:"acknowledgments"`
 	NextWeekNumber  *int                    `json:"next_week_number,omitempty"`
 	NextWeek        *AdvancePreviewNextWeek `json:"next_week,omitempty"`
