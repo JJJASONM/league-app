@@ -173,6 +173,10 @@ type SeasonManager interface {
 	// RosterEligible returns (true, "") when both teams in a match have at least
 	// minPlayers season-roster players, or when the season is not managed.
 	RosterEligible(ctx context.Context, matchID int64, minPlayers int) (bool, string, error)
+	// ClosePreview returns the read-only close validation state for the season.
+	ClosePreview(ctx context.Context, seasonID int64, weeks []models.WeekSummary, standings []models.Standing) (seasons.SeasonClosePreview, error)
+	// CloseSeason validates and commits the season close.
+	CloseSeason(ctx context.Context, seasonID int64, weeks []models.WeekSummary, standings []models.Standing) (models.Season, error)
 }
 
 // Dependencies holds domain services injected into handlers at startup.

@@ -13,3 +13,13 @@ const (
 	ChecklistNoSchedule         = "NO_SCHEDULE"
 	ChecklistNoEndDate          = "NO_END_DATE"
 )
+
+// Season-close blocker and warning codes.
+// Returned in SeasonClosePreview.Blockers / Warnings and as domainerr codes.
+const (
+	CodeSeasonCloseDraft      = "SEASON_CLOSE_DRAFT"
+	CodeSeasonAlreadyClosed   = "SEASON_ALREADY_CLOSED"
+	CodeSeasonCloseNoSchedule = "SEASON_CLOSE_NO_SCHEDULE"
+	CodeSeasonCloseUnclosed   = "SEASON_CLOSE_UNCLOSED"
+	CodeMissingResults        = "MISSING_RESULTS"
+)

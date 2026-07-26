@@ -81,27 +81,106 @@ draft-season banner.
 
 ## Season-End Clearance
 
-Season closing is a future workflow and should be designed before implementation.
-The intended direction is:
+### Season Lifecycle States
 
-- All scheduled weeks must be closed before the season can close.
-- Unresolved matches must either remain excluded from official results or receive
-  a controlled admin resolution before final standings are accepted.
-- Final standings and placements must be reviewed by an admin.
-- Closing stores an immutable final standings snapshot.
-- Closing locks schedule changes, roster changes, score edits, handicap apply,
-  and rule edits by default.
-- Corrections require reopening the season through an explicit admin action,
-  recalculating affected results, reviewing the result, and closing again.
+| State | active | activated_at | closed_at | Notes |
+|-------|--------|-------------|-----------|-------|
+| Draft | 0 | NULL | NULL | Setup in progress; cannot close |
+| Active | 1 | set | NULL | Current play season |
+| Historical | 0 | set | NULL | Deactivated; not yet closed |
+| Closed | 0 | set | set | Immutable; final snapshot stored |
+
+A season may be closed from Active or Historical state. Closing an Active season
+also sets `active=0`. Closing a Draft season is blocked.
+
+### Phase 1 - Core Close Season (implemented 2026-07-26)
+
+Phase 1 adds the minimum viable close-season workflow: a read-only preview
+endpoint and a commit endpoint.
+
+**New DB columns (additive migrations):**
+
+- `seasons.closed_at DATETIME` - set by `CloseSeasonRecord`; NULL until closed
+- `seasons.final_standings_snapshot TEXT` - JSON blob; NOT included in normal
+  season list/get responses to avoid bloating payloads
+
+**New routes:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/seasons/{id}/close-preview` | Read-only validation; always returns 200 |
+| `POST` | `/api/seasons/{id}/close` | Commits the close; returns the updated season |
+
+Both routes require `WeekMgr` and `RoundMgr` in `Dependencies`; they are not
+registered when either is nil.
+
+**Close blockers (prevent close; non-200 on POST /close):**
+
+| Code | HTTP | Condition |
+|------|------|-----------|
+| `SEASON_CLOSE_DRAFT` | 422 | `activated_at IS NULL` |
+| `SEASON_ALREADY_CLOSED` | 409 | `closed_at IS NOT NULL` |
+| `SEASON_CLOSE_NO_SCHEDULE` | 422 | zero matches in season |
+| `SEASON_CLOSE_UNCLOSED` | 409 | any `league_weeks` row with status != `closed` |
+
+**Advisory warnings (do not block close):**
+
+| Code | Condition |
+|------|-----------|
+| `MISSING_RESULTS` | matches with `completed=0` (no scoresheet entered) |
+
+**Snapshot format (`final_standings_snapshot`):**
+
+```json
+{
+  "schema_version": 1,
+  "captured_at": "2026-06-01T00:00:00Z",
+  "standings": [
+    { "team_id": 1, "team_name": "Sharks", "wins": 8, ... }
+  ]
+}
+```
+
+The snapshot is write-only in Phase 1 - there is no read endpoint for the
+stored JSON. Standings are captured at close time from the live
+`GetStandings()` result.
+
+**`mapSeasonErr` update:** `domainerr.Conflict` now maps to HTTP 409.
+Previously it fell through to the `default` case (500).
+
+**New domain files:**
+- `backend/domains/seasons/close_service.go` - `ClosePreview`, `CloseSeason`,
+  `computeClose`, `blockerCategory`
+- `backend/domains/seasons/close_service_test.go` - 10 unit tests
+
+**New store methods (SeasonStore interface):**
+- `GetSeasonMissingCount(ctx, seasonID)` - `COUNT(*)` of incomplete matches
+- `CloseSeasonRecord(ctx, seasonID, snapshotJSON, setInactive)` - single UPDATE
+
+**New SQLite files:**
+- `backend/storage/sqlite/season_close_store.go` - both store methods
+- `backend/storage/sqlite/season_close_store_test.go` - 6 integration tests
+
+**New handler files:**
+- `handlers/api_season_close.go` - `closeSeasonPreviewHandler`, `closeSeasonHandler`
+- `handlers/api_season_close_test.go` - 7 integration tests
+
+**Frontend changes:**
+- `web/domains/seasons/season-api-service.js` - `closeSeasonPreview`, `closeSeason`
+- `web/domains/seasons/seasons-domain.js` - Closed badge in list rows and panel
+  header; Close Season button (visible for activated, not-yet-closed seasons);
+  `#closeSeasonFlow()` calls preview, shows confirm dialog, then commits
+
+**Phase 2 (deferred):**
+- Edit locks: prevent scoresheet, roster, handicap, and rule changes after close
+- Season reopen (explicit admin action)
 
 Payment status is not part of the app's current close-season requirements. It is
-tracked outside the app for now, but should be brought into the product soon as a
-login reminder or related account-status signal for unpaid players.
+tracked outside the app for now.
 
 Activating a new season does not require the prior active season to be closed.
 The app may eventually warn when an earlier season remains unclosed, but it must
-not silently close or hard-block activation until the season-end workflow is
-implemented.
+not silently close or hard-block activation.
 
 ## Decision History
 

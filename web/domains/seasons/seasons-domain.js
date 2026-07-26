@@ -25,6 +25,7 @@ import {
   listSkippedWeeks, addSkippedWeek, removeSkippedWeek,
   listByeRequests, addByeRequest, updateByeRequest, removeByeRequest,
   listSeasonTeams, getSeasonChecklist,
+  closeSeasonPreview, closeSeason,
 } from './season-api-service.js';
 import './season-editor-component.js';
 import { displayDate, fmtDateRange } from '../../components/date-display.js';
@@ -123,12 +124,17 @@ class SeasonsPage extends HTMLElement {
             <div>
               <span class="fw-bold fs-6 sdx-mgmt-title"></span>
               <span class="badge bg-success ms-1 d-none sdx-mgmt-active-badge">Active</span>
+              <span class="badge bg-secondary ms-1 d-none sdx-mgmt-closed-badge">Closed</span>
               <span class="text-muted small ms-2 sdx-mgmt-meta"></span>
             </div>
             <div class="ms-auto d-flex gap-2 flex-wrap">
               <button class="btn btn-sm btn-outline-secondary sdx-set-active-btn"
                 data-action="activate-mgmt" style="display:none" disabled>
                 <i class="bi bi-lightning"></i> Set Active
+              </button>
+              <button class="btn btn-sm btn-outline-dark d-none sdx-close-season-btn"
+                data-action="close-season">
+                <i class="bi bi-lock"></i> Close Season
               </button>
               <button class="btn btn-sm btn-outline-primary" data-action="go-schedule">
                 <i class="bi bi-calendar-week"></i> View Schedule
@@ -339,6 +345,9 @@ class SeasonsPage extends HTMLElement {
       case 'close-mgmt':
         this.#closeMgmt();
         break;
+      case 'close-season':
+        this.#closeSeasonFlow();
+        break;
       case 'gen-schedule':
         this.#generateSchedule();
         break;
@@ -375,10 +384,12 @@ class SeasonsPage extends HTMLElement {
         ? ` · ${s.num_weeks}wk` : '';
       const isActive   = !!s.active;
       const isDraft    = !s.active && !s.activated_at;
+      const isClosed  = !!s.closed_at;
       return `<tr>
         <td>
           <span class="fw-semibold">${esc(s.name)}</span>
-          ${isActive ? '<span class="badge bg-success ms-1" style="font-size:.68rem">Active</span>' : ''}
+          ${isActive  ? '<span class="badge bg-success ms-1" style="font-size:.68rem">Active</span>' : ''}
+          ${isClosed  ? '<span class="badge bg-secondary ms-1" style="font-size:.68rem">Closed</span>' : ''}
         </td>
         <td class="text-muted small">${fmtDateRange(s.start_date, s.end_date)}</td>
         <td><span class="badge bg-secondary" style="font-size:.7rem">${esc(typeLabel)}${esc(weeksNote)}</span></td>
@@ -419,6 +430,7 @@ class SeasonsPage extends HTMLElement {
     // Header
     this.querySelector('.sdx-mgmt-title').textContent = s.name;
     this.querySelector('.sdx-mgmt-active-badge').classList.toggle('d-none', !s.active);
+    this.querySelector('.sdx-mgmt-closed-badge').classList.toggle('d-none', !s.closed_at);
 
     const meta = [
       fmtDateRange(s.start_date, s.end_date),
@@ -426,13 +438,18 @@ class SeasonsPage extends HTMLElement {
     ].filter(Boolean).join(' · ');
     this.querySelector('.sdx-mgmt-meta').textContent = meta;
 
-    const isDraft    = !s.active && !s.activated_at;
+    const isDraft      = !s.active && !s.activated_at;
+    const isClosed     = !!s.closed_at;
+    const canBeClosedUI = !!s.activated_at && !isClosed;
     const isManaged  = s.teams_managed === true || s.teams_managed === 1;
     this.#isManaged  = isManaged;
 
     const setActiveBtn = this.querySelector('.sdx-set-active-btn');
     setActiveBtn.style.display = isDraft ? '' : 'none';
     setActiveBtn.disabled      = true;
+
+    const closeBtn = this.querySelector('.sdx-close-season-btn');
+    closeBtn.classList.toggle('d-none', !canBeClosedUI);
 
     // Schedule setup form
     const fromSel = this.querySelector('.sdx-gen-from-season');
@@ -586,6 +603,44 @@ class SeasonsPage extends HTMLElement {
       toast('Deleted');
       if (this.#mgmtSeasonId === id) this.#closeMgmt();
       await this.#refreshState();
+    } catch(e) { toast(e.message, 'danger'); }
+  }
+
+  async #closeSeasonFlow() {
+    if (!this.#mgmtSeasonId) return;
+    const s = this.#allSeasons.find(x => x.id === this.#mgmtSeasonId);
+    const name = s ? s.name : String(this.#mgmtSeasonId);
+
+    let preview;
+    try {
+      preview = await closeSeasonPreview(this.#mgmtSeasonId);
+    } catch(e) {
+      toast(`Could not load close preview: ${e.message}`, 'danger');
+      return;
+    }
+
+    if (!preview.can_close) {
+      const lines = (preview.blockers || []).map(b => `- ${b.message}`).join('\n');
+      toast(`Cannot close season:\n${lines}`, 'danger');
+      return;
+    }
+
+    const warningLines = (preview.warnings || []).map(w => `- ${w.message}`).join('\n');
+    const confirmMsg = [
+      `Close "${name}"?`,
+      '',
+      'This will mark the season closed and snapshot final standings.',
+      'No reopen workflow exists yet.',
+      warningLines ? `\nAdvisory:\n${warningLines}` : '',
+    ].filter(l => l !== undefined).join('\n').trim();
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      await closeSeason(this.#mgmtSeasonId);
+      toast(`Season "${name}" closed`);
+      await this.#refreshState();
+      if (this.#mgmtSeasonId) await this.#manageSeason(this.#mgmtSeasonId);
     } catch(e) { toast(e.message, 'danger'); }
   }
 

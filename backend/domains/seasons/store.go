@@ -279,6 +279,16 @@ type SeasonStore interface {
 	// DeleteSeason removes the season record by ID. No error is returned when the
 	// row does not exist (cascading deletes handle child rows).
 	DeleteSeason(ctx context.Context, seasonID int64) error
+
+	// ── Season close ──────────────────────────────────────────────────────────────
+
+	// GetSeasonMissingCount returns the number of matches for the season with completed=0.
+	// Returns 0 when no matches exist.
+	GetSeasonMissingCount(ctx context.Context, seasonID int64) (int, error)
+
+	// CloseSeasonRecord stores the final standings snapshot, sets closed_at, and
+	// (when setInactive is true) sets active=0.
+	CloseSeasonRecord(ctx context.Context, seasonID int64, snapshotJSON string, setInactive bool) error
 }
 
 // CreateSeasonInput carries the user-supplied fields for season creation.
@@ -296,4 +306,31 @@ type UpdateSeasonInput struct {
 	StartDate    *string
 	ScheduleType string
 	NumWeeks     int
+}
+
+// ── Season-close types ────────────────────────────────────────────────────────
+
+// CloseBlocker is one hard blocker preventing season close.
+type CloseBlocker struct {
+	Code          string `json:"code"`
+	Message       string `json:"message"`
+	UnclosedWeeks []int  `json:"unclosed_weeks,omitempty"`
+}
+
+// CloseWarning is an advisory notice that does not block season close.
+type CloseWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Count   int    `json:"count,omitempty"`
+}
+
+// SeasonClosePreview is the response for GET /api/seasons/{id}/close-preview.
+// CanClose is true when Blockers is empty.
+type SeasonClosePreview struct {
+	CanClose      bool           `json:"can_close"`
+	Blockers      []CloseBlocker `json:"blockers"`
+	Warnings      []CloseWarning `json:"warnings"`
+	Standings     []models.Standing `json:"standings"`
+	MissingCount  int            `json:"missing_results"`
+	UnclosedWeeks []int          `json:"unclosed_weeks"`
 }

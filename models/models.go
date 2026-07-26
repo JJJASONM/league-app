@@ -59,6 +59,7 @@ type Season struct {
 	ScheduleStale bool      `json:"schedule_stale"`  // true when season_teams changed after generation
 	TeamsManaged  bool      `json:"teams_managed"`   // false = legacy season; true = explicit team management
 	ActivatedAt   *string   `json:"activated_at,omitempty"` // set once on first activation; persistent setup lock
+	ClosedAt      *string   `json:"closed_at,omitempty"`    // set when season is officially closed
 	CreatedAt     time.Time `json:"created_at"`
 }
 

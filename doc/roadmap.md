@@ -55,13 +55,12 @@ These items should stay small enough to review and ship independently.
 These are the next build targets after the current workflow foundation is
 stable.
 
-- Season-end clearance discovery.
-  - Define the final-season close workflow before implementation.
-  - Require all scheduled weeks to be closed before season close.
-  - Store immutable final standings and placements.
-  - Lock schedule, roster, score, handicap, and rule edits after close.
-  - Treat paid/unpaid player status as outside the app for now, but plan for a
-    future login reminder or account-status signal.
+- Season-end clearance (Phase 2 - edit locks).
+  - Phase 1 (core close) shipped on 2026-07-26: preview endpoint, commit
+    endpoint, final standings snapshot, Closed badge in UI, Close Season button.
+  - Phase 2: add edit locks to prevent scoresheet, roster, handicap, and rule
+    changes on closed seasons. Require explicit admin reopen action.
+  - Treat paid/unpaid player status as outside the app for now.
 
 - Continue backend/domain extraction where workflows are already active.
   - Reduce monolithic handler/shell ownership further.

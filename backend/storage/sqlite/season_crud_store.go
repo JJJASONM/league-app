@@ -20,11 +20,11 @@ const seasonFullCols = ` id, league_id, name,` +
 	` strftime('%Y-%m-%d', start_date), strftime('%Y-%m-%d', end_date),` +
 	` active, schedule_type, COALESCE(num_weeks,0),` +
 	` COALESCE(schedule_stale,0), COALESCE(teams_managed,0),` +
-	` activated_at, created_at `
+	` activated_at, closed_at, created_at `
 
 func scanFullSeason(row interface{ Scan(...any) error }) (models.Season, error) {
 	var s models.Season
-	var startDate, endDate, activatedAt sql.NullString
+	var startDate, endDate, activatedAt, closedAt sql.NullString
 	var active, stale, managed int
 	var createdAt time.Time
 	err := row.Scan(
@@ -32,7 +32,7 @@ func scanFullSeason(row interface{ Scan(...any) error }) (models.Season, error) 
 		&startDate, &endDate,
 		&active, &s.ScheduleType, &s.NumWeeks,
 		&stale, &managed,
-		&activatedAt, &createdAt,
+		&activatedAt, &closedAt, &createdAt,
 	)
 	if err != nil {
 		return models.Season{}, err
@@ -49,6 +49,9 @@ func scanFullSeason(row interface{ Scan(...any) error }) (models.Season, error) 
 	}
 	if activatedAt.Valid && activatedAt.String != "" {
 		s.ActivatedAt = &activatedAt.String
+	}
+	if closedAt.Valid && closedAt.String != "" {
+		s.ClosedAt = &closedAt.String
 	}
 	if s.ScheduleType == "" {
 		s.ScheduleType = matches.ScheduleTypeDoubleRR

@@ -105,6 +105,14 @@ type stubSeasonStore struct {
 	updateSeasonFn     func(seasons.UpdateSeasonInput) (models.Season, error)
 	deleteSeasonCalled bool
 	deleteSeasonErr    error
+
+	// season close stubs
+	missingCount        int
+	missingCountErr     error
+	closeRecordCalled   bool
+	closeRecordInactive bool
+	closeRecordSnap     string
+	closeRecordErr      error
 }
 
 func (s *stubSeasonStore) IsDraft(_ context.Context, _ int64) (bool, error) {
@@ -268,6 +276,18 @@ func (s *stubSeasonStore) FindActiveSeasonByLeague(_ context.Context, _ int64) (
 }
 func (s *stubSeasonStore) RosterEligible(_ context.Context, _ int64, _ int) (bool, string, error) {
 	return true, "", nil
+}
+
+// ── season close stubs ────────────────────────────────────────────────────────
+
+func (s *stubSeasonStore) GetSeasonMissingCount(_ context.Context, _ int64) (int, error) {
+	return s.missingCount, s.missingCountErr
+}
+func (s *stubSeasonStore) CloseSeasonRecord(_ context.Context, _ int64, snap string, inactive bool) error {
+	s.closeRecordSnap = snap
+	s.closeRecordInactive = inactive
+	s.closeRecordCalled = true
+	return s.closeRecordErr
 }
 
 func newSvc(store *stubSeasonStore) *seasons.SeasonService {

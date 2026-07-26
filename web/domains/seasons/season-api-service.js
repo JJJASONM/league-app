@@ -61,3 +61,11 @@ export async function listSeasonTeams(seasonId) {
 export async function getSeasonChecklist(seasonId) {
   return api('GET', `/seasons/${seasonId}/checklist`);
 }
+
+export async function closeSeasonPreview(seasonId) {
+  return api('GET', `/seasons/${seasonId}/close-preview`);
+}
+
+export async function closeSeason(seasonId) {
+  return api('POST', `/seasons/${seasonId}/close`);
+}

@@ -356,6 +356,9 @@ CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash);
 		 WHERE apply_request_id IS NOT NULL`,
 		// Phase D: week_number links an apply batch to the recap week being processed.
 		`ALTER TABLE handicap_history ADD COLUMN week_number INTEGER`,
+		// Season-end clearance Phase 1: close season lifecycle columns.
+		`ALTER TABLE seasons ADD COLUMN closed_at DATETIME`,
+		`ALTER TABLE seasons ADD COLUMN final_standings_snapshot TEXT`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs

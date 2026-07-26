@@ -132,6 +132,12 @@ func (n *noopSeasonMgr) FindActiveSeasonByLeague(_ context.Context, _ int64) (in
 func (n *noopSeasonMgr) RosterEligible(_ context.Context, _ int64, _ int) (bool, string, error) {
 	return true, "", nil
 }
+func (n *noopSeasonMgr) ClosePreview(_ context.Context, _ int64, _ []models.WeekSummary, _ []models.Standing) (seasons.SeasonClosePreview, error) {
+	return seasons.SeasonClosePreview{CanClose: true, Blockers: []seasons.CloseBlocker{}, Warnings: []seasons.CloseWarning{}, Standings: []models.Standing{}, UnclosedWeeks: []int{}}, nil
+}
+func (n *noopSeasonMgr) CloseSeason(_ context.Context, _ int64, _ []models.WeekSummary, _ []models.Standing) (models.Season, error) {
+	return models.Season{}, nil
+}
 
 // noopScheduleMgr satisfies handlers.ScheduleManager for tests that don't
 // exercise schedule generation.

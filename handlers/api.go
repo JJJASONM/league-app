@@ -356,6 +356,18 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		})
 	}
 
+	// Season close — requires both WeekMgr (ListWeeks) and RoundMgr (GetStandings).
+	if deps.WeekMgr != nil && deps.RoundMgr != nil {
+		weekMgrClose := deps.WeekMgr
+		roundMgrClose := deps.RoundMgr
+		mux.HandleFunc("GET /api/seasons/{id}/close-preview", func(w http.ResponseWriter, r *http.Request) {
+			closeSeasonPreviewHandler(w, r, seasonMgr, weekMgrClose, roundMgrClose)
+		})
+		mux.HandleFunc("POST /api/seasons/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+			closeSeasonHandler(w, r, seasonMgr, weekMgrClose, roundMgrClose)
+		})
+	}
+
 	// Backup
 	mux.HandleFunc("POST /api/backup", func(w http.ResponseWriter, r *http.Request) {
 		path, err := db.Backup(dataDir)
@@ -2068,6 +2080,8 @@ func mapSeasonErr(w http.ResponseWriter, err error) {
 			jsonError(w, de.Message, http.StatusNotFound)
 		case domainerr.InvalidInput:
 			jsonError(w, de.Message, http.StatusBadRequest)
+		case domainerr.Conflict:
+			jsonError(w, de.Message, http.StatusConflict)
 		case domainerr.Unprocessable:
 			jsonError(w, de.Message, http.StatusUnprocessableEntity)
 		default:
