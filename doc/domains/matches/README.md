@@ -1666,26 +1666,26 @@ only.
 Close Week remains the official week-clearance action. There is no separate
 `cleared` state at this time; the state model stays `open` and `closed`.
 
-A week may close even when some scheduled matches have no result. Those missing
-matches should be recorded and shown in the week breakdown as `no_result` or
-`missing`, not as forfeits. Missing matches are excluded from standings and
-player stats until they are later resolved. The weekly breakdown must make that
-clear so an admin can move to the next week without losing visibility into what
-was not played.
+A week may close even when some scheduled matches have no result. Missing
+matches are recorded in the recap with `has_result = false` and excluded from
+standings and player stats until they are later resolved. The recap panel makes
+this visible so an admin can move to the next week without losing visibility
+into what was not played.
 
-The week-end recap should be available immediately after Close Week succeeds and
-also from a closed week card later. The recap should include:
+The week-end recap is available immediately after Close Week succeeds and from
+any closed or open week card on the Schedule page. Implemented sections are
+marked with the phase that delivered them; remaining items are deferred.
 
-- Match results summary
-- Missing or no-result matches
-- Team record changes
-- Team statistics
-- Player statistics changes
-- Handicap recommendation changes
-- Handicap changes actually applied
-- Warning acknowledgments
-- Next-week readiness signals
-- Links to official standings and player-stats views
+- Match results summary *(Phase A)*
+- Missing or no-result matches *(Phase A)*
+- Player statistics changes *(Phase C)*
+- Handicap changes actually applied *(Phase D2)*
+- Warning acknowledgments *(Phase A)*
+- Next-week readiness signals *(Phase A)*
+- Team record changes *(deferred)*
+- Team statistics *(deferred)*
+- Handicap recommendation changes *(deferred -- visible in close-week advance preview, not in recap endpoint)*
+- Links to official standings and player-stats views from the recap panel *(deferred)*
 
 Handicap application should remain a separate explicit admin step, but it is
 part of the week-end recap flow. Updated handicaps should be applied for
@@ -1751,6 +1751,13 @@ GET /api/seasons/{id}/weeks/{week}/recap
       "diff":        1.5
     }
   ],
+  "handicap_changes": [
+    {
+      "player_name":  "Jane Doe",
+      "old_handicap": 1.5,
+      "new_handicap": 2.0
+    }
+  ],
   "acknowledgments":   [...],    // same shape as /acknowledgments endpoint
   "next_week_number":  2,
   "next_week":         { ... },  // same shape as advance-preview next_week
@@ -1772,6 +1779,7 @@ for legacy seasons.
 | `has_result` | True when `matches.completed = 1` (scores were entered and saved) |
 | `missing_count` | Count of match rows where `has_result = false` |
 | `player_stats` | Per-player stat totals (sets, games) derived from match_results; empty array when no results recorded |
+| `handicap_changes` | Handicap changes applied during this week, matched by `handicap_history.week_number` (added Phase D1); empty array when none recorded or when applies omitted the week number |
 | `acknowledgments` | All `week_close_acknowledgments` rows for this week (same as `/acknowledgments` endpoint) |
 | `next_week_number` / `next_week` | Next-week readiness signals (same as advance-preview) |
 | `handicap` | Handicap method, status, and recommendations (same as advance-preview) |
@@ -1807,7 +1815,7 @@ interface -- no new network requests are needed from the client.
 ### Deferred (not in Phase A)
 
 - Player-level stat deltas: implemented in Phase C (RecapPlayerStat, GetWeekPlayerStats)
-- Handicap changes actually applied (from `handicap_history`): still deferred; handicap_history has season_id but no week_number; effective_date heuristic not used for recap/audit-adjacent data; pending PM schema decision
+- Handicap changes actually applied: implemented in Phase D1 (week_number column on handicap_history) and Phase D2 (GetWeekHandicapChanges, recap wiring, Review & Apply deep-link)
 - Frontend recap UI: implemented in Phase B (schedules domain, schedule-page-component.js)
 - Persisted recap snapshots
 - Audit writes for recap views
@@ -1844,9 +1852,116 @@ teams.name for legacy seasons.
 
 ### Deferred (not in Phase C)
 
-- Handicap changes actually applied: handicap_history has season_id but no week_number; effective_date heuristic not used for recap/audit-adjacent data; pending PM schema decision
+- Handicap changes actually applied: implemented in Phase D1 and Phase D2 (see below)
 - Recap panel accessible from outside the Schedule page
 - Print/export of the recap panel
+
+## Week-End Recap Phase D1 -- Handicap History Week Linkage (implemented 2026-07-21)
+
+### Goal
+
+Add a nullable `week_number` column to `handicap_history` so that Apply batches
+can be linked to a recap week. Without this column the read path (D2) would have
+no way to match apply rows to the week they belong to. No effective-date
+heuristic is used; the caller decides when to populate the field.
+
+### Schema change
+
+`handicap_history.week_number INTEGER` -- added via additive migration; NULL for
+all pre-D1 rows and for any apply request that omits the field. All rows in one
+Apply batch share the same `week_number` value.
+
+### Flow
+
+`applyRequestDTO.WeekNumber *int` (JSON: `week_number`, omitempty) is decoded by
+the handler and forwarded through `ApplyRequest.WeekNumber` to
+`HandicapHistoryRow.WeekNumber`. The SQLite adapter's 16-column INSERT includes
+the column. Server-side inference from effective_date is not performed.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `db/db.go` | `week_number INTEGER` in CREATE TABLE + additive migration |
+| `backend/domains/handicaps/store.go` | `WeekNumber *int` on `HandicapHistoryRow` |
+| `backend/storage/sqlite/handicap_apply_store.go` | 16-column INSERT includes `week_number` |
+| `backend/domains/handicaps/apply.go` | `WeekNumber *int` on `ApplyRequest`; passed to each row |
+| `handlers/api.go` | `WeekNumber *int json:"week_number,omitempty"` on `applyRequestDTO` |
+
+## Week-End Recap Phase D2 -- Applied Handicap Changes in Recap (implemented 2026-07-25)
+
+### Goal
+
+Surface applied handicap changes in the week-end recap and wire the Handicap
+Review component so that applies from the recap context are linked back to the
+recap week.
+
+### Recap read path
+
+`GetWeekHandicapChanges` is a new `WeekStore` method that queries
+`handicap_history WHERE season_id = ? AND week_number = ?` ordered by
+`player_name_snapshot`. The result is a `[]models.RecapHandicapChange`
+(player_name, old_handicap, new_handicap). `WeekService.WeekRecap` calls it and
+populates `WeekRecap.HandicapChanges`. An empty array is returned -- never nil --
+when no rows exist.
+
+### Apply write path
+
+The `<handicap-review>` Web Component gains a `#weekNumber` private field.
+`setWeekContext(weekNum)` (public method) sets it and shows a visible banner:
+"Week context: applying from Week N recap. Applied rows will be linked to Week N."
+`loadSeason()` and `reset()` clear the field and hide the banner.
+
+When `#weekNumber` is non-null, the Apply request body includes
+`"week_number": N`, which flows through the existing D1 path into
+`handicap_history.week_number`.
+
+### Schedule recap panel
+
+`#renderHandicapChangesSection` in `schedule-page-component.js` renders the
+applied-changes table whenever `season_id` and `week_number` are available.
+Empty state shows "No handicap changes have been recorded for Week N yet." with
+a "Review & Apply" deep-link button. The button fires
+`data-action="open-handicap-for-week"`, which calls the shell bridge
+`openHandicapForWeek(seasonId, weekNum)`.
+
+### Shell bridge and <handicaps-page>
+
+`openHandicapForWeek(seasonId, weekNum)` in `app.js` calls `navTo('handicap')`
+then delegates to `document.querySelector('handicaps-page')?.openForWeek(...)`.
+
+`<handicaps-page>.openForWeek(seasonId, weekNum)` sets the season selector,
+awaits `widget.loadSeason(seasonId)`, then calls `widget.setWeekContext(weekNum)`.
+The await ensures `setWeekContext` runs after `loadSeason` clears `#weekNumber`.
+
+### NULL gap
+
+Pre-D1 applies and any apply that omits `week_number` store NULL in
+`handicap_history.week_number`. `GetWeekHandicapChanges` never returns these
+rows; the section is hidden when `handicap_changes` is empty.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `models/models.go` | `RecapHandicapChange` struct; `WeekRecap.HandicapChanges []RecapHandicapChange` |
+| `backend/domains/matches/store.go` | `GetWeekHandicapChanges` added to `WeekStore` interface |
+| `backend/domains/matches/service.go` | `WeekRecap` calls `GetWeekHandicapChanges`; nil coerced to empty slice |
+| `backend/domains/matches/service_test.go` | stub field, stub method, 2 new `WeekRecap` tests |
+| `backend/storage/sqlite/week_store.go` | `GetWeekHandicapChanges` SQLite implementation |
+| `handlers/api_weeks_test.go` | 2 new integration tests: matching row present, mismatched week absent |
+| `web/domains/handicaps/handicap-review-component.js` | `#weekNumber` field; `setWeekContext()`; week context banner; `loadSeason`/`reset` clear banner; Apply body conditionally includes `week_number` |
+| `web/domains/handicaps/handicaps-domain.js` | `openForWeek(seasonId, weekNum)` public method |
+| `web/app.js` | `openHandicapForWeek` shell bridge delegates to `<handicaps-page>` |
+| `web/domains/schedules/schedule-page-component.js` | `#renderHandicapChangesSection`; `open-handicap-for-week` click delegation |
+| `doc/domains/handicaps/README.md` | Phase D1 and D2 decision entries |
+| `doc/domains/schedules/README.md` | Recap panel table updated; handicap-changes deferred bullet removed |
+
+### Deferred (not in Phase D2)
+
+- Recap panel accessible from outside the Schedule page
+- Print/export of the recap panel
+- Persisted recap snapshots
 
 ## Decision History
 

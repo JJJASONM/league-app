@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-07-18
+**Last reviewed:** 2026-07-25
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -54,18 +54,6 @@ These items should stay small enough to review and ship independently.
 
 These are the next build targets after the current workflow foundation is
 stable.
-
-- Week-end clearance and recap.
-  - Treat Close Week as the official week-clearance action; do not add a
-    separate `cleared` state yet.
-  - Support closing a week with missing or no-result matches while excluding
-    those matches from standings and player stats until resolved.
-  - Build or design a recap that shows match results, missing matches, team
-    records, team statistics, player-stat changes, handicap recommendation
-    changes, handicap changes actually applied, warning acknowledgments, and
-    next-week readiness.
-  - Keep Handicap Apply as an explicit recap step before next-week scoresheets
-    are printed or used.
 
 - Season-end clearance discovery.
   - Define the final-season close workflow before implementation.
@@ -242,6 +230,16 @@ follow-up.
   auto-collapse on first season load; open weeks default expanded. Collapse
   state persists across same-season refreshes and resets when the season
   selector changes.
+- Week-end recap (Phases A through D2). Read-only recap endpoint
+  (`GET /api/seasons/{id}/weeks/{week}/recap`) assembles match results,
+  missing-match count, player-stat deltas, applied handicap changes, warning
+  acknowledgments, and next-week readiness in one response. Schedule page
+  recap panel shows all sections; a Review & Apply deep-link opens the
+  Handicap tab pre-filtered to the recap week so applied rows are linked back.
+  Close Week remains the week-clearance boundary; no separate cleared state.
+  Missing matches are excluded from standings until resolved. Deferred: team-
+  level record and stat summaries, recommendation-change detail in recap,
+  print/export, persisted recap snapshots.
 
 ## Open Questions To Resolve
 
