@@ -61,6 +61,18 @@ func NewPushbackStore(db *sql.DB) *PushbackStore {
 	return &PushbackStore{db: db}
 }
 
+// IsSeasonClosed returns true when closed_at IS NOT NULL for the season.
+func (s *PushbackStore) IsSeasonClosed(ctx context.Context, seasonID int64) (bool, error) {
+	var closed int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT closed_at IS NOT NULL FROM seasons WHERE id=?`, seasonID,
+	).Scan(&closed)
+	if err != nil {
+		return false, fmt.Errorf("pushback: is season closed %d: %w", seasonID, err)
+	}
+	return closed == 1, nil
+}
+
 // SeasonExists reports whether a season row exists for the given ID.
 func (s *PushbackStore) SeasonExists(ctx context.Context, seasonID int64) (bool, error) {
 	var n int

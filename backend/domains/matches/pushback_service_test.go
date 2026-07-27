@@ -12,18 +12,23 @@ import (
 // --- stub ---
 
 type stubPushbackStore struct {
-	exists       bool
-	existsErr    error
-	closed       bool
-	closedErr    error
-	rows         []matches.PushbackMatchRow
-	rowsErr      error
-	applyErr     error
-	appliedInput *matches.PushbackApplyInput
+	exists          bool
+	existsErr       error
+	closed          bool
+	closedErr       error
+	seasonClosed    bool
+	seasonClosedErr error
+	rows            []matches.PushbackMatchRow
+	rowsErr         error
+	applyErr        error
+	appliedInput    *matches.PushbackApplyInput
 }
 
 func (s *stubPushbackStore) SeasonExists(_ context.Context, _ int64) (bool, error) {
 	return s.exists, s.existsErr
+}
+func (s *stubPushbackStore) IsSeasonClosed(_ context.Context, _ int64) (bool, error) {
+	return s.seasonClosed, s.seasonClosedErr
 }
 func (s *stubPushbackStore) HasClosedWeeksAtOrAfter(_ context.Context, _ int64, _ int) (bool, error) {
 	return s.closed, s.closedErr

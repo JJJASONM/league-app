@@ -71,6 +71,12 @@ func (s *WeekService) ValidateWeek(ctx context.Context, seasonID, weekNum int64)
 // commits the close. Returns *WeekCloseErr for validation/ack failures (HTTP 422).
 // Returns domainerr.Conflict (WEEK_CLOSE_SEASON_DRAFT) when the season is still draft.
 func (s *WeekService) CloseWeek(ctx context.Context, req CloseWeekRequest) (CloseWeekResult, error) {
+	if closed, err := s.store.IsSeasonClosed(ctx, req.SeasonID); err != nil {
+		return CloseWeekResult{}, fmt.Errorf("close week: season-closed check: %w", err)
+	} else if closed {
+		return CloseWeekResult{}, domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	if draft, err := s.store.IsSeasonDraft(ctx, req.SeasonID); err != nil {
 		return CloseWeekResult{}, fmt.Errorf("close week: draft check: %w", err)
 	} else if draft {
@@ -148,6 +154,12 @@ func (s *WeekService) CloseWeek(ctx context.Context, req CloseWeekRequest) (Clos
 // ReopenWeek sets the week back to open. Returns domainerr.NotFound (404) when no
 // matches exist for the week, and domainerr.Conflict (409) when the week is not closed.
 func (s *WeekService) ReopenWeek(ctx context.Context, seasonID, weekNum int64) error {
+	if closed, err := s.store.IsSeasonClosed(ctx, seasonID); err != nil {
+		return fmt.Errorf("reopen week: season-closed check: %w", err)
+	} else if closed {
+		return domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	count, err := s.store.WeekMatchCount(ctx, seasonID, weekNum)
 	if err != nil {
 		return fmt.Errorf("reopen week: %w", err)

@@ -29,6 +29,7 @@ function fmtHC(v) { return (v >= 0 ? '+' : '') + v; }
 
 class MatchEntryPage extends HTMLElement {
   #allPlayers   = [];
+  #allSeasons   = [];
   #activeLeague = null;
   #currentMatch = null;
   #homeTeam     = [];
@@ -76,6 +77,7 @@ class MatchEntryPage extends HTMLElement {
   refresh(allSeasons, activeSeason, allPlayers, activeLeague,
           preSelectSeasonId = null, preSelectMatchId = null) {
     this.#allPlayers   = allPlayers   ?? [];
+    this.#allSeasons   = allSeasons   ?? [];
     this.#activeLeague = activeLeague;
     this.#populateSeasonSelect(allSeasons ?? [], preSelectSeasonId);
     this.#loadMatches(preSelectMatchId);
@@ -325,7 +327,8 @@ class MatchEntryPage extends HTMLElement {
       this.#games[idx] = { g1w: g1.w, g1lb: g1.lb, g2w: g2.w, g2lb: g2.lb, g3w: g3.w, g3lb: g3.lb };
     });
 
-    const leagueName = this.#activeLeague?.name || 'League';
+    const leagueName   = this.#activeLeague?.name || 'League';
+    const seasonClosed = !!(this.#allSeasons.find(s => s.id == m.season_id)?.closed_at);
 
     let html = `<div class="no-print d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
       <div class="d-flex align-items-center gap-2">
@@ -333,15 +336,16 @@ class MatchEntryPage extends HTMLElement {
         ${m.completed
           ? '<span class="badge bg-success">Completed</span>'
           : '<span class="badge bg-secondary">Pending</span>'}
+        ${seasonClosed ? '<span class="badge bg-secondary ms-1"><i class="bi bi-lock me-1"></i>Season Closed</span>' : ''}
       </div>
       <div class="d-flex gap-2">
         <button class="btn btn-sm btn-outline-secondary" data-action="change-lineup">
           <i class="bi bi-arrow-left"></i> Change Lineup</button>
         <button class="btn btn-sm btn-outline-secondary" data-action="print-scoresheet">
           <i class="bi bi-printer"></i> Print</button>
-        <button class="btn btn-sm btn-success" data-action="save-scoresheet">
-          <i class="bi bi-check-lg"></i> Save</button>
-        ${m.completed ? `<button class="btn btn-sm btn-outline-danger" data-action="clear-results" data-match-id="${m.id}">
+        ${!seasonClosed ? `<button class="btn btn-sm btn-success" data-action="save-scoresheet">
+          <i class="bi bi-check-lg"></i> Save</button>` : ''}
+        ${m.completed && !seasonClosed ? `<button class="btn btn-sm btn-outline-danger" data-action="clear-results" data-match-id="${m.id}">
           <i class="bi bi-x-lg"></i> Clear</button>` : ''}
       </div>
     </div>`;

@@ -37,6 +37,10 @@ type PushbackStore interface {
 	// SeasonExists reports whether the season row exists.
 	SeasonExists(ctx context.Context, seasonID int64) (bool, error)
 
+	// IsSeasonClosed returns true when closed_at IS NOT NULL for the season.
+	// Returns false when the season does not exist.
+	IsSeasonClosed(ctx context.Context, seasonID int64) (bool, error)
+
 	// ApplyPushback writes the precomputed shift plan atomically.
 	// It shifts unplayed matches by ShiftedIDs, updates seasons.end_date,
 	// and clears seasons.schedule_stale to 0. No validation is performed;

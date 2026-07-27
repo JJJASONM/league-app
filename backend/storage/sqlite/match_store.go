@@ -119,6 +119,17 @@ func (s *MatchStore) AssignMatchTeams(ctx context.Context, id int64, homeTeamID,
 	return err
 }
 
+// IsSeasonClosedForMatch returns true when the season containing matchID has closed_at set.
+func (s *MatchStore) IsSeasonClosedForMatch(ctx context.Context, matchID int64) (bool, error) {
+	var closed int
+	s.db.QueryRowContext(ctx,
+		`SELECT s.closed_at IS NOT NULL
+		   FROM matches m
+		   JOIN seasons s ON s.id = m.season_id
+		  WHERE m.id=?`, matchID).Scan(&closed)
+	return closed == 1, nil
+}
+
 // normMatchDatePtr truncates a date pointer to YYYY-MM-DD, discarding any time
 // component added by the SQLite driver when it coerces DATE columns to time.Time.
 func normMatchDatePtr(s *string) *string {

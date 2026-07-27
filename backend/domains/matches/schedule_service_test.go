@@ -26,10 +26,15 @@ type stubScheduleStore struct {
 	completedMatchesErr error
 	saveErr            error
 	savedReq           matches.SaveScheduleRequest
+	seasonClosed       bool
+	seasonClosedErr    error
 }
 
 func (s *stubScheduleStore) GetScheduleSeasonMeta(_ context.Context, _ int64) (matches.ScheduleSeasonMeta, error) {
 	return s.meta, s.metaErr
+}
+func (s *stubScheduleStore) IsSeasonClosed(_ context.Context, _ int64) (bool, error) {
+	return s.seasonClosed, s.seasonClosedErr
 }
 func (s *stubScheduleStore) LoadByeRequests(_ context.Context, _ int64) (map[int]int64, error) {
 	if s.byes == nil {

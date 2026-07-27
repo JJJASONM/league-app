@@ -48,6 +48,12 @@ func (s *MatchService) GetMatch(ctx context.Context, id int64) (models.MatchDeta
 // Either value may be nil to NULL the column.
 // Returns domainerr.Conflict when the match is already completed.
 func (s *MatchService) AssignMatchTeams(ctx context.Context, id int64, homeTeamID, awayTeamID *int64) error {
+	if sc, err := s.store.IsSeasonClosedForMatch(ctx, id); err != nil {
+		return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")
+	} else if sc {
+		return domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	d, err := s.store.GetMatch(ctx, id)
 	if err != nil && !errors.Is(err, ErrMatchNotFound) {
 		return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")

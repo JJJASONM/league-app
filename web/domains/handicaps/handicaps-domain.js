@@ -54,10 +54,14 @@ class HandicapsPage extends HTMLElement {
   #syncWidget() {
     const widget = this.querySelector('.hcp-widget');
     if (!widget) return;
-    const sel = this.querySelector('.hcp-season-select');
-    const sid = sel?.value;
-    if (sid) widget.loadSeason(sid);
-    else     widget.reset();
+    const sel    = this.querySelector('.hcp-season-select');
+    const sid    = sel?.value;
+    if (sid) {
+      const season = this.#allSeasons.find(s => String(s.id) === String(sid));
+      widget.loadSeason(sid, season?.closed_at ?? null);
+    } else {
+      widget.reset();
+    }
   }
 
   #onSelectChange() {
@@ -69,7 +73,8 @@ class HandicapsPage extends HTMLElement {
     if (sel) sel.value = String(seasonId);
     const widget = this.querySelector('.hcp-widget');
     if (!widget) return;
-    await widget.loadSeason(String(seasonId));
+    const season = this.#allSeasons.find(s => String(s.id) === String(seasonId));
+    await widget.loadSeason(String(seasonId), season?.closed_at ?? null);
     widget.setWeekContext(weekNum);
   }
 }

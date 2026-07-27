@@ -96,6 +96,10 @@ type SeasonStore interface {
 	// IsDraft returns true when activated_at IS NULL for the season.
 	IsDraft(ctx context.Context, seasonID int64) (bool, error)
 
+	// IsClosed returns true when closed_at IS NOT NULL for the season.
+	// Returns false when the season does not exist.
+	IsClosed(ctx context.Context, seasonID int64) (bool, error)
+
 	// GetMeta returns lifecycle columns for the given season.
 	// Returns ErrNotFound (wrapped) when no row exists.
 	GetMeta(ctx context.Context, seasonID int64) (SeasonMeta, error)

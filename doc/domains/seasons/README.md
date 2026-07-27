@@ -171,9 +171,43 @@ Previously it fell through to the `default` case (500).
   header; Close Season button (visible for activated, not-yet-closed seasons);
   `#closeSeasonFlow()` calls preview, shows confirm dialog, then commits
 
-**Phase 2 (deferred):**
-- Edit locks: prevent scoresheet, roster, handicap, and rule changes after close
-- Season reopen (explicit admin action)
+**Phase 2 — Closed Season Edit Locks (implemented 2026-07-26):**
+
+All mutation endpoints return `SEASON_CLOSED` (HTTP 409 Conflict) when
+`seasons.closed_at IS NOT NULL`. The lock set covers:
+
+| Category | Endpoints locked |
+|----------|-----------------|
+| Scoresheet | `POST /api/matches/{id}/rounds`, `POST /api/matches/{id}/results`, `DELETE /api/matches/{id}/results` |
+| Week workflow | `POST .../weeks/{w}/close`, `POST .../weeks/{w}/reopen` |
+| Schedule | `POST /api/matches/generate`, `POST .../schedule/pushback-apply` |
+| Match assignment | `PATCH /api/matches/{id}/assign` |
+| Season setup | `PUT /api/seasons/{id}`, skipped-week add/delete, bye request add/update/delete, season-team and roster mutations |
+| Handicap | `POST /api/seasons/{id}/handicap-apply` |
+
+**Error contract:** `{"error": "season is closed; this action is not allowed"}`,
+HTTP 409, error code `SEASON_CLOSED`.
+
+**Implementation pattern:**
+- `SeasonStore.IsClosed(ctx, seasonID)` — SELECT `closed_at IS NOT NULL` for
+  season-direct endpoints
+- `RoundStore.IsSeasonClosedForMatch(ctx, matchID)` / `MatchStore.IsSeasonClosedForMatch`
+  — JOIN to seasons for match-ID endpoints; errors silently ignored (returns false)
+- Each domain's `ScheduleStore`, `WeekStore`, `PushbackStore`, and
+  `handicaps.Store` also implement `IsSeasonClosed` for their respective
+  service guards
+- The guard fires before any other validation in every affected method
+- Handler fix: `createSkippedWeek` now maps `domainerr.Conflict` → 409
+  (previously always returned 500 for any service error)
+
+**Frontend lock indicators:**
+- Schedule page: pushback panel hidden; week close/reopen buttons replaced with
+  "Locked" badge; Assign and Score Entry buttons suppressed; closed banner shown
+- Match entry: Save and Clear buttons hidden; "Season Closed" badge shown
+- Handicap review: Apply bar replaced with locked notice when `closed_at` is set
+
+**Remaining (Phase 3):**
+- Explicit admin reopen action
 
 Payment status is not part of the app's current close-season requirements. It is
 tracked outside the app for now.

@@ -91,6 +91,10 @@ type WeekStore interface {
 	// season does not exist.
 	IsSeasonDraft(ctx context.Context, seasonID int64) (bool, error)
 
+	// IsSeasonClosed returns true when closed_at IS NOT NULL for the season.
+	// Returns false when the season does not exist.
+	IsSeasonClosed(ctx context.Context, seasonID int64) (bool, error)
+
 	// GetWeekRecapData returns match summaries and week status for the recap.
 	// Team names prefer season_teams.season_name; falls back to teams.name for
 	// legacy seasons. HasResult is true when the match has completed=1.

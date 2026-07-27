@@ -32,4 +32,8 @@ type MatchStore interface {
 	// value may be nil to NULL the column. No error is returned when the match
 	// ID does not exist (preserves original handler behavior).
 	AssignMatchTeams(ctx context.Context, id int64, homeTeamID, awayTeamID *int64) error
+
+	// IsSeasonClosedForMatch returns true when the season containing matchID has
+	// closed_at set. Returns false when the match or season does not exist.
+	IsSeasonClosedForMatch(ctx context.Context, matchID int64) (bool, error)
 }

@@ -32,11 +32,23 @@ func NewRoundService(store RoundStore, ruleStore rules.RuleStore) *RoundService 
 	return &RoundService{store: store, ruleStore: ruleStore}
 }
 
+// IsSeasonClosedForMatch reports whether the season containing matchID has closed_at set.
+// Delegates to the store; errors silently return false (same contract as the store).
+func (s *RoundService) IsSeasonClosedForMatch(ctx context.Context, matchID int64) (bool, error) {
+	return s.store.IsSeasonClosedForMatch(ctx, matchID)
+}
+
 // SaveRounds validates and persists one match's round results inside a single transaction.
 // Returns *RoundValidationError on scoresheet validation failure (HTTP 422).
 // Returns domainerr.Conflict when the week is already closed (HTTP 409).
 // Returns domainerr.Unprocessable for ambiguous snapshot resolution (HTTP 422).
 func (s *RoundService) SaveRounds(ctx context.Context, input SaveRoundsInput) error {
+	if sc, err := s.store.IsSeasonClosedForMatch(ctx, input.MatchID); err != nil {
+		return fmt.Errorf("save rounds: season-closed check: %w", err)
+	} else if sc {
+		return domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	closed, err := s.store.IsWeekClosed(ctx, input.MatchID)
 	if err != nil {
 		return fmt.Errorf("save rounds: week-closed check: %w", err)
@@ -322,6 +334,12 @@ func (s *RoundService) GetPlayerStats(ctx context.Context, req PlayerStatsReques
 // SubmitResults replaces match_results for a match and marks it completed.
 // Returns domainerr.Conflict when the week is already closed.
 func (s *RoundService) SubmitResults(ctx context.Context, matchID int64, results []models.MatchResult) error {
+	if sc, err := s.store.IsSeasonClosedForMatch(ctx, matchID); err != nil {
+		return fmt.Errorf("submit results: season-closed check: %w", err)
+	} else if sc {
+		return domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	closed, err := s.store.IsWeekClosed(ctx, matchID)
 	if err != nil {
 		return fmt.Errorf("submit results: week-closed check: %w", err)
@@ -336,6 +354,12 @@ func (s *RoundService) SubmitResults(ctx context.Context, matchID int64, results
 // ClearResults deletes match_results for a match and marks it incomplete.
 // Returns domainerr.Conflict when the week is already closed.
 func (s *RoundService) ClearResults(ctx context.Context, matchID int64) error {
+	if sc, err := s.store.IsSeasonClosedForMatch(ctx, matchID); err != nil {
+		return fmt.Errorf("clear results: season-closed check: %w", err)
+	} else if sc {
+		return domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	closed, err := s.store.IsWeekClosed(ctx, matchID)
 	if err != nil {
 		return fmt.Errorf("clear results: week-closed check: %w", err)

@@ -50,6 +50,12 @@ func (s *SeasonService) CreateSeason(ctx context.Context, input CreateSeasonInpu
 // Marks the season stale after a successful update because start_date, schedule_type,
 // and num_weeks all affect the schedule's structure and calendar dates.
 func (s *SeasonService) UpdateSeason(ctx context.Context, seasonID int64, input UpdateSeasonInput) (models.Season, error) {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return models.Season{}, err
+	} else if closed {
+		return models.Season{}, domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	if input.ScheduleType == "" {
 		input.ScheduleType = matches.ScheduleTypeDoubleRR
 	}

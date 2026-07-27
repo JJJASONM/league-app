@@ -38,6 +38,18 @@ func (s *ScheduleStore) GetScheduleSeasonMeta(ctx context.Context, seasonID int6
 	return meta, nil
 }
 
+// IsSeasonClosed returns true when closed_at IS NOT NULL for the season.
+func (s *ScheduleStore) IsSeasonClosed(ctx context.Context, seasonID int64) (bool, error) {
+	var closed int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT closed_at IS NOT NULL FROM seasons WHERE id=?`, seasonID,
+	).Scan(&closed)
+	if err != nil {
+		return false, fmt.Errorf("is season closed %d: %w", seasonID, err)
+	}
+	return closed == 1, nil
+}
+
 // HasCompletedMatches reports whether the season has any match with completed=1.
 func (s *ScheduleStore) HasCompletedMatches(ctx context.Context, seasonID int64) (bool, error) {
 	var n int

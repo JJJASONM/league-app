@@ -57,6 +57,17 @@ func (s *RoundStore) IsWeekClosed(ctx context.Context, matchID int64) (bool, err
 	return wc == 1, nil
 }
 
+// IsSeasonClosedForMatch returns true when the season containing matchID has closed_at set.
+func (s *RoundStore) IsSeasonClosedForMatch(ctx context.Context, matchID int64) (bool, error) {
+	var closed int
+	s.q.QueryRowContext(ctx,
+		`SELECT s.closed_at IS NOT NULL
+		   FROM matches m
+		   JOIN seasons s ON s.id = m.season_id
+		  WHERE m.id=?`, matchID).Scan(&closed)
+	return closed == 1, nil
+}
+
 // LoadMatchContext returns season_id, home_team_id, and away_team_id for a match.
 func (s *RoundStore) LoadMatchContext(ctx context.Context, matchID int64) (matches.MatchContext, error) {
 	var mc matches.MatchContext

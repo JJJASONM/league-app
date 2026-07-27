@@ -40,6 +40,10 @@ type stubStore struct {
 	// Preview-side fields
 	gameDiffRecs    []handicaps.GameDiffAverageRow
 	gameDiffRecsErr error
+
+	// Season-closed check
+	isSeasonClosed    bool
+	isSeasonClosedErr error
 }
 
 func (s *stubStore) RunTx(_ context.Context, fn func(handicaps.Store) error) error {
@@ -50,6 +54,9 @@ func (s *stubStore) RunWriteTx(_ context.Context, fn func(handicaps.Store) error
 }
 func (s *stubStore) SeasonExists(_ context.Context, _ int64) (bool, error) {
 	return s.seasonExists, s.seasonExistsErr
+}
+func (s *stubStore) IsSeasonClosed(_ context.Context, _ int64) (bool, error) {
+	return s.isSeasonClosed, s.isSeasonClosedErr
 }
 func (s *stubStore) ClosedWeekCount(_ context.Context, _ int64) (int, error) {
 	return s.closedWeeks, s.closedWeeksErr
@@ -99,6 +106,9 @@ func (s *runTxTrackingStore) RunWriteTx(_ context.Context, _ func(handicaps.Stor
 }
 func (s *runTxTrackingStore) SeasonExists(_ context.Context, _ int64) (bool, error) {
 	panic("SeasonExists called directly on root store")
+}
+func (s *runTxTrackingStore) IsSeasonClosed(ctx context.Context, id int64) (bool, error) {
+	return s.inner.IsSeasonClosed(ctx, id)
 }
 func (s *runTxTrackingStore) ClosedWeekCount(_ context.Context, _ int64) (int, error) {
 	panic("ClosedWeekCount called directly on root store")

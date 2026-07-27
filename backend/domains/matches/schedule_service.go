@@ -41,6 +41,13 @@ func NewScheduleService(store ScheduleStore) *ScheduleService {
 // GenerateSchedule generates a league schedule for the given season and persists it.
 // It replaces any existing unplayed matches and updates the season's schedule metadata.
 func (s *ScheduleService) GenerateSchedule(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
+	if closed, err := s.store.IsSeasonClosed(ctx, req.SeasonID); err != nil {
+		return GenerateResult{}, fmt.Errorf("generate schedule: season-closed check: %w", err)
+	} else if closed {
+		return GenerateResult{}, domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
+
 	if req.ScheduleType == "" {
 		req.ScheduleType = ScheduleTypeDoubleRR
 	}

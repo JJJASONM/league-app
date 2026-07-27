@@ -72,6 +72,18 @@ func (s *HandicapStore) SeasonExists(ctx context.Context, seasonID int64) (bool,
 	return count > 0, nil
 }
 
+// IsSeasonClosed returns true when closed_at IS NOT NULL for the season.
+func (s *HandicapStore) IsSeasonClosed(ctx context.Context, seasonID int64) (bool, error) {
+	var closed int
+	err := s.q.QueryRowContext(ctx,
+		`SELECT closed_at IS NOT NULL FROM seasons WHERE id=?`, seasonID,
+	).Scan(&closed)
+	if err != nil {
+		return false, fmt.Errorf("handicap store: is season closed %d: %w", seasonID, err)
+	}
+	return closed == 1, nil
+}
+
 // ClosedWeekCount returns the number of distinct week_numbers that have at least
 // one match with week_closed=1 in the given season.
 func (s *HandicapStore) ClosedWeekCount(ctx context.Context, seasonID int64) (int, error) {

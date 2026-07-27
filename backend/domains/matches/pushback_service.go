@@ -64,6 +64,12 @@ func (s *PushbackService) Preview(ctx context.Context, req PushbackPreviewReques
 // and returns the same result shape as Preview.
 // Audit write is deferred until the audit system is implemented.
 func (s *PushbackService) Apply(ctx context.Context, req PushbackPreviewRequest) (PushbackPreviewResult, error) {
+	if closed, err := s.store.IsSeasonClosed(ctx, req.SeasonID); err != nil {
+		return PushbackPreviewResult{}, fmt.Errorf("pushback apply: season-closed check: %w", err)
+	} else if closed {
+		return PushbackPreviewResult{}, domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	result, err := s.compute(ctx, req)
 	if err != nil {
 		return PushbackPreviewResult{}, err

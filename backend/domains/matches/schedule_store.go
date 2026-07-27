@@ -40,6 +40,10 @@ type ScheduleStore interface {
 	// Returns ErrSeasonNotFound when the season does not exist.
 	GetScheduleSeasonMeta(ctx context.Context, seasonID int64) (ScheduleSeasonMeta, error)
 
+	// IsSeasonClosed returns true when closed_at IS NOT NULL for the season.
+	// Returns false when the season does not exist.
+	IsSeasonClosed(ctx context.Context, seasonID int64) (bool, error)
+
 	// LoadByeRequests returns approved bye requests that have a specific week
 	// number (week_number > 0) for the season. Key: week number; value: team ID.
 	// Returns an empty map when none exist.

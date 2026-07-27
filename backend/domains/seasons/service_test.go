@@ -113,10 +113,15 @@ type stubSeasonStore struct {
 	closeRecordInactive bool
 	closeRecordSnap     string
 	closeRecordErr      error
+	isClosedResult      bool
+	isClosedErr         error
 }
 
 func (s *stubSeasonStore) IsDraft(_ context.Context, _ int64) (bool, error) {
 	return s.isDraftResult, s.isDraftErr
+}
+func (s *stubSeasonStore) IsClosed(_ context.Context, _ int64) (bool, error) {
+	return s.isClosedResult, s.isClosedErr
 }
 func (s *stubSeasonStore) GetMeta(_ context.Context, _ int64) (seasons.SeasonMeta, error) {
 	return s.meta, s.metaErr

@@ -67,6 +67,7 @@ type WeekManager interface {
 // RoundManager is the subset of matches.RoundService used by the round/standings/stats handlers.
 // Accepting an interface allows stub injection in tests.
 type RoundManager interface {
+	IsSeasonClosedForMatch(ctx context.Context, matchID int64) (bool, error)
 	SaveRounds(ctx context.Context, input matches.SaveRoundsInput) error
 	GetRounds(ctx context.Context, matchID int64) ([]models.RoundResult, error)
 	GetStandings(ctx context.Context, seasonID int64) ([]models.Standing, error)

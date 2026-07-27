@@ -18,6 +18,9 @@ type stubMatchStore struct {
 	getErr     error
 	assignErr  error
 
+	seasonClosed    bool
+	seasonClosedErr error
+
 	// captured args
 	lastListReq    matches.ListMatchesRequest
 	lastGetID      int64
@@ -43,6 +46,9 @@ func (s *stubMatchStore) AssignMatchTeams(_ context.Context, id int64, home, awa
 	s.lastHomeTeamID = home
 	s.lastAwayTeamID = away
 	return s.assignErr
+}
+func (s *stubMatchStore) IsSeasonClosedForMatch(_ context.Context, _ int64) (bool, error) {
+	return s.seasonClosed, s.seasonClosedErr
 }
 
 func TestListMatches_ReturnsEmptySliceWhenNone(t *testing.T) {

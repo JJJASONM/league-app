@@ -25,6 +25,12 @@ func (s *SeasonService) ListByeRequests(ctx context.Context, seasonID int64) ([]
 // Marks the season stale after a successful delete because the deleted request
 // may have been approved and baked into the generated schedule.
 func (s *SeasonService) DeleteByeRequest(ctx context.Context, seasonID, byeID int64) error {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return err
+	} else if closed {
+		return domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	if err := s.store.DeleteByeRequest(ctx, seasonID, byeID); err != nil {
 		if errors.Is(err, ErrByeNotFound) {
 			return domainerr.New("BYE_NOT_FOUND", domainerr.NotFound, "bye request not found")

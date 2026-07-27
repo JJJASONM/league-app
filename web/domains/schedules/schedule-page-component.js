@@ -355,7 +355,16 @@ class SchedulePage extends HTMLElement {
       return;
     }
 
-    this.querySelector('.sp-pushback-area')?.classList.remove('d-none');
+    const season     = this.#allSeasons.find(s => s.id == seasonId);
+    const isDraft    = season ? (!season.active && !season.activated_at) : false;
+    const seasonClosed = season ? !!season.closed_at : false;
+
+    const pushbackArea = this.querySelector('.sp-pushback-area');
+    if (seasonClosed) {
+      pushbackArea?.classList.add('d-none');
+    } else {
+      pushbackArea?.classList.remove('d-none');
+    }
 
     const weekStatusMap = {};
     (weekList || []).forEach(ws => { weekStatusMap[ws.week_number] = ws; });
@@ -381,18 +390,19 @@ class SchedulePage extends HTMLElement {
       if (m.away_team_id) { seasonTeamIds.add(m.away_team_id); seasonTeamNames[m.away_team_id] = m.away_team_name; }
     });
 
-    const season  = this.#allSeasons.find(s => s.id == seasonId);
-    const isDraft = season ? (!season.active && !season.activated_at) : false;
     const draftBanner = isDraft
       ? '<div class="alert alert-info py-2 mb-2 small"><i class="bi bi-eye me-1"></i><strong>Draft season.</strong> Week closing is not available until this season is activated.</div>'
       : '';
+    const closedBanner = seasonClosed
+      ? '<div class="alert alert-secondary py-2 mb-2 small"><i class="bi bi-lock me-1"></i><strong>Season closed.</strong> Scores and schedule are locked.</div>'
+      : '';
 
-    contentEl.innerHTML = draftBanner + (weeks.length
-      ? weeks.map(w => this.#renderWeekCard(w, byWeek[w], weekStatusMap[w], seasonId, isDraft, seasonTeamIds, seasonTeamNames)).join('')
+    contentEl.innerHTML = closedBanner + draftBanner + (weeks.length
+      ? weeks.map(w => this.#renderWeekCard(w, byWeek[w], weekStatusMap[w], seasonId, isDraft, seasonClosed, seasonTeamIds, seasonTeamNames)).join('')
       : '<div class="text-muted text-center py-4">No matches scheduled yet. Use Seasons to generate a schedule.</div>');
   }
 
-  #renderWeekCard(w, weekMatches, ws, seasonId, isDraft, seasonTeamIds, seasonTeamNames) {
+  #renderWeekCard(w, weekMatches, ws, seasonId, isDraft, seasonClosed, seasonTeamIds, seasonTeamNames) {
     const isUnassigned = m => !m.home_team_id || m.home_team_name === '(unassigned)' ||
                               !m.away_team_id || m.away_team_name === '(unassigned)';
 
@@ -424,11 +434,13 @@ class SchedulePage extends HTMLElement {
     const ackToggle = ackCount > 0
       ? `<button class="btn btn-link btn-sm py-0 ms-1 text-secondary" data-action="toggle-week-acks" data-week-num="${w}" title="Show/hide prior close acknowledgments"><i class="bi bi-clock-history"></i> ${ackCount} prior ack${ackCount !== 1 ? 's' : ''}</button>`
       : '';
-    const closeBtn = isClosed
-      ? `<button class="btn btn-sm btn-outline-warning py-0 ms-2" data-action="reopen-week" data-season-id="${esc(String(seasonId))}" data-week-num="${w}" data-match-date="${esc(matchDate || '')}" title="Reopen to correct scores, then re-close"><i class="bi bi-arrow-counterclockwise"></i> Reopen</button>`
-      : isDraft
-        ? `<button class="btn btn-sm btn-outline-secondary py-0 ms-2" disabled title="Activate the season to enable week closing"><i class="bi bi-lock"></i> Review &amp; Close</button>`
-        : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" data-action="review-close-week" data-season-id="${esc(String(seasonId))}" data-week-num="${w}" data-ack-count="${ackCount}">Review &amp; Close</button>`;
+    const closeBtn = seasonClosed
+      ? `<span class="badge bg-secondary ms-2 py-1 px-2"><i class="bi bi-lock me-1"></i>Locked</span>`
+      : isClosed
+        ? `<button class="btn btn-sm btn-outline-warning py-0 ms-2" data-action="reopen-week" data-season-id="${esc(String(seasonId))}" data-week-num="${w}" data-match-date="${esc(matchDate || '')}" title="Reopen to correct scores, then re-close"><i class="bi bi-arrow-counterclockwise"></i> Reopen</button>`
+        : isDraft
+          ? `<button class="btn btn-sm btn-outline-secondary py-0 ms-2" disabled title="Activate the season to enable week closing"><i class="bi bi-lock"></i> Review &amp; Close</button>`
+          : `<button class="btn btn-sm btn-outline-primary py-0 ms-2" data-action="review-close-week" data-season-id="${esc(String(seasonId))}" data-week-num="${w}" data-ack-count="${ackCount}">Review &amp; Close</button>`;
     const ackSection = ackCount > 0
       ? `<div class="px-3 pb-2 d-none" id="week-acks-${w}" data-loaded="0"></div>`
       : '';
@@ -445,11 +457,13 @@ class SchedulePage extends HTMLElement {
       <td>${m.completed
         ? '<span class="badge bg-success">Done</span>'
         : '<span class="badge bg-secondary">Pending</span>'}</td>
-      <td class="text-end">${isUnassigned(m)
-        ? `<button class="btn btn-outline-primary btn-sm py-0" data-action="assign-match" data-match-id="${m.id}"><i class="bi bi-people"></i> Assign</button>`
-        : !isClosed
-          ? `<button class="btn btn-outline-secondary btn-sm py-0" data-action="open-match-entry" data-season-id="${esc(String(seasonId))}" data-match-id="${m.id}"><i class="bi bi-pencil-square"></i> Score Entry</button>`
-          : ''}</td>
+      <td class="text-end">${seasonClosed
+        ? ''
+        : isUnassigned(m)
+          ? `<button class="btn btn-outline-primary btn-sm py-0" data-action="assign-match" data-match-id="${m.id}"><i class="bi bi-people"></i> Assign</button>`
+          : !isClosed
+            ? `<button class="btn btn-outline-secondary btn-sm py-0" data-action="open-match-entry" data-season-id="${esc(String(seasonId))}" data-match-id="${m.id}"><i class="bi bi-pencil-square"></i> Score Entry</button>`
+            : ''}</td>
     </tr>`).join('');
 
     return `

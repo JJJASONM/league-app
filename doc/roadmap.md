@@ -55,11 +55,14 @@ These items should stay small enough to review and ship independently.
 These are the next build targets after the current workflow foundation is
 stable.
 
-- Season-end clearance (Phase 2 - edit locks).
+- Season-end clearance.
   - Phase 1 (core close) shipped on 2026-07-26: preview endpoint, commit
     endpoint, final standings snapshot, Closed badge in UI, Close Season button.
-  - Phase 2: add edit locks to prevent scoresheet, roster, handicap, and rule
-    changes on closed seasons. Require explicit admin reopen action.
+  - Phase 2 (edit locks) shipped on 2026-07-26: SEASON_CLOSED (409) guards on
+    all mutation endpoints for closed seasons; frontend lock indicators on
+    schedule, match entry, and handicap review; createSkippedWeek handler
+    fixed to propagate domainerr.Conflict correctly.
+  - Remaining: explicit admin reopen action.
   - Treat paid/unpaid player status as outside the app for now.
 
 - Continue backend/domain extraction where workflows are already active.

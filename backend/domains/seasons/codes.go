@@ -23,3 +23,6 @@ const (
 	CodeSeasonCloseUnclosed   = "SEASON_CLOSE_UNCLOSED"
 	CodeMissingResults        = "MISSING_RESULTS"
 )
+
+// CodeSeasonClosed is returned by mutation endpoints when the season is closed.
+const CodeSeasonClosed = "SEASON_CLOSED"

@@ -36,12 +36,13 @@ import {
 } from './handicap-codes.js';
 
 class HandicapReview extends HTMLElement {
-  #seasonId   = null;
-  #data       = null;    // HandicapReviewResponse from last successful fetch
-  #selected   = new Set(); // Set<player_id> — selectable rows checked by admin
-  #adminToken = null;    // session memory only — cleared on reload, 401, 403
-  #loadedAt   = null;    // Date of last successful fetch (for "Last loaded" display)
-  #weekNumber = null;    // set by setWeekContext() for recap-panel deep-link
+  #seasonId     = null;
+  #seasonClosed = false; // true when closed_at is set on the season
+  #data         = null;    // HandicapReviewResponse from last successful fetch
+  #selected     = new Set(); // Set<player_id> — selectable rows checked by admin
+  #adminToken   = null;    // session memory only — cleared on reload, 401, 403
+  #loadedAt     = null;    // Date of last successful fetch (for "Last loaded" display)
+  #weekNumber   = null;    // set by setWeekContext() for recap-panel deep-link
 
   connectedCallback() {
     this.innerHTML = `
@@ -82,9 +83,10 @@ class HandicapReview extends HTMLElement {
 
   // ─── Public API ───────────────────────────────────────────────────────────────
 
-  async loadSeason(seasonId) {
-    this.#seasonId   = String(seasonId);
-    this.#weekNumber = null;
+  async loadSeason(seasonId, seasonClosedAt = null) {
+    this.#seasonId     = String(seasonId);
+    this.#seasonClosed = !!seasonClosedAt;
+    this.#weekNumber   = null;
     this.#hideWeekCtx();
     this.#selected.clear();
     this.#data = null;
@@ -92,9 +94,10 @@ class HandicapReview extends HTMLElement {
   }
 
   reset() {
-    this.#seasonId   = null;
-    this.#weekNumber = null;
-    this.#data       = null;
+    this.#seasonId     = null;
+    this.#seasonClosed = false;
+    this.#weekNumber   = null;
+    this.#data         = null;
     this.#selected.clear();
     this.#hideWeekCtx();
     if (this._contentEl) this._contentEl.innerHTML = '';
@@ -164,9 +167,11 @@ class HandicapReview extends HTMLElement {
       <i class="bi bi-info-circle me-1"></i>${escapeHTML(data.message || '')}${wcNote}
     </div>`;
 
-    // Apply bar — shown only when there are selectable rows with changes
-    if (hasActionable) {
+    // Apply bar — shown only when there are selectable rows and season is not closed
+    if (hasActionable && !this.#seasonClosed) {
       html += this.#applyBarHtml();
+    } else if (this.#seasonClosed) {
+      html += `<div class="alert alert-secondary py-2 mb-2 small"><i class="bi bi-lock me-1"></i><strong>Season closed.</strong> Handicap apply is locked.</div>`;
     }
 
     // Alert area — always present so #showAlert can insert into it after reload

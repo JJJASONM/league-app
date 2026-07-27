@@ -636,6 +636,18 @@ func (s *WeekStore) IsSeasonDraft(ctx context.Context, seasonID int64) (bool, er
 	return n > 0, nil
 }
 
+// IsSeasonClosed returns true when closed_at IS NOT NULL for the season.
+func (s *WeekStore) IsSeasonClosed(ctx context.Context, seasonID int64) (bool, error) {
+	var closed int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT closed_at IS NOT NULL FROM seasons WHERE id=?`, seasonID,
+	).Scan(&closed)
+	if err != nil {
+		return false, fmt.Errorf("is season closed %d: %w", seasonID, err)
+	}
+	return closed == 1, nil
+}
+
 // ListAcknowledgments returns all close acknowledgments for the week, ordered
 // by acknowledged_at DESC.
 func (s *WeekStore) ListAcknowledgments(ctx context.Context, seasonID, weekNum int64) ([]models.CloseAck, error) {

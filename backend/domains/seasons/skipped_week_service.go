@@ -3,6 +3,7 @@ package seasons
 import (
 	"context"
 
+	"league_app/backend/domainerr"
 	"league_app/models"
 )
 
@@ -22,6 +23,12 @@ func (s *SeasonService) ListSkippedWeeks(ctx context.Context, seasonID int64) ([
 // returns the row whether newly inserted or pre-existing, and marks the season
 // schedule stale when unplayed matches exist.
 func (s *SeasonService) CreateSkippedWeek(ctx context.Context, seasonID int64, skipDate, reason string) (models.SkippedWeek, error) {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return models.SkippedWeek{}, err
+	} else if closed {
+		return models.SkippedWeek{}, domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	sw, err := s.store.CreateSkippedWeek(ctx, seasonID, skipDate, reason)
 	if err != nil {
 		return models.SkippedWeek{}, err
@@ -34,6 +41,12 @@ func (s *SeasonService) CreateSkippedWeek(ctx context.Context, seasonID int64, s
 // marks the season schedule stale when unplayed matches exist. No error is
 // returned when the row does not exist (matches original handler behavior).
 func (s *SeasonService) DeleteSkippedWeek(ctx context.Context, seasonID, id int64) error {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return err
+	} else if closed {
+		return domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	if err := s.store.DeleteSkippedWeek(ctx, seasonID, id); err != nil {
 		return err
 	}

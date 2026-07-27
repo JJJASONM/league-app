@@ -26,6 +26,11 @@ func (s *SeasonService) IsDraft(ctx context.Context, seasonID int64) (bool, erro
 	return s.store.IsDraft(ctx, seasonID)
 }
 
+// IsClosed returns true when the season has been closed.
+func (s *SeasonService) IsClosed(ctx context.Context, seasonID int64) (bool, error) {
+	return s.store.IsClosed(ctx, seasonID)
+}
+
 // MarkStaleIfScheduled sets schedule_stale=1 when unplayed matches exist.
 func (s *SeasonService) MarkStaleIfScheduled(ctx context.Context, seasonID int64) error {
 	return s.store.MarkStaleIfScheduled(ctx, seasonID)
@@ -109,6 +114,12 @@ func (s *SeasonService) PreviousSeason(ctx context.Context, seasonID int64) (Pre
 // team is created. Returns domainerr.Unprocessable when the season is active,
 // domainerr.InvalidInput for validation failures.
 func (s *SeasonService) AddTeam(ctx context.Context, seasonID int64, req AddTeamRequest) (models.SeasonTeam, error) {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return models.SeasonTeam{}, err
+	} else if closed {
+		return models.SeasonTeam{}, domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	draft, err := s.store.IsDraft(ctx, seasonID)
 	if err != nil {
 		return models.SeasonTeam{}, err
@@ -176,6 +187,12 @@ func (s *SeasonService) AddTeam(ctx context.Context, seasonID int64, req AddTeam
 // Returns domainerr.Unprocessable when the season is active.
 // Returns domainerr.NotFound when the team is not in the season.
 func (s *SeasonService) RemoveTeam(ctx context.Context, seasonID, teamID int64) error {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return err
+	} else if closed {
+		return domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	draft, err := s.store.IsDraft(ctx, seasonID)
 	if err != nil {
 		return err
@@ -199,6 +216,12 @@ func (s *SeasonService) RemoveTeam(ctx context.Context, seasonID, teamID int64) 
 // Returns domainerr.InvalidInput for validation failures (missing name, captain not on roster).
 // Returns domainerr.NotFound when the team is not registered.
 func (s *SeasonService) UpdateTeam(ctx context.Context, seasonID, teamID int64, req UpdateTeamRequest) (models.SeasonTeam, error) {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return models.SeasonTeam{}, err
+	} else if closed {
+		return models.SeasonTeam{}, domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	draft, err := s.store.IsDraft(ctx, seasonID)
 	if err != nil {
 		return models.SeasonTeam{}, err
@@ -250,6 +273,12 @@ func (s *SeasonService) ListSeasonTeams(ctx context.Context, seasonID int64) ([]
 // Returns ErrNotFound (wrapped) when the season does not exist.
 // Returns domainerr.InvalidInput for validation failures.
 func (s *SeasonService) CreateByeRequest(ctx context.Context, seasonID int64, req CreateByeRequestInput) (models.ByeRequest, error) {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return models.ByeRequest{}, err
+	} else if closed {
+		return models.ByeRequest{}, domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	meta, err := s.getMeta(ctx, seasonID)
 	if err != nil {
 		return models.ByeRequest{}, err
@@ -298,6 +327,12 @@ func (s *SeasonService) CreateByeRequest(ctx context.Context, seasonID int64, re
 // Returns domainerr.InvalidInput when approving a week-0 (TBD) request or
 // when another team already has an approved bye for the same week.
 func (s *SeasonService) UpdateByeRequest(ctx context.Context, seasonID, byeID int64, approve bool) (models.ByeRequest, error) {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return models.ByeRequest{}, err
+	} else if closed {
+		return models.ByeRequest{}, domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	bye, err := s.store.GetByeRequest(ctx, seasonID, byeID)
 	if err != nil {
 		if errors.Is(err, ErrByeNotFound) {

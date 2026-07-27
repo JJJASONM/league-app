@@ -1220,6 +1220,11 @@ func createSkippedWeek(w http.ResponseWriter, r *http.Request, mgr SeasonManager
 	}
 	created, err := mgr.CreateSkippedWeek(r.Context(), sid, sw.SkipDate, sw.Reason)
 	if err != nil {
+		var de *domainerr.Err
+		if errors.As(err, &de) && de.Category == domainerr.Conflict {
+			jsonError(w, de.Message, http.StatusConflict)
+			return
+		}
 		jsonError(w, err.Error(), 500)
 		return
 	}
@@ -1864,6 +1869,10 @@ func saveRounds(w http.ResponseWriter, r *http.Request, roundMgr RoundManager, s
 	var req models.SaveRoundsRequest
 	if err := decode(r, &req); err != nil {
 		jsonError(w, "invalid body", 400)
+		return
+	}
+	if sc, _ := roundMgr.IsSeasonClosedForMatch(r.Context(), matchID); sc {
+		jsonError(w, "season is closed; this action is not allowed", http.StatusConflict)
 		return
 	}
 	if ok, msg, err := seasonMgr.RosterEligible(r.Context(), matchID, 3); err == nil && !ok {

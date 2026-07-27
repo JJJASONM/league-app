@@ -24,6 +24,8 @@ type stubWeekStore struct {
 	advanceSummaryErr error
 	isDraft           bool
 	isDraftErr        error
+	isClosed          bool
+	isClosedErr       error
 	recapData         matches.WeekRecapData
 	recapDataErr      error
 	playerStats       []models.RecapPlayerStat
@@ -78,6 +80,9 @@ func (s *stubWeekStore) GetWeekValidationData(_ context.Context, _, _ int64) (ma
 
 func (s *stubWeekStore) IsSeasonDraft(_ context.Context, _ int64) (bool, error) {
 	return s.isDraft, s.isDraftErr
+}
+func (s *stubWeekStore) IsSeasonClosed(_ context.Context, _ int64) (bool, error) {
+	return s.isClosed, s.isClosedErr
 }
 
 func (s *stubWeekStore) GetWeekRecapData(_ context.Context, _, _ int64) (matches.WeekRecapData, error) {

@@ -109,6 +109,10 @@ type Store interface {
 	// SeasonExists returns true when a season with this ID exists.
 	SeasonExists(ctx context.Context, seasonID int64) (bool, error)
 
+	// IsSeasonClosed returns true when closed_at IS NOT NULL for the season.
+	// Returns false when the season does not exist.
+	IsSeasonClosed(ctx context.Context, seasonID int64) (bool, error)
+
 	// ClosedWeekCount returns the number of distinct week_numbers in this season
 	// that have at least one match with week_closed=1.
 	ClosedWeekCount(ctx context.Context, seasonID int64) (int, error)

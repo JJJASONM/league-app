@@ -258,6 +258,22 @@ func TestApply_SeasonNotFound_Returns404(t *testing.T) {
 	}
 }
 
+func TestApply_SeasonClosed_Returns409(t *testing.T) {
+	store := &stubStore{seasonExists: true, isSeasonClosed: true}
+	svc := handicaps.NewService(store)
+
+	_, err := svc.Apply(context.Background(), 1, handicaps.ApplyRequest{
+		ApplyRequestID: validUUID,
+		Entries:        []handicaps.ApplyEntry{{PlayerID: 1, RecToken: "tok", ExpectedAssignedHC: 1.0}},
+	})
+	if err == nil {
+		t.Fatal("want error for closed season")
+	}
+	if !domainerr.IsCategory(err, domainerr.Conflict) {
+		t.Errorf("want Conflict, got %v", err)
+	}
+}
+
 // ============================================================================
 // Idempotency replay
 // ============================================================================
@@ -626,6 +642,9 @@ func (b *busyWriteStore) RunWriteTx(_ context.Context, _ func(handicaps.Store) e
 }
 func (b *busyWriteStore) SeasonExists(ctx context.Context, id int64) (bool, error) {
 	return b.inner.SeasonExists(ctx, id)
+}
+func (b *busyWriteStore) IsSeasonClosed(ctx context.Context, id int64) (bool, error) {
+	return b.inner.IsSeasonClosed(ctx, id)
 }
 func (b *busyWriteStore) ClosedWeekCount(ctx context.Context, id int64) (int, error) {
 	return b.inner.ClosedWeekCount(ctx, id)

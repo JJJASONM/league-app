@@ -25,6 +25,12 @@ func (s *SeasonService) ListRoster(ctx context.Context, seasonID, teamID int64) 
 // Returns domainerr.InvalidInput when the team is not in the season or the
 // player is already rostered on a different team.
 func (s *SeasonService) AddRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) (models.SeasonRosterEntry, error) {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return models.SeasonRosterEntry{}, err
+	} else if closed {
+		return models.SeasonRosterEntry{}, domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	draft, err := s.store.IsDraft(ctx, seasonID)
 	if err != nil {
 		return models.SeasonRosterEntry{}, err
@@ -59,6 +65,12 @@ func (s *SeasonService) AddRosterPlayer(ctx context.Context, seasonID, teamID, p
 // Returns domainerr.Unprocessable when the season is active.
 // Returns domainerr.NotFound when the roster entry does not exist.
 func (s *SeasonService) RemoveRosterPlayer(ctx context.Context, seasonID, teamID, playerID int64) error {
+	if closed, err := s.store.IsClosed(ctx, seasonID); err != nil {
+		return err
+	} else if closed {
+		return domainerr.New(CodeSeasonClosed, domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	draft, err := s.store.IsDraft(ctx, seasonID)
 	if err != nil {
 		return err

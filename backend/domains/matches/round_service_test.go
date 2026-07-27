@@ -14,8 +14,10 @@ import (
 // ─── stub store ──────────────────────────────────────────────────────────────
 
 type stubRoundStore struct {
-	weekClosed    bool
-	weekClosedErr error
+	weekClosed      bool
+	weekClosedErr   error
+	seasonClosed    bool
+	seasonClosedErr error
 
 	matchCtx    matches.MatchContext
 	matchCtxErr error
@@ -52,6 +54,9 @@ type stubRoundStore struct {
 
 func (s *stubRoundStore) IsWeekClosed(_ context.Context, _ int64) (bool, error) {
 	return s.weekClosed, s.weekClosedErr
+}
+func (s *stubRoundStore) IsSeasonClosedForMatch(_ context.Context, _ int64) (bool, error) {
+	return s.seasonClosed, s.seasonClosedErr
 }
 func (s *stubRoundStore) RunTx(_ context.Context, fn func(matches.RoundStore) error) error {
 	return fn(s)

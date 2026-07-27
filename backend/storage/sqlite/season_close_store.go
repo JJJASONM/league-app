@@ -5,6 +5,19 @@ import (
 	"fmt"
 )
 
+// IsClosed returns true when closed_at IS NOT NULL for the season.
+// Returns false when the season does not exist.
+func (s *SeasonStore) IsClosed(ctx context.Context, seasonID int64) (bool, error) {
+	var closed int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT closed_at IS NOT NULL FROM seasons WHERE id=?`, seasonID,
+	).Scan(&closed)
+	if err != nil {
+		return false, fmt.Errorf("is season closed %d: %w", seasonID, err)
+	}
+	return closed == 1, nil
+}
+
 // GetSeasonMissingCount returns the number of matches for the season with
 // completed=0 (no results entered). Returns 0 when no matches exist.
 func (s *SeasonStore) GetSeasonMissingCount(ctx context.Context, seasonID int64) (int, error) {

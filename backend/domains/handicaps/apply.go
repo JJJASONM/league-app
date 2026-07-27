@@ -169,6 +169,12 @@ func roundHC(v float64) float64 {
 //   - *ApplyRejectionErr                      — all entries rejected (422 in handler)
 //   - *domainerr.Err{Category: Internal}      — unexpected data or store errors (500)
 func (s *Service) Apply(ctx context.Context, seasonID int64, req ApplyRequest) (ApplyResult, error) {
+	if closed, err := s.store.IsSeasonClosed(ctx, seasonID); err != nil {
+		return ApplyResult{}, fmt.Errorf("handicap apply: season-closed check: %w", err)
+	} else if closed {
+		return ApplyResult{}, domainerr.New("SEASON_CLOSED", domainerr.Conflict,
+			"season is closed; this action is not allowed")
+	}
 	if err := validateApplyRequest(req); err != nil {
 		return ApplyResult{}, err
 	}
