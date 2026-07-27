@@ -206,8 +206,57 @@ HTTP 409, error code `SEASON_CLOSED`.
 - Match entry: Save and Clear buttons hidden; "Season Closed" badge shown
 - Handicap review: Apply bar replaced with locked notice when `closed_at` is set
 
-**Remaining (Phase 3):**
-- Explicit admin reopen action
+**Phase 3 — Explicit Admin Reopen (implemented 2026-07-26):**
+
+A closed season can be explicitly reopened through an admin action. Reopen is
+never triggered automatically by any other workflow.
+
+**New route:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/seasons/{id}/reopen` | Clears `closed_at`; returns updated season |
+
+**Reopen semantics:**
+
+- Clears `closed_at` (sets to NULL).
+- `active` is not changed (remains 0). The season enters **Historical** state.
+- `activated_at` is preserved.
+- `final_standings_snapshot` is preserved as a historical record; it is not the
+  active standings source once the season is reopened.
+- Phase 2 edit locks lift automatically once `closed_at` is NULL.
+
+**Error contract:**
+
+| Code | HTTP | Condition |
+|------|------|-----------|
+| `SEASON_NOT_CLOSED` | 409 | Season exists but `closed_at IS NULL` |
+| (ErrNotFound) | 404 | Season does not exist |
+
+**New domain files:**
+
+- `backend/domains/seasons/codes.go` — `CodeSeasonNotClosed = "SEASON_NOT_CLOSED"`
+- `backend/domains/seasons/close_service.go` — `ReopenSeason` method
+
+**New store methods (SeasonStore interface):**
+
+- `ReopenSeasonRecord(ctx, seasonID)` — `UPDATE seasons SET closed_at=NULL WHERE id=?`
+
+**New SQLite implementation:**
+
+- `backend/storage/sqlite/season_close_store.go` — `ReopenSeasonRecord`
+
+**New handler:**
+
+- `handlers/api_season_close.go` — `reopenSeasonHandler`
+
+**Frontend changes:**
+
+- `web/domains/seasons/season-api-service.js` — `reopenSeason`
+- `web/domains/seasons/seasons-domain.js` — "Reopen Season" button in management
+  panel header (visible only for closed seasons); `#reopenSeasonFlow()` with
+  confirmation dialog; close dialog copy updated to remove "No reopen workflow
+  exists yet."
 
 Payment status is not part of the app's current close-season requirements. It is
 tracked outside the app for now.

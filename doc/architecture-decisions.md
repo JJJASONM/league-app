@@ -462,7 +462,7 @@ Lifecycle states driven by `(active, activated_at, closed_at)`:
 - Draft: `active=0, activated_at IS NULL` -- cannot be closed
 - Active: `active=1, activated_at IS NOT NULL` -- closeable; close also sets `active=0`
 - Historical: `active=0, activated_at IS NOT NULL, closed_at IS NULL` -- closeable
-- Closed: `closed_at IS NOT NULL` -- terminal in Phase 1
+- Closed: `closed_at IS NOT NULL` -- reopenable via explicit admin action (Phase 3)
 
 Strict blockers prevent close: draft season (422), already closed (409), no
 schedule (422), unclosed weeks (409). Missing match results are advisory only
@@ -477,5 +477,5 @@ Snapshot format is versioned JSON stored in `final_standings_snapshot`:
 The snapshot is write-only in Phase 1; no GET endpoint exposes it. It is
 excluded from all normal season list/get queries to avoid payload bloat.
 
-Edit locks (preventing changes to closed seasons) are Phase 2 and are not
-part of the Phase 1 implementation. No reopen workflow exists yet.
+Edit locks (preventing changes to closed seasons) were added in Phase 2.
+Explicit admin reopen (clearing `closed_at`) was added in Phase 3.

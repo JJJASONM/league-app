@@ -25,7 +25,7 @@ import {
   listSkippedWeeks, addSkippedWeek, removeSkippedWeek,
   listByeRequests, addByeRequest, updateByeRequest, removeByeRequest,
   listSeasonTeams, getSeasonChecklist,
-  closeSeasonPreview, closeSeason,
+  closeSeasonPreview, closeSeason, reopenSeason,
 } from './season-api-service.js';
 import './season-editor-component.js';
 import { displayDate, fmtDateRange } from '../../components/date-display.js';
@@ -135,6 +135,10 @@ class SeasonsPage extends HTMLElement {
               <button class="btn btn-sm btn-outline-dark d-none sdx-close-season-btn"
                 data-action="close-season">
                 <i class="bi bi-lock"></i> Close Season
+              </button>
+              <button class="btn btn-sm btn-outline-warning d-none sdx-reopen-season-btn"
+                data-action="reopen-season">
+                <i class="bi bi-unlock"></i> Reopen Season
               </button>
               <button class="btn btn-sm btn-outline-primary" data-action="go-schedule">
                 <i class="bi bi-calendar-week"></i> View Schedule
@@ -348,6 +352,9 @@ class SeasonsPage extends HTMLElement {
       case 'close-season':
         this.#closeSeasonFlow();
         break;
+      case 'reopen-season':
+        this.#reopenSeasonFlow();
+        break;
       case 'gen-schedule':
         this.#generateSchedule();
         break;
@@ -450,6 +457,9 @@ class SeasonsPage extends HTMLElement {
 
     const closeBtn = this.querySelector('.sdx-close-season-btn');
     closeBtn.classList.toggle('d-none', !canBeClosedUI);
+
+    const reopenBtn = this.querySelector('.sdx-reopen-season-btn');
+    reopenBtn.classList.toggle('d-none', !isClosed);
 
     // Schedule setup form
     const fromSel = this.querySelector('.sdx-gen-from-season');
@@ -630,7 +640,7 @@ class SeasonsPage extends HTMLElement {
       `Close "${name}"?`,
       '',
       'This will mark the season closed and snapshot final standings.',
-      'No reopen workflow exists yet.',
+      'The season can be explicitly reopened later from the management panel.',
       warningLines ? `\nAdvisory:\n${warningLines}` : '',
     ].filter(l => l !== undefined).join('\n').trim();
 
@@ -639,6 +649,29 @@ class SeasonsPage extends HTMLElement {
     try {
       await closeSeason(this.#mgmtSeasonId);
       toast(`Season "${name}" closed`);
+      await this.#refreshState();
+      if (this.#mgmtSeasonId) await this.#manageSeason(this.#mgmtSeasonId);
+    } catch(e) { toast(e.message, 'danger'); }
+  }
+
+  async #reopenSeasonFlow() {
+    if (!this.#mgmtSeasonId) return;
+    const s = this.#allSeasons.find(x => x.id === this.#mgmtSeasonId);
+    const name = s ? s.name : String(this.#mgmtSeasonId);
+
+    const confirmMsg = [
+      `Reopen "${name}"?`,
+      '',
+      'This will clear the closed status and return the season to Historical state.',
+      'The final standings snapshot is preserved as a historical record.',
+      'Edit locks will lift automatically once the season is reopened.',
+    ].join('\n');
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      await reopenSeason(this.#mgmtSeasonId);
+      toast(`Season "${name}" reopened`);
       await this.#refreshState();
       if (this.#mgmtSeasonId) await this.#manageSeason(this.#mgmtSeasonId);
     } catch(e) { toast(e.message, 'danger'); }

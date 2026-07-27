@@ -293,6 +293,10 @@ type SeasonStore interface {
 	// CloseSeasonRecord stores the final standings snapshot, sets closed_at, and
 	// (when setInactive is true) sets active=0.
 	CloseSeasonRecord(ctx context.Context, seasonID int64, snapshotJSON string, setInactive bool) error
+
+	// ReopenSeasonRecord clears closed_at (sets it to NULL) without changing
+	// active or activated_at. The season transitions from Closed to Historical.
+	ReopenSeasonRecord(ctx context.Context, seasonID int64) error
 }
 
 // CreateSeasonInput carries the user-supplied fields for season creation.

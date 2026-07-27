@@ -113,6 +113,9 @@ func (n *noopSeasonMgr) ClosePreview(_ context.Context, _ int64, _ []models.Week
 func (n *noopSeasonMgr) CloseSeason(_ context.Context, _ int64, _ []models.WeekSummary, _ []models.Standing) (models.Season, error) {
 	return models.Season{}, nil
 }
+func (n *noopSeasonMgr) ReopenSeason(_ context.Context, _ int64) (models.Season, error) {
+	return models.Season{}, nil
+}
 
 // noopLeagueMgr satisfies LeagueManager for tests that only exercise auth or
 // route-mounting logic and do not exercise league endpoints.

@@ -31,6 +31,17 @@ func (s *SeasonStore) GetSeasonMissingCount(ctx context.Context, seasonID int64)
 	return count, nil
 }
 
+// ReopenSeasonRecord clears closed_at (NULL) without touching active or
+// activated_at. The season transitions from Closed to Historical.
+func (s *SeasonStore) ReopenSeasonRecord(ctx context.Context, seasonID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE seasons SET closed_at=NULL WHERE id=?`, seasonID)
+	if err != nil {
+		return fmt.Errorf("reopen season record %d: %w", seasonID, err)
+	}
+	return nil
+}
+
 // CloseSeasonRecord stores the final standings snapshot, sets closed_at, and
 // (when setInactive is true) sets active=0 in a single UPDATE.
 func (s *SeasonStore) CloseSeasonRecord(ctx context.Context, seasonID int64, snapshotJSON string, setInactive bool) error {

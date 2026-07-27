@@ -4,6 +4,24 @@ import (
 	"net/http"
 )
 
+// reopenSeasonHandler handles POST /api/seasons/{id}/reopen.
+// Clears closed_at on a closed season, returning it to Historical state.
+// Returns 409 Conflict when the season is not closed.
+// Returns 404 when the season does not exist.
+func reopenSeasonHandler(w http.ResponseWriter, r *http.Request, seasonMgr SeasonManager) {
+	seasonID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	season, err := seasonMgr.ReopenSeason(r.Context(), seasonID)
+	if err != nil {
+		mapSeasonErr(w, err)
+		return
+	}
+	jsonOK(w, season)
+}
+
 // closeSeasonPreviewHandler handles GET /api/seasons/{id}/close-preview.
 // Returns the read-only validation state: can_close, blockers, warnings,
 // standings preview, missing_results count, and unclosed_weeks list.

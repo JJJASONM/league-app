@@ -138,6 +138,9 @@ func (n *noopSeasonMgr) ClosePreview(_ context.Context, _ int64, _ []models.Week
 func (n *noopSeasonMgr) CloseSeason(_ context.Context, _ int64, _ []models.WeekSummary, _ []models.Standing) (models.Season, error) {
 	return models.Season{}, nil
 }
+func (n *noopSeasonMgr) ReopenSeason(_ context.Context, _ int64) (models.Season, error) {
+	return models.Season{}, nil
+}
 
 // noopScheduleMgr satisfies handlers.ScheduleManager for tests that don't
 // exercise schedule generation.

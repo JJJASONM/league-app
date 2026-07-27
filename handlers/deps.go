@@ -178,6 +178,8 @@ type SeasonManager interface {
 	ClosePreview(ctx context.Context, seasonID int64, weeks []models.WeekSummary, standings []models.Standing) (seasons.SeasonClosePreview, error)
 	// CloseSeason validates and commits the season close.
 	CloseSeason(ctx context.Context, seasonID int64, weeks []models.WeekSummary, standings []models.Standing) (models.Season, error)
+	// ReopenSeason clears closed_at, returning the season to Historical state.
+	ReopenSeason(ctx context.Context, seasonID int64) (models.Season, error)
 }
 
 // Dependencies holds domain services injected into handlers at startup.

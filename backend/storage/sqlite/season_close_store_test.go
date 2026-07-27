@@ -170,3 +170,100 @@ func TestSeasonCloseStore_CloseSeasonRecord_HistoricalSeason_ActiveUnchanged(t *
 		t.Error("expected active=false to be preserved after close")
 	}
 }
+
+// --- ReopenSeasonRecord ---
+
+func TestSeasonCloseStore_ReopenSeasonRecord_ClearsClosedAt(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeasonHistorical(t, lid, "H3")
+
+	// Close it first.
+	if err := store.CloseSeasonRecord(ctx, sid, `{"schema_version":1}`, false); err != nil {
+		t.Fatalf("CloseSeasonRecord: %v", err)
+	}
+
+	// Verify it is closed.
+	before, _ := store.GetSeason(ctx, sid)
+	if before.ClosedAt == nil {
+		t.Fatal("precondition: expected closed_at to be set before reopen")
+	}
+
+	// Reopen it.
+	if err := store.ReopenSeasonRecord(ctx, sid); err != nil {
+		t.Fatalf("ReopenSeasonRecord: %v", err)
+	}
+
+	after, err := store.GetSeason(ctx, sid)
+	if err != nil {
+		t.Fatalf("GetSeason after reopen: %v", err)
+	}
+	if after.ClosedAt != nil {
+		t.Errorf("expected closed_at=NULL after reopen, got %v", *after.ClosedAt)
+	}
+	// active and activated_at must be unchanged.
+	if after.Active {
+		t.Error("expected active=false after reopen of historical season")
+	}
+	if after.ActivatedAt == nil {
+		t.Error("expected activated_at to be preserved after reopen")
+	}
+}
+
+func TestSeasonCloseStore_ReopenSeasonRecord_PreservesSnapshot(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeasonHistorical(t, lid, "H4")
+
+	const snap = `{"schema_version":1,"captured_at":"2025-06-01T00:00:00Z","standings":[]}`
+	if err := store.CloseSeasonRecord(ctx, sid, snap, false); err != nil {
+		t.Fatalf("CloseSeasonRecord: %v", err)
+	}
+
+	if err := store.ReopenSeasonRecord(ctx, sid); err != nil {
+		t.Fatalf("ReopenSeasonRecord: %v", err)
+	}
+
+	// Query the snapshot column directly; GetSeason excludes it by design.
+	var stored string
+	if err := db.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(final_standings_snapshot,'') FROM seasons WHERE id=?`, sid,
+	).Scan(&stored); err != nil {
+		t.Fatalf("query snapshot: %v", err)
+	}
+	if stored != snap {
+		t.Errorf("expected snapshot preserved after reopen; got %q", stored)
+	}
+}
+
+func TestSeasonCloseStore_ReopenSeasonRecord_ActiveFlagUnchanged(t *testing.T) {
+	store := newSeasonStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeasonActive(t, lid, "A2")
+
+	// Close it (setInactive=true so active becomes 0).
+	if err := store.CloseSeasonRecord(ctx, sid, `{"schema_version":1}`, true); err != nil {
+		t.Fatalf("CloseSeasonRecord: %v", err)
+	}
+
+	// Reopen.
+	if err := store.ReopenSeasonRecord(ctx, sid); err != nil {
+		t.Fatalf("ReopenSeasonRecord: %v", err)
+	}
+
+	after, err := store.GetSeason(ctx, sid)
+	if err != nil {
+		t.Fatalf("GetSeason after reopen: %v", err)
+	}
+	// closed_at cleared.
+	if after.ClosedAt != nil {
+		t.Errorf("expected closed_at=NULL after reopen, got %v", *after.ClosedAt)
+	}
+	// active stays 0 (Historical) - reopen does NOT set active=1.
+	if after.Active {
+		t.Error("expected active=false after reopen; reopen targets Historical, not Active")
+	}
+}

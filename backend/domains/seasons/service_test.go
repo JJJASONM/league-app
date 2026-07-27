@@ -115,6 +115,10 @@ type stubSeasonStore struct {
 	closeRecordErr      error
 	isClosedResult      bool
 	isClosedErr         error
+
+	// season reopen stubs
+	reopenRecordCalled bool
+	reopenRecordErr    error
 }
 
 func (s *stubSeasonStore) IsDraft(_ context.Context, _ int64) (bool, error) {
@@ -293,6 +297,10 @@ func (s *stubSeasonStore) CloseSeasonRecord(_ context.Context, _ int64, snap str
 	s.closeRecordInactive = inactive
 	s.closeRecordCalled = true
 	return s.closeRecordErr
+}
+func (s *stubSeasonStore) ReopenSeasonRecord(_ context.Context, _ int64) error {
+	s.reopenRecordCalled = true
+	return s.reopenRecordErr
 }
 
 func newSvc(store *stubSeasonStore) *seasons.SeasonService {

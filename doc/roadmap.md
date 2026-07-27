@@ -62,7 +62,9 @@ stable.
     all mutation endpoints for closed seasons; frontend lock indicators on
     schedule, match entry, and handicap review; createSkippedWeek handler
     fixed to propagate domainerr.Conflict correctly.
-  - Remaining: explicit admin reopen action.
+  - Phase 3 (explicit reopen) shipped on 2026-07-26: POST /api/seasons/{id}/reopen
+    clears closed_at and returns the season to Historical state; SEASON_NOT_CLOSED
+    (409) guard when season is not closed; Reopen Season button in management panel.
   - Treat paid/unpaid player status as outside the app for now.
 
 - Continue backend/domain extraction where workflows are already active.

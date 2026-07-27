@@ -26,3 +26,6 @@ const (
 
 // CodeSeasonClosed is returned by mutation endpoints when the season is closed.
 const CodeSeasonClosed = "SEASON_CLOSED"
+
+// CodeSeasonNotClosed is returned by the reopen endpoint when the season is not closed.
+const CodeSeasonNotClosed = "SEASON_NOT_CLOSED"

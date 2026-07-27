@@ -69,3 +69,7 @@ export async function closeSeasonPreview(seasonId) {
 export async function closeSeason(seasonId) {
   return api('POST', `/seasons/${seasonId}/close`);
 }
+
+export async function reopenSeason(seasonId) {
+  return api('POST', `/seasons/${seasonId}/reopen`);
+}

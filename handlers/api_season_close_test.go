@@ -1,8 +1,9 @@
 package handlers_test
 
-// Season close handler integration tests:
+// Season close/reopen handler integration tests:
 //   GET  /api/seasons/{id}/close-preview  - TestClosePreview_*
 //   POST /api/seasons/{id}/close           - TestCloseSeason_*
+//   POST /api/seasons/{id}/reopen          - TestReopenSeason_*
 
 import (
 	"encoding/json"
@@ -281,5 +282,73 @@ func TestCloseSeason_Success_SetsClosedAt(t *testing.T) {
 	// Active season should now be inactive.
 	if season["active"] != false {
 		t.Errorf("want active=false after close, got %v", season["active"])
+	}
+}
+
+// --- POST /api/seasons/{id}/reopen ---
+
+func TestReopenSeason_NotClosed_Returns409(t *testing.T) {
+	srv := testServer(t)
+	sid := closeTestActiveSeason(t, srv.URL) // active, not closed
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/reopen", srv.URL, sid), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("want 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestReopenSeason_NotFound_Returns404(t *testing.T) {
+	srv := testServer(t)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/9999/reopen", srv.URL), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestReopenSeason_Success_ClearsClosedAt(t *testing.T) {
+	srv := testServer(t)
+	sid := closeTestActiveSeason(t, srv.URL)
+	closeWeekDirect(t, sid)
+	closeSeasonDirect(t, sid)
+
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/reopen", srv.URL, sid), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var season map[string]any
+	json.NewDecoder(resp.Body).Decode(&season)
+	// closed_at must be cleared.
+	if season["closed_at"] != nil && season["closed_at"] != "" {
+		t.Errorf("want closed_at=null after reopen, got %v", season["closed_at"])
+	}
+	// active must remain false (Historical state, not Active).
+	if season["active"] != false {
+		t.Errorf("want active=false after reopen, got %v", season["active"])
+	}
+	// activated_at must be preserved.
+	if season["activated_at"] == nil || season["activated_at"] == "" {
+		t.Errorf("want activated_at preserved after reopen, got %v", season["activated_at"])
 	}
 }

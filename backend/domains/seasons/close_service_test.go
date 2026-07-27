@@ -349,3 +349,67 @@ func TestCloseSeason_StoreErr_Propagates(t *testing.T) {
 	}
 }
 
+// --- ReopenSeason ---
+
+func TestReopenSeason_NotFound_ReturnsErr(t *testing.T) {
+	store := &stubSeasonStore{seasonErr: seasons.ErrNotFound}
+	svc := newSvc(store)
+
+	_, err := svc.ReopenSeason(context.Background(), 99)
+	if !errors.Is(err, seasons.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestReopenSeason_NotClosed_ReturnsConflict(t *testing.T) {
+	store := &stubSeasonStore{season: historicalSeason()} // closed_at = nil
+	svc := newSvc(store)
+
+	_, err := svc.ReopenSeason(context.Background(), 1)
+	if err == nil {
+		t.Fatal("expected error for non-closed season")
+	}
+	var de *domainerr.Err
+	if !errors.As(err, &de) {
+		t.Fatalf("expected domainerr.Err, got %T: %v", err, err)
+	}
+	if de.Code != seasons.CodeSeasonNotClosed {
+		t.Errorf("expected code %s, got %s", seasons.CodeSeasonNotClosed, de.Code)
+	}
+	if de.Category != domainerr.Conflict {
+		t.Errorf("expected Conflict category, got %v", de.Category)
+	}
+}
+
+func TestReopenSeason_Success_ClearsClosedAt(t *testing.T) {
+	store := &stubSeasonStore{season: alreadyClosedSeason()}
+	// After ReopenSeasonRecord the stub's GetSeason still returns alreadyClosedSeason,
+	// but we verify ReopenSeasonRecord was called.
+	svc := newSvc(store)
+
+	_, err := svc.ReopenSeason(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !store.reopenRecordCalled {
+		t.Fatal("expected ReopenSeasonRecord to be called")
+	}
+}
+
+func TestReopenSeason_StoreErr_Propagates(t *testing.T) {
+	storeErr := errors.New("db write failed")
+	store := &stubSeasonStore{
+		season:          alreadyClosedSeason(),
+		reopenRecordErr: storeErr,
+	}
+	svc := newSvc(store)
+
+	_, err := svc.ReopenSeason(context.Background(), 1)
+	if err == nil {
+		t.Fatal("expected error from store")
+	}
+	if !errors.Is(err, storeErr) {
+		t.Errorf("expected storeErr wrapped in chain, got: %v", err)
+	}
+}
+

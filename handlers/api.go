@@ -366,6 +366,9 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		mux.HandleFunc("POST /api/seasons/{id}/close", func(w http.ResponseWriter, r *http.Request) {
 			closeSeasonHandler(w, r, seasonMgr, weekMgrClose, roundMgrClose)
 		})
+		mux.HandleFunc("POST /api/seasons/{id}/reopen", func(w http.ResponseWriter, r *http.Request) {
+			reopenSeasonHandler(w, r, seasonMgr)
+		})
 	}
 
 	// Backup

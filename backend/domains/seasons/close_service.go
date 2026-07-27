@@ -181,6 +181,29 @@ func (s *SeasonService) CloseSeason(
 	return s.store.GetSeason(ctx, seasonID)
 }
 
+// ReopenSeason clears closed_at on a closed season, returning it to Historical
+// state (active=0, activated_at set, closed_at NULL). final_standings_snapshot
+// is preserved as the last close record. Returns ErrNotFound (wrapped) when the
+// season does not exist. Returns domainerr.Err with code SEASON_NOT_CLOSED (Conflict)
+// when the season is not currently closed.
+func (s *SeasonService) ReopenSeason(ctx context.Context, seasonID int64) (models.Season, error) {
+	season, err := s.store.GetSeason(ctx, seasonID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return models.Season{}, ErrNotFound
+		}
+		return models.Season{}, fmt.Errorf("reopen season %d: get season: %w", seasonID, err)
+	}
+	if season.ClosedAt == nil {
+		return models.Season{}, domainerr.New(CodeSeasonNotClosed, domainerr.Conflict,
+			"season is not closed; only closed seasons can be reopened")
+	}
+	if err := s.store.ReopenSeasonRecord(ctx, seasonID); err != nil {
+		return models.Season{}, fmt.Errorf("reopen season %d: store: %w", seasonID, err)
+	}
+	return s.store.GetSeason(ctx, seasonID)
+}
+
 // blockerCategory maps a close blocker code to its domainerr category for HTTP mapping.
 func blockerCategory(code string) domainerr.Category {
 	switch code {
