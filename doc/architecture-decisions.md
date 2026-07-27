@@ -478,4 +478,10 @@ The snapshot is write-only in Phase 1; no GET endpoint exposes it. It is
 excluded from all normal season list/get queries to avoid payload bloat.
 
 Edit locks (preventing changes to closed seasons) were added in Phase 2.
-Explicit admin reopen (clearing `closed_at`) was added in Phase 3.
+
+Reopen semantics (Phase 3): `POST /api/seasons/{id}/reopen` is the only way to
+reopen a closed season. It clears `closed_at` (sets to NULL). `active` remains 0;
+the season re-enters Historical state. `activated_at` and `final_standings_snapshot`
+are preserved. Edit locks lift automatically because `closed_at IS NULL` returns false
+for all `IsClosed`/`IsSeasonClosed` checks. Reopen is never triggered automatically
+by any other workflow.

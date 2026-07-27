@@ -55,18 +55,6 @@ These items should stay small enough to review and ship independently.
 These are the next build targets after the current workflow foundation is
 stable.
 
-- Season-end clearance.
-  - Phase 1 (core close) shipped on 2026-07-26: preview endpoint, commit
-    endpoint, final standings snapshot, Closed badge in UI, Close Season button.
-  - Phase 2 (edit locks) shipped on 2026-07-26: SEASON_CLOSED (409) guards on
-    all mutation endpoints for closed seasons; frontend lock indicators on
-    schedule, match entry, and handicap review; createSkippedWeek handler
-    fixed to propagate domainerr.Conflict correctly.
-  - Phase 3 (explicit reopen) shipped on 2026-07-26: POST /api/seasons/{id}/reopen
-    clears closed_at and returns the season to Historical state; SEASON_NOT_CLOSED
-    (409) guard when season is not closed; Reopen Season button in management panel.
-  - Treat paid/unpaid player status as outside the app for now.
-
 - Continue backend/domain extraction where workflows are already active.
   - Reduce monolithic handler/shell ownership further.
   - Keep new work inside domain boundaries rather than adding more temporary
@@ -175,6 +163,17 @@ admin workflows are stable.
 
 These areas are no longer "next" work, though they may still receive focused
 follow-up.
+
+- Season-end clearance (Phases 1-3, shipped 2026-07-26).
+  - Close preview endpoint and close commit endpoint.
+  - Final standings snapshot (`final_standings_snapshot` JSON, versioned, preserved on reopen).
+  - `closed_at` lifecycle marker; Closed badge and Close Season button in Seasons UI.
+  - Closed-season edit locks: `SEASON_CLOSED` (409) guards on all mutation endpoints
+    (scoresheet, week workflow, schedule, match assignment, season setup, handicap apply).
+  - Explicit admin reopen: `POST /api/seasons/{id}/reopen` clears `closed_at`, returns
+    season to Historical state (active=0, activated_at preserved); `SEASON_NOT_CLOSED`
+    (409) when season is not closed; Reopen Season button in management panel.
+  - Paid/unpaid player status remains outside the app.
 
 - Backend scoresheet validation foundation.
 - Scoresheet save/review guardrails.

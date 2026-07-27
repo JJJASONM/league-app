@@ -4,8 +4,8 @@
 
 **Owner:** `seasons`
 **Status:** `draft`
-**Current version:** `0.4`
-**Last reviewed:** `2026-07-18`
+**Current version:** `0.5`
+**Last reviewed:** `2026-07-26`
 
 The Seasons domain owns setup, activation, league-week workflow, closing,
 reopening, and final standings snapshots.
