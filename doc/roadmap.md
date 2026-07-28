@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-07-25
+**Last reviewed:** 2026-07-27
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -75,16 +75,15 @@ stable.
   - Address deferred workflow gaps that are already known but not
     architecture-critical.
 
-- Roles, permissions, and API access discovery.
-  - Resolve `USERS-Q001` after week-end and season-end clearance are clear.
-  - Define account linking, invitations, permissions, admin roles, and route
-    authorization.
-  - Treat most clearance/admin operations as league-admin or system-admin
-    actions by default.
+- Roles, permissions, and API access implementation.
+  - `USERS-Q001` resolved 2026-07-27. Discovery complete; see
+    `doc/domains/users/README.md`.
+  - Wire route-level auth incrementally: use existing `requireApplyAuth` pattern
+    and a `RequireRole` helper onto clearance and operational routes.
   - For future online score entry, prefer rostered players assigned to the
-    match over a generic scorekeeper role.
-  - Decide how the current API-key bridge evolves into browser login and
-    route-level authorization.
+    match over a generic scorekeeper role (deferred to MATCHES-Q002).
+  - Browser sessions and JWTs are deferred until online score entry or a users
+    management screen creates the concrete need.
 
 - Player record maintenance.
   - Add duplicate detection for player quick-add after the Phase 1 Players page
@@ -110,11 +109,13 @@ admin workflows are stable.
     changes, and season close.
 
 - Users screen and account management.
-  - Separate player records from authenticated user accounts.
-  - Implement account linking, invitations, permissions, and admin roles after
-    `USERS-Q001` is resolved.
-  - Consider a future Users screen that includes account status and linked
-    player/stat context after the users/accounts boundary is designed.
+  - Roles and permissions are resolved at the design level (USERS-Q001
+    resolved 2026-07-27). Route auth implementation is incremental; see Then.
+  - Account linking (users.player_id) deferred until online score entry,
+    attribution display, or a users screen creates the concrete need.
+  - No email invitation workflow selected; admin-provisioned accounts only.
+  - A users screen waits for route-level auth to be wired and a concrete
+    account-management workflow to be defined.
 
 - Online score entry workflow.
   - Resolve `MATCHES-Q002`.
@@ -249,13 +250,13 @@ follow-up.
 | ID | Area | Question |
 | --- | --- | --- |
 | `RULES-Q001` | Rules | How are emergency or mid-season rule amendments handled? |
-| `USERS-Q001` | Users | How do invitation, account linking, roles, permissions, and API access operate? |
 | `MATCHES-Q002` | Matches | How will online score entry, permissions, drafts, individual matchup processing, and review work? |
 
 ## Resolved Questions
 
 | ID | Area | Resolution |
 | --- | --- | --- |
+| `USERS-Q001` | Users | Resolved 2026-07-27 - Admin-provisioned accounts; two-role model (system_admin, league_admin); personal API keys continue; player link deferred; route auth wires incrementally per phase. |
 | `PLAYERS-Q001` | Players | Resolved 2026-07-14 - Phase 1 quick-add uses at least one name, diff rating default 0, and optional team; duplicate detection and INCOMPLETE status deferred. |
 | `CODES-Q001` | Codes | Resolved 2026-07-14 - behavior-driving codes remain developer-owned constants; DB-backed code tables deferred. |
 | `SCHEDULES-Q001` | Schedules | Resolved 2026-07-13 - preview policy and enforcement complete. |

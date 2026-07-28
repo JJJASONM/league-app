@@ -4,8 +4,8 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.3`
-**Last reviewed:** `2026-07-18`
+**Current version:** `0.4`
+**Last reviewed:** `2026-07-27`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
@@ -23,10 +23,10 @@ email addresses, and account transfers.
 ## Future User Screens
 
 A future users screen may show account status together with linked player and
-statistics context. This belongs after `USERS-Q001` defines account invitation,
-player linking, roles, permissions, and API access. Until then, player
-statistics remain in the standings/player-stats workflows rather than a users
-domain screen.
+statistics context. This belongs after route-level auth is wired and a concrete
+users/account-management workflow is defined. Until then, player statistics
+remain in the standings/player-stats workflows rather than a users domain
+screen.
 
 Payment status is currently outside the app. A future users/accounts experience
 may show a login reminder or account-status notice when a player has not paid,
@@ -54,18 +54,14 @@ Current direction:
 
 ### USERS-Q001 - Account invitation, roles, and API access
 
-**Status:** `open`
+**Status:** `resolved`
 **Opened:** `2026-06-08`
-**Resolved:** `pending`
-**Related commit:** `pending`
+**Resolved:** `2026-07-27`
 
-**Context:** An admin may create an account for an existing player. The same
-design pass must define roles, permissions, account linking, and API access.
-
-**Resolution:** Define email invitation, credential setup, expiration,
-resending, identity verification, player-link confirmation, route-level
-authorization, and the long-term replacement or evolution of the current API-key
-bridge.
+**Resolution:** Admin-provisioned accounts; two-role model (system_admin,
+league_admin); API key bridge continues; player link deferred; route auth wires
+incrementally per phase onto clearance and operational routes. See USERS-Q001
+Discovery section below.
 
 ## Phase C1 Implementation
 
@@ -97,10 +93,116 @@ POST /api/seasons/{id}/handicap-apply  Authorization: Bearer <token>
 
 ### What C1 defers
 
-- No player↔user link (deferred to USERS-Q001 below)
+- No player-user link (deferred until online score entry, attribution display,
+  or a users screen creates the concrete need)
 - No session cookies, JWTs, or browser login flow
 - No user deactivation endpoint (set `active=0` in DB directly)
 - No FK enforcement between `handicap_history.applied_by_user_id` and `users.id`
+
+## USERS-Q001 Discovery
+
+**Status:** `resolved`
+**Date:** `2026-07-27`
+
+### Current-State Inventory (as of 2026-07-27)
+
+**Schema:**
+- `users` table: `id`, `username` (UNIQUE), `api_key_hash` (SHA-256, 64-char hex, UNIQUE), `role` (DEFAULT 'admin'), `active`, `created_at`
+- `player_id` intentionally omitted in C1; optional link deferred to this resolution
+- `handicap_history.applied_by_user_id INTEGER` -- attribution column; no FK enforced
+
+**Routes:**
+- `POST /api/users` -- create user, return one-time cleartext key; gated by static admin token
+- `GET /api/users` -- list users without hashes; gated by static admin token
+- `POST /api/seasons/{id}/handicap-apply` -- gated by dual-tier `requireApplyAuth`
+
+**Apply auth flow (C1):**
+
+```text
+No header                              -> 401 (WWW-Authenticate)
+SHA-256(token) matches active user     -> allow; applied_by_user_id = users.id
+token == LEAGUE_ADMIN_TOKEN            -> allow; applied_by_user_id = NULL; logs deprecation
+Neither                                -> 403
+```
+
+**Unprotected routes as of 2026-07-27:** All season, match, schedule, scoresheet,
+lineup, standings, and CRUD mutation routes carry no authorization.
+
+### Proposed Account Model
+
+**Role taxonomy - two roles for this phase:**
+
+- `system_admin` -- manage leagues, manage users, global settings
+- `league_admin` -- operational: close/reopen weeks, apply handicaps, close/reopen seasons, season setup
+
+The current schema stores `role TEXT NOT NULL DEFAULT 'admin'`. Existing users should
+be treated as `league_admin` until a migration aligns stored values with this taxonomy.
+Reserve `score_keeper` for future online score entry (MATCHES-Q002); do not define it
+until that workflow is designed, as its scope is tied to rostered players on a specific
+match.
+
+**Player-user link:** `users.player_id NULL UNIQUE` remains the approved target.
+Defer until a concrete workflow requires it: online score entry, attribution display,
+or a future users screen. Review before implementation for household accounts,
+guardians, shared emails, and account transfers.
+
+**Deferred items:**
+- Browser sessions and JWTs -- until online score entry or a users screen requires it
+- User deactivation endpoint -- set `active=0` in DB directly; endpoint is low priority
+- Personal API key rotation (`POST /api/users/{id}/rotate-key`) -- deferred
+- `applied_by_user_id` FK enforcement -- column exists; FK not enforced
+
+### Roles and Permissions Matrix
+
+| Route group | Current auth | Target auth |
+|-------------|-------------|-------------|
+| GET reads (all domains) | None | None |
+| Mutation: leagues, teams, players CRUD | None | league_admin |
+| Mutation: seasons, rules, skipped-weeks, bye-requests, season teams, roster | None | league_admin |
+| POST /api/matches/generate | None | league_admin |
+| POST /api/seasons/{id}/schedule/pushback-* | None | league_admin |
+| POST /api/seasons/{id}/weeks/{week}/close | None | league_admin |
+| POST /api/seasons/{id}/weeks/{week}/reopen | None | league_admin |
+| POST /api/seasons/{id}/close | None | league_admin |
+| POST /api/seasons/{id}/reopen | None | league_admin |
+| POST /api/seasons/{id}/handicap-apply | requireApplyAuth | league_admin (no mechanism change) |
+| POST /api/matches/{id}/results and /rounds | None | league_admin (or future score_keeper via MATCHES-Q002) |
+| POST /api/users, GET /api/users | requireAdminToken | system_admin |
+| POST /api/backup | None | system_admin |
+
+Route auth is not wired for most routes as of this resolution. Wire incrementally
+per phase as workflows are hardened. The matrix records intent, not current state.
+
+### Invitation and API Bridge Decision
+
+**Provisioning:** Admin-provisioned only. No email invitation workflow at this time.
+An admin with `LEAGUE_ADMIN_TOKEN` creates accounts via `POST /api/users`. The
+cleartext key is delivered out-of-band in the create response.
+
+**Static token deprecation path:**
+- Keep as fallback in `requireApplyAuth`; the deprecation log on each use is sufficient
+- Do not add the static token path to newly protected routes; use personal keys + role check
+- Remove the static token fallback only after all affected admins have personal keys
+  and affected routes are confirmed working with personal keys
+
+**Key management:** No key rotation endpoint in the near roadmap. Direct DB
+intervention for now. Add `POST /api/users/{id}/rotate-key` only when operationally
+urgent.
+
+### API Access Transition Recommendation
+
+**Next incremental steps:**
+
+1. Wire `requireApplyAuth`-equivalent middleware onto clearance routes (close/reopen
+   week, close/reopen season). No new infrastructure required; the middleware and
+   user-from-context pattern already exist.
+2. Add a `RequireRole(role string)` helper that reads the resolved user from context
+   and checks `users.role`. Wire `RequireRole("league_admin")` after auth on each
+   newly protected route.
+
+**Not next:** Browser sessions, JWTs, a login endpoint, email invitations, or
+permission scoping by league. Defer until online score entry or a users management
+screen creates the concrete need.
 
 ## Decision History
 
@@ -112,6 +214,14 @@ Roles and permissions should be designed after week-end and season-end clearance
 are documented, because those workflows define the protected actions. Future
 score submission should be tied to rostered players assigned to the match rather
 than a generic scorekeeper role.
+
+### 2026-07-27 - USERS-Q001 resolved: roles, permissions, and API access
+
+**Status:** `accepted`
+
+Week-end and season-end clearance are now stable. Roles, permissions, and API
+access are resolved at the design level. Implementation proceeds incrementally
+per route phase. See USERS-Q001 Discovery section.
 
 ### 2026-06-08 - Separate users and players
 

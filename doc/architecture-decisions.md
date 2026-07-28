@@ -1,7 +1,7 @@
 # League App Architecture Decisions
 
 **Status:** Target design
-**Last reviewed:** 2026-07-18
+**Last reviewed:** 2026-07-27
 
 This document consolidates approved product and architecture decisions. It
 describes the target model, not necessarily the schema currently implemented in
@@ -317,12 +317,19 @@ users.player_id NULL UNIQUE -> players.id
 Review this before authentication is implemented, especially for household
 accounts, guardians, shared emails, and account transfers.
 
-`USERS-Q001` remains open: define email invitation and account activation when
-a user account is created for an existing player. That design pass must also
-define roles, permissions, route-level authorization, and API access. Most
-clearance and administration workflows default to league-admin or system-admin
-ownership. Future score submission should be tied to rostered players assigned
-to the match, with admin override, rather than a generic scorekeeper role.
+`USERS-Q001` is resolved (2026-07-27). See `doc/domains/users/README.md` for
+the full discovery. Resolved decisions:
+
+- Two-role model: `system_admin` (leagues, users, global settings) and
+  `league_admin` (operational: close/reopen weeks, handicap apply, season
+  close/reopen, season setup). `score_keeper` is reserved for MATCHES-Q002.
+- Provisioning is admin-provisioned via `POST /api/users` (no email invitation).
+- Personal API keys remain primary. Static `LEAGUE_ADMIN_TOKEN` stays as a
+  fallback with a deprecation log; do not add it to newly protected routes.
+- `users.player_id NULL UNIQUE` remains the target optional link; deferred
+  until online score entry or attribution display requires it.
+- Route auth wires incrementally per phase using the existing `requireApplyAuth`
+  middleware and a `RequireRole` helper. Browser sessions and JWTs are deferred.
 
 ## Open Questions
 
@@ -330,7 +337,7 @@ to the match, with admin override, rather than a generic scorekeeper role.
 | --- | --- | --- |
 | `RULES-Q001` | on hold | How are emergency or mid-season rule amendments handled? |
 | `PLAYERS-Q001` | resolved 2026-07-14 | What fields and handicap value are required for quick-add players? |
-| `USERS-Q001` | open | How do invitation, account linking, roles, permissions, and API access operate? |
+| `USERS-Q001` | resolved 2026-07-27 | How do invitation, account linking, roles, permissions, and API access operate? |
 | `CODES-Q001` | resolved 2026-07-14 | What physical code-table design best supports all approved code sets? |
 | `SCHEDULES-Q001` | resolved 2026-07-13 | Which manual edits are allowed during schedule preview? |
 | `MATCHES-Q001` | on hold | What match status follows completed score entry before week close? |
@@ -447,6 +454,18 @@ access, the Users screen, and online score entry. Close Week remains the
 week-clearance state boundary, missing/no-result matches are excluded from
 standings until resolved, Handicap Apply stays explicit before next-week
 scoresheets are used, and season close creates a locked final snapshot.
+
+### 2026-07-27 - Resolve USERS-Q001: roles, permissions, and API access
+
+**Status:** accepted
+
+Week-end and season-end clearance are now stable. Roles and permissions are
+resolved at the design level; implementation proceeds incrementally per route
+phase. Key decisions: two-role model (`system_admin`, `league_admin`); admin-
+provisioned accounts only (no email invitation); personal API keys remain
+primary with static-token fallback; player-user link deferred; route auth
+to be wired using the existing middleware pattern. See
+`doc/domains/users/README.md` for the full discovery.
 
 ### 2026-07-26 - Season close lifecycle and snapshot storage
 
