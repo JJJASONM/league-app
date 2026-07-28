@@ -4,8 +4,8 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.4`
-**Last reviewed:** `2026-07-27`
+**Current version:** `0.5`
+**Last reviewed:** `2026-07-28`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
@@ -98,6 +98,57 @@ POST /api/seasons/{id}/handicap-apply  Authorization: Bearer <token>
 - No session cookies, JWTs, or browser login flow
 - No user deactivation endpoint (set `active=0` in DB directly)
 - No FK enforcement between `handicap_history.applied_by_user_id` and `users.id`
+
+## Users Auth Phase 1 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-07-28`
+
+### What Phase 1 added
+
+- `requirePersonalKeyAuth` middleware: personal-key-only Bearer auth; no
+  static-token fallback; rejects with 401 + `WWW-Authenticate` on missing
+  header, 403 on unresolved key
+- `requireLeagueAdminRole` middleware: reads `*models.User` from
+  `clearanceUserKey{}` context; allows `league_admin`, `admin` (backward-compat
+  alias), `system_admin`; rejects all other roles with 403
+- `clearanceAuth(resolver, h)` conditional wrapper: returns `h` unmodified when
+  resolver is nil, preserving existing integration test behavior
+- `clearanceUserKey{}` context key (type-safe, separate from `applyUserIDKey{}`)
+- `clearanceUserFromContext` helper
+
+### Protected routes (Phase 1)
+
+| Route | Auth requirement |
+|-------|-----------------|
+| `POST /api/seasons/{id}/weeks/{week}/close` | personal key + league_admin role |
+| `POST /api/seasons/{id}/weeks/{week}/reopen` | personal key + league_admin role |
+| `POST /api/seasons/{id}/close` | personal key + league_admin role |
+| `POST /api/seasons/{id}/reopen` | personal key + league_admin role |
+
+### Clearance auth flow
+
+```text
+POST /api/seasons/{id}/weeks/{week}/close  Authorization: Bearer <token>
+
+  1. No header               -> 401 (WWW-Authenticate: Bearer realm="league-admin")
+  2. SHA-256(token) matches active user AND role in (league_admin, admin, system_admin)
+                             -> allow
+  3. SHA-256(token) matches active user AND role not in allowed set
+                             -> 403
+  4. Token not found in users table (including LEAGUE_ADMIN_TOKEN static token)
+                             -> 403
+```
+
+### What Phase 1 defers
+
+- No role protection on CRUD mutation routes (leagues, teams, players, seasons,
+  roster, rules, schedule generation, pushback, scoresheet)
+- Static token (`LEAGUE_ADMIN_TOKEN`) remains in `requireApplyAuth` fallback for
+  `handicap-apply` only; not added to any new route
+- No login endpoint, browser sessions, or JWTs
+- No `system_admin`-gated user-management route protection (POST/GET /api/users
+  remain gated by static admin token)
 
 ## USERS-Q001 Discovery
 

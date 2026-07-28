@@ -282,12 +282,16 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/validate", func(w http.ResponseWriter, r *http.Request) {
 			validateWeekHandler(w, r, weekMgr)
 		})
-		mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close", func(w http.ResponseWriter, r *http.Request) {
-			closeWeekHandler(w, r, weekMgr)
-		})
-		mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen", func(w http.ResponseWriter, r *http.Request) {
-			reopenWeekHandler(w, r, weekMgr)
-		})
+		mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				closeWeekHandler(w, r, weekMgr)
+			}),
+		)
+		mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				reopenWeekHandler(w, r, weekMgr)
+			}),
+		)
 		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", func(w http.ResponseWriter, r *http.Request) {
 			getWeekAcknowledgments(w, r, weekMgr)
 		})
@@ -363,12 +367,16 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		mux.HandleFunc("GET /api/seasons/{id}/close-preview", func(w http.ResponseWriter, r *http.Request) {
 			closeSeasonPreviewHandler(w, r, seasonMgr, weekMgrClose, roundMgrClose)
 		})
-		mux.HandleFunc("POST /api/seasons/{id}/close", func(w http.ResponseWriter, r *http.Request) {
-			closeSeasonHandler(w, r, seasonMgr, weekMgrClose, roundMgrClose)
-		})
-		mux.HandleFunc("POST /api/seasons/{id}/reopen", func(w http.ResponseWriter, r *http.Request) {
-			reopenSeasonHandler(w, r, seasonMgr)
-		})
+		mux.HandleFunc("POST /api/seasons/{id}/close",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				closeSeasonHandler(w, r, seasonMgr, weekMgrClose, roundMgrClose)
+			}),
+		)
+		mux.HandleFunc("POST /api/seasons/{id}/reopen",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				reopenSeasonHandler(w, r, seasonMgr)
+			}),
+		)
 	}
 
 	// Backup
@@ -503,6 +511,75 @@ func applyUserIDFromContext(ctx context.Context) *int64 {
 		return nil
 	}
 	return &v
+}
+
+// clearanceUserFromContext returns the *models.User stored by requirePersonalKeyAuth,
+// or nil when no user is in the request context.
+func clearanceUserFromContext(ctx context.Context) *models.User {
+	u, _ := ctx.Value(clearanceUserKey{}).(*models.User)
+	return u
+}
+
+// requirePersonalKeyAuth is personal-key-only middleware for clearance routes.
+// No static LEAGUE_ADMIN_TOKEN fallback -- that path is reserved for handicap-apply.
+// Returns 401 (with WWW-Authenticate) when Authorization is absent, 403 when the
+// token does not resolve to an active user, 500 on resolver error.
+// The resolved *models.User is stored in context for downstream role checks.
+func requirePersonalKeyAuth(resolver ApplyAuthResolver, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="league-admin"`)
+			jsonError(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if !strings.HasPrefix(auth, "Bearer ") {
+			jsonError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		token := strings.TrimPrefix(auth, "Bearer ")
+		user, err := resolver.ResolveApplyUserByAPIKey(r.Context(), token)
+		if err != nil {
+			log.Printf("clearance auth: key resolution error: %v", err)
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if user == nil {
+			jsonError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		ctx := context.WithValue(r.Context(), clearanceUserKey{}, user)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+// requireLeagueAdminRole checks that the user in context has an allowed role.
+// Allowed: "league_admin", "admin" (backward-compatible alias), "system_admin".
+// Returns 403 when no user is in context or when the role is not in the allowed set.
+func requireLeagueAdminRole(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := clearanceUserFromContext(r.Context())
+		if user == nil {
+			jsonError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		switch user.Role {
+		case "league_admin", "admin", "system_admin":
+			next(w, r)
+		default:
+			jsonError(w, "forbidden", http.StatusForbidden)
+		}
+	}
+}
+
+// clearanceAuth wraps h with personal-key auth and league_admin role check when
+// resolver is non-nil. When resolver is nil, h is returned unmodified so routes
+// remain accessible in test and minimal-dependency setups without ApplyAuth.
+func clearanceAuth(resolver ApplyAuthResolver, h http.HandlerFunc) http.HandlerFunc {
+	if resolver == nil {
+		return h
+	}
+	return requirePersonalKeyAuth(resolver, requireLeagueAdminRole(h))
 }
 
 // ─── Leagues ─────────────────────────────────────────────────────────────────

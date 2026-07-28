@@ -51,6 +51,11 @@ type ApplyAuthResolver interface {
 // other packages that use string keys.
 type applyUserIDKey struct{}
 
+// clearanceUserKey is the context key for the resolved *models.User on clearance
+// route requests. Separate from applyUserIDKey so the two auth layers do not
+// share context state.
+type clearanceUserKey struct{}
+
 // WeekManager is the subset of matches.WeekService used by the week-workflow handlers.
 // Accepting an interface allows stub injection in tests.
 type WeekManager interface {
