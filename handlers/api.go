@@ -136,85 +136,119 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	mux.HandleFunc("GET /api/seasons", func(w http.ResponseWriter, r *http.Request) {
 		listSeasons(w, r, seasonMgr)
 	})
-	mux.HandleFunc("POST /api/seasons", func(w http.ResponseWriter, r *http.Request) {
-		createSeason(w, r, seasonMgr)
-	})
+	mux.HandleFunc("POST /api/seasons",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			createSeason(w, r, seasonMgr)
+		}),
+	)
 	mux.HandleFunc("GET /api/seasons/{id}", func(w http.ResponseWriter, r *http.Request) {
 		getSeason(w, r, seasonMgr)
 	})
-	mux.HandleFunc("PUT /api/seasons/{id}", func(w http.ResponseWriter, r *http.Request) {
-		updateSeason(w, r, seasonMgr)
-	})
-	mux.HandleFunc("DELETE /api/seasons/{id}", func(w http.ResponseWriter, r *http.Request) {
-		deleteSeason(w, r, seasonMgr)
-	})
-	mux.HandleFunc("POST /api/seasons/{id}/activate", func(w http.ResponseWriter, r *http.Request) {
-		activateSeason(w, r, seasonMgr)
-	})
+	mux.HandleFunc("PUT /api/seasons/{id}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			updateSeason(w, r, seasonMgr)
+		}),
+	)
+	mux.HandleFunc("DELETE /api/seasons/{id}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			deleteSeason(w, r, seasonMgr)
+		}),
+	)
+	mux.HandleFunc("POST /api/seasons/{id}/activate",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			activateSeason(w, r, seasonMgr)
+		}),
+	)
 
 	// Season sub-resources
 	ruleMgr := deps.RuleMgr
 	mux.HandleFunc("GET /api/seasons/{id}/rules", func(w http.ResponseWriter, r *http.Request) {
 		listSeasonRules(w, r, ruleMgr)
 	})
-	mux.HandleFunc("POST /api/seasons/{id}/rules", func(w http.ResponseWriter, r *http.Request) {
-		createSeasonRule(w, r, ruleMgr)
-	})
-	mux.HandleFunc("PUT /api/seasons/{id}/rules/{rid}", func(w http.ResponseWriter, r *http.Request) {
-		updateSeasonRule(w, r, ruleMgr)
-	})
-	mux.HandleFunc("DELETE /api/seasons/{id}/rules/{rid}", func(w http.ResponseWriter, r *http.Request) {
-		deleteSeasonRule(w, r, ruleMgr)
-	})
+	mux.HandleFunc("POST /api/seasons/{id}/rules",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			createSeasonRule(w, r, ruleMgr)
+		}),
+	)
+	mux.HandleFunc("PUT /api/seasons/{id}/rules/{rid}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			updateSeasonRule(w, r, ruleMgr)
+		}),
+	)
+	mux.HandleFunc("DELETE /api/seasons/{id}/rules/{rid}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			deleteSeasonRule(w, r, ruleMgr)
+		}),
+	)
 
 	mux.HandleFunc("GET /api/seasons/{id}/skipped-weeks", func(w http.ResponseWriter, r *http.Request) {
 		listSkippedWeeks(w, r, seasonMgr)
 	})
-	mux.HandleFunc("POST /api/seasons/{id}/skipped-weeks", func(w http.ResponseWriter, r *http.Request) {
-		createSkippedWeek(w, r, seasonMgr)
-	})
-	mux.HandleFunc("DELETE /api/seasons/{id}/skipped-weeks/{sid}", func(w http.ResponseWriter, r *http.Request) {
-		deleteSkippedWeek(w, r, seasonMgr)
-	})
+	mux.HandleFunc("POST /api/seasons/{id}/skipped-weeks",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			createSkippedWeek(w, r, seasonMgr)
+		}),
+	)
+	mux.HandleFunc("DELETE /api/seasons/{id}/skipped-weeks/{sid}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			deleteSkippedWeek(w, r, seasonMgr)
+		}),
+	)
 
 	mux.HandleFunc("GET /api/seasons/{id}/bye-requests", func(w http.ResponseWriter, r *http.Request) {
 		listByeRequests(w, r, seasonMgr)
 	})
-	mux.HandleFunc("POST /api/seasons/{id}/bye-requests", func(w http.ResponseWriter, r *http.Request) {
-		createByeRequest(w, r, seasonMgr)
-	})
-	mux.HandleFunc("PUT /api/seasons/{id}/bye-requests/{bid}", func(w http.ResponseWriter, r *http.Request) {
-		updateByeRequest(w, r, seasonMgr)
-	})
-	mux.HandleFunc("DELETE /api/seasons/{id}/bye-requests/{bid}", func(w http.ResponseWriter, r *http.Request) {
-		deleteByeRequest(w, r, seasonMgr)
-	})
+	mux.HandleFunc("POST /api/seasons/{id}/bye-requests",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			createByeRequest(w, r, seasonMgr)
+		}),
+	)
+	mux.HandleFunc("PUT /api/seasons/{id}/bye-requests/{bid}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			updateByeRequest(w, r, seasonMgr)
+		}),
+	)
+	mux.HandleFunc("DELETE /api/seasons/{id}/bye-requests/{bid}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			deleteByeRequest(w, r, seasonMgr)
+		}),
+	)
 
 	// Season teams and rosters
 	mux.HandleFunc("GET /api/seasons/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
 		listSeasonTeams(w, r, seasonMgr)
 	})
-	mux.HandleFunc("POST /api/seasons/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
-		addSeasonTeam(w, r, seasonMgr)
-	})
+	mux.HandleFunc("POST /api/seasons/{id}/teams",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			addSeasonTeam(w, r, seasonMgr)
+		}),
+	)
 	mux.HandleFunc("GET /api/seasons/{id}/previous", func(w http.ResponseWriter, r *http.Request) {
 		getPreviousSeasonTeams(w, r, seasonMgr)
 	})
-	mux.HandleFunc("PUT /api/seasons/{id}/teams/{tid}", func(w http.ResponseWriter, r *http.Request) {
-		updateSeasonTeam(w, r, seasonMgr)
-	})
-	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}", func(w http.ResponseWriter, r *http.Request) {
-		removeSeasonTeam(w, r, seasonMgr)
-	})
+	mux.HandleFunc("PUT /api/seasons/{id}/teams/{tid}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			updateSeasonTeam(w, r, seasonMgr)
+		}),
+	)
+	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			removeSeasonTeam(w, r, seasonMgr)
+		}),
+	)
 	mux.HandleFunc("GET /api/seasons/{id}/teams/{tid}/roster", func(w http.ResponseWriter, r *http.Request) {
 		listSeasonRoster(w, r, seasonMgr)
 	})
-	mux.HandleFunc("POST /api/seasons/{id}/teams/{tid}/roster", func(w http.ResponseWriter, r *http.Request) {
-		addRosterPlayer(w, r, seasonMgr)
-	})
-	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}", func(w http.ResponseWriter, r *http.Request) {
-		removeRosterPlayer(w, r, seasonMgr)
-	})
+	mux.HandleFunc("POST /api/seasons/{id}/teams/{tid}/roster",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			addRosterPlayer(w, r, seasonMgr)
+		}),
+	)
+	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}",
+		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			removeRosterPlayer(w, r, seasonMgr)
+		}),
+	)
 	mux.HandleFunc("GET /api/seasons/{id}/players/available", func(w http.ResponseWriter, r *http.Request) {
 		listAvailablePlayers(w, r, seasonMgr)
 	})
@@ -268,12 +302,16 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		mux.HandleFunc("GET /api/lineup-plans", func(w http.ResponseWriter, r *http.Request) {
 			listLineupPlans(w, r, lineupMgr)
 		})
-		mux.HandleFunc("POST /api/lineup-plans", func(w http.ResponseWriter, r *http.Request) {
-			saveTeamLineup(w, r, lineupMgr)
-		})
-		mux.HandleFunc("DELETE /api/lineup-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
-			deleteLineupPlan(w, r, lineupMgr)
-		})
+		mux.HandleFunc("POST /api/lineup-plans",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				saveTeamLineup(w, r, lineupMgr)
+			}),
+		)
+		mux.HandleFunc("DELETE /api/lineup-plans/{id}",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				deleteLineupPlan(w, r, lineupMgr)
+			}),
+		)
 	}
 
 	// Rule definitions — developer-owned, served by the backend

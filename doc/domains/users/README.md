@@ -4,7 +4,7 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.7`
+**Current version:** `0.8`
 **Last reviewed:** `2026-08-07`
 
 Users are authenticated accounts with roles and permissions. They are separate
@@ -149,6 +149,53 @@ POST /api/seasons/{id}/weeks/{week}/close  Authorization: Bearer <token>
 - No login endpoint, browser sessions, or JWTs
 - No `system_admin`-gated user-management route protection (POST/GET /api/users
   remain gated by static admin token)
+
+## Users Auth Phase 4 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-08-07`
+
+### What Phase 4 added
+
+Protected 19 season-setup mutation routes with the same `clearanceAuth` middleware
+chain from Phases 1 through 3 (personal-key-only Bearer auth + league_admin role).
+No new middleware or infrastructure required.
+
+### Protected routes (Phase 4)
+
+| Route | Auth requirement |
+|-------|-----------------|
+| `POST /api/seasons` | personal key + league_admin role |
+| `PUT /api/seasons/{id}` | personal key + league_admin role |
+| `DELETE /api/seasons/{id}` | personal key + league_admin role |
+| `POST /api/seasons/{id}/activate` | personal key + league_admin role |
+| `POST /api/seasons/{id}/rules` | personal key + league_admin role |
+| `PUT /api/seasons/{id}/rules/{rid}` | personal key + league_admin role |
+| `DELETE /api/seasons/{id}/rules/{rid}` | personal key + league_admin role |
+| `POST /api/seasons/{id}/skipped-weeks` | personal key + league_admin role |
+| `DELETE /api/seasons/{id}/skipped-weeks/{sid}` | personal key + league_admin role |
+| `POST /api/seasons/{id}/bye-requests` | personal key + league_admin role |
+| `PUT /api/seasons/{id}/bye-requests/{bid}` | personal key + league_admin role |
+| `DELETE /api/seasons/{id}/bye-requests/{bid}` | personal key + league_admin role |
+| `POST /api/seasons/{id}/teams` | personal key + league_admin role |
+| `PUT /api/seasons/{id}/teams/{tid}` | personal key + league_admin role |
+| `DELETE /api/seasons/{id}/teams/{tid}` | personal key + league_admin role |
+| `POST /api/seasons/{id}/teams/{tid}/roster` | personal key + league_admin role |
+| `DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}` | personal key + league_admin role |
+| `POST /api/lineup-plans` | personal key + league_admin role |
+| `DELETE /api/lineup-plans/{id}` | personal key + league_admin role |
+
+### Intentionally unprotected (Phase 4)
+
+All GET reads on season and lineup routes carry no auth (policy: GET reads are public).
+
+### What Phase 4 defers
+
+- No role protection on CRUD mutation routes for leagues, teams, and players
+  (`POST/PUT/DELETE /api/leagues`, `/api/teams`, `/api/players`)
+- `POST /api/backup` (system operation, deferred to a later phase)
+- `POST /api/seasons/{id}/handicap-apply` retains its existing dual-tier
+  `requireApplyAuth` (personal key + static token fallback); no change
 
 ## Users Auth Phase 3 Implementation
 

@@ -89,9 +89,11 @@ stable.
   - Phase 3 wired 2026-08-07: match mutation routes (`assign`, `submit results`,
     `clear results`, `save rounds`) gated by the same auth. GET match reads
     remain unprotected.
-  - Remaining unprotected mutation routes: CRUD (leagues, teams, players,
-    seasons, rules, skipped-weeks, bye-requests, roster, season activation),
-    lineup plans, handicap apply. Wire incrementally per phase.
+  - Phase 4 wired 2026-08-07: season setup mutation routes (19 routes: season
+    CRUD, activate, rules, skipped-weeks, bye-requests, season teams, roster,
+    lineup plans) gated by the same auth. GET reads remain unprotected.
+  - Remaining unprotected mutation routes: CRUD (leagues, teams, players) and
+    `POST /api/backup`. Wire incrementally per phase.
   - For future online score entry, prefer rostered players assigned to the
     match over a generic scorekeeper role (deferred to MATCHES-Q002).
   - Browser sessions and JWTs are deferred until online score entry or a users
