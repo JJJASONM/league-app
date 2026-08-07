@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-07-28
+**Last reviewed:** 2026-08-07
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -81,9 +81,14 @@ stable.
   - Phase 1 wired 2026-07-28: clearance routes (`close/reopen week`,
     `close/reopen season`) gated by personal-key-only auth + league_admin role.
     `role="admin"` accepted as backward-compatible alias. Static token does not
-    grant access to clearance routes.
-  - Remaining mutation routes (CRUD, schedule generation, pushback, scoresheet)
-    carry no auth. Wire incrementally per phase.
+    grant access to clearance or schedule mutation routes.
+  - Phase 2 wired 2026-08-07: schedule mutation routes (`generate`,
+    `pushback-apply`) gated by the same personal-key-only auth + league_admin
+    role. `pushback-preview` is intentionally unprotected (read-only semantics
+    despite POST method).
+  - Remaining unprotected mutation routes: CRUD (leagues, teams, players,
+    seasons, rules, skipped-weeks, bye-requests, roster, season activation),
+    match assignment, scoresheet save. Wire incrementally per phase.
   - For future online score entry, prefer rostered players assigned to the
     match over a generic scorekeeper role (deferred to MATCHES-Q002).
   - Browser sessions and JWTs are deferred until online score entry or a users

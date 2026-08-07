@@ -237,21 +237,27 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	}
 	if deps.ScheduleMgr != nil {
 		scheduleMgr := deps.ScheduleMgr
-		mux.HandleFunc("POST /api/matches/generate", func(w http.ResponseWriter, r *http.Request) {
-			generateSchedule(w, r, scheduleMgr)
-		})
+		mux.HandleFunc("POST /api/matches/generate",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				generateSchedule(w, r, scheduleMgr)
+			}),
+		)
 	}
 	if deps.PushbackMgr != nil {
 		pushbackMgr := deps.PushbackMgr
+		// pushback-preview is read-only despite using POST (body carries cutoff/shift params).
+		// It carries no side effects and is intentionally left unprotected.
 		mux.HandleFunc("POST /api/seasons/{id}/schedule/pushback-preview", func(w http.ResponseWriter, r *http.Request) {
 			pushbackPreview(w, r, pushbackMgr)
 		})
 	}
 	if deps.PushbackApplyMgr != nil {
 		pushbackApplyMgr := deps.PushbackApplyMgr
-		mux.HandleFunc("POST /api/seasons/{id}/schedule/pushback-apply", func(w http.ResponseWriter, r *http.Request) {
-			pushbackApply(w, r, pushbackApplyMgr)
-		})
+		mux.HandleFunc("POST /api/seasons/{id}/schedule/pushback-apply",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				pushbackApply(w, r, pushbackApplyMgr)
+			}),
+		)
 	}
 
 	// Lineup plans — pre-game slot assignments per team/week

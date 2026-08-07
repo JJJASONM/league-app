@@ -4,8 +4,8 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.5`
-**Last reviewed:** `2026-07-28`
+**Current version:** `0.6`
+**Last reviewed:** `2026-08-07`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
@@ -149,6 +149,39 @@ POST /api/seasons/{id}/weeks/{week}/close  Authorization: Bearer <token>
 - No login endpoint, browser sessions, or JWTs
 - No `system_admin`-gated user-management route protection (POST/GET /api/users
   remain gated by static admin token)
+
+## Users Auth Phase 2 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-08-07`
+
+### What Phase 2 added
+
+Protected two schedule mutation routes with the same `clearanceAuth` middleware
+chain introduced in Phase 1 (personal-key-only Bearer auth + league_admin role).
+No new middleware or infrastructure required.
+
+### Protected routes (Phase 2)
+
+| Route | Auth requirement |
+|-------|-----------------|
+| `POST /api/matches/generate` | personal key + league_admin role |
+| `POST /api/seasons/{id}/schedule/pushback-apply` | personal key + league_admin role |
+
+### Intentionally unprotected (Phase 2)
+
+`POST /api/seasons/{id}/schedule/pushback-preview` uses POST because it accepts
+a request body (cutoff week and shift amount), but it performs no state mutation.
+It is intentionally left unprotected so admins and tooling can preview the impact
+of a pushback without an API key.
+
+### What Phase 2 defers
+
+- No role protection on CRUD mutation routes (leagues, teams, players, seasons,
+  roster, rules, skipped-weeks, bye-requests, season activation, match assignment,
+  scoresheet save)
+- Static token (`LEAGUE_ADMIN_TOKEN`) continues as fallback for `handicap-apply`
+  only; no static-token path added to Phase 2 routes
 
 ## USERS-Q001 Discovery
 
