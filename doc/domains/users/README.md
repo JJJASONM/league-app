@@ -4,7 +4,7 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.6`
+**Current version:** `0.7`
 **Last reviewed:** `2026-08-07`
 
 Users are authenticated accounts with roles and permissions. They are separate
@@ -149,6 +149,38 @@ POST /api/seasons/{id}/weeks/{week}/close  Authorization: Bearer <token>
 - No login endpoint, browser sessions, or JWTs
 - No `system_admin`-gated user-management route protection (POST/GET /api/users
   remain gated by static admin token)
+
+## Users Auth Phase 3 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-08-07`
+
+### What Phase 3 added
+
+Protected four match mutation routes with the same `clearanceAuth` middleware
+chain from Phases 1 and 2 (personal-key-only Bearer auth + league_admin role).
+No new middleware or infrastructure required.
+
+### Protected routes (Phase 3)
+
+| Route | Auth requirement |
+|-------|-----------------|
+| `PATCH /api/matches/{id}/assign` | personal key + league_admin role |
+| `POST /api/matches/{id}/results` | personal key + league_admin role |
+| `DELETE /api/matches/{id}/results` | personal key + league_admin role |
+| `POST /api/matches/{id}/rounds` | personal key + league_admin role |
+
+### Intentionally unprotected (Phase 3)
+
+Read-only match routes carry no auth (policy: GET reads are public):
+`GET /api/matches`, `GET /api/matches/{id}`, `GET /api/matches/{id}/rounds`,
+`GET /api/standings`, `GET /api/player-stats`.
+
+### What Phase 3 defers
+
+- No role protection on remaining CRUD/setup mutation routes (leagues, teams,
+  players, seasons, rules, skipped-weeks, bye-requests, roster, season
+  activation, lineup plans, season setup, handicap apply)
 
 ## Users Auth Phase 2 Implementation
 

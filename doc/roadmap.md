@@ -86,9 +86,12 @@ stable.
     `pushback-apply`) gated by the same personal-key-only auth + league_admin
     role. `pushback-preview` is intentionally unprotected (read-only semantics
     despite POST method).
+  - Phase 3 wired 2026-08-07: match mutation routes (`assign`, `submit results`,
+    `clear results`, `save rounds`) gated by the same auth. GET match reads
+    remain unprotected.
   - Remaining unprotected mutation routes: CRUD (leagues, teams, players,
     seasons, rules, skipped-weeks, bye-requests, roster, season activation),
-    match assignment, scoresheet save. Wire incrementally per phase.
+    lineup plans, handicap apply. Wire incrementally per phase.
   - For future online score entry, prefer rostered players assigned to the
     match over a generic scorekeeper role (deferred to MATCHES-Q002).
   - Browser sessions and JWTs are deferred until online score entry or a users

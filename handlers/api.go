@@ -231,9 +231,11 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		mux.HandleFunc("GET /api/matches/{id}", func(w http.ResponseWriter, r *http.Request) {
 			getMatch(w, r, matchMgr)
 		})
-		mux.HandleFunc("PATCH /api/matches/{id}/assign", func(w http.ResponseWriter, r *http.Request) {
-			assignMatchTeams(w, r, matchMgr)
-		})
+		mux.HandleFunc("PATCH /api/matches/{id}/assign",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				assignMatchTeams(w, r, matchMgr)
+			}),
+		)
 	}
 	if deps.ScheduleMgr != nil {
 		scheduleMgr := deps.ScheduleMgr
@@ -346,18 +348,24 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	// Round results, standings, and stats — gated on RoundMgr.
 	if deps.RoundMgr != nil {
 		roundMgr := deps.RoundMgr
-		mux.HandleFunc("POST /api/matches/{id}/results", func(w http.ResponseWriter, r *http.Request) {
-			submitResults(w, r, roundMgr)
-		})
-		mux.HandleFunc("DELETE /api/matches/{id}/results", func(w http.ResponseWriter, r *http.Request) {
-			clearResults(w, r, roundMgr)
-		})
+		mux.HandleFunc("POST /api/matches/{id}/results",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				submitResults(w, r, roundMgr)
+			}),
+		)
+		mux.HandleFunc("DELETE /api/matches/{id}/results",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				clearResults(w, r, roundMgr)
+			}),
+		)
 		mux.HandleFunc("GET /api/matches/{id}/rounds", func(w http.ResponseWriter, r *http.Request) {
 			getRounds(w, r, roundMgr)
 		})
-		mux.HandleFunc("POST /api/matches/{id}/rounds", func(w http.ResponseWriter, r *http.Request) {
-			saveRounds(w, r, roundMgr, seasonMgr)
-		})
+		mux.HandleFunc("POST /api/matches/{id}/rounds",
+			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+				saveRounds(w, r, roundMgr, seasonMgr)
+			}),
+		)
 		mux.HandleFunc("GET /api/standings", func(w http.ResponseWriter, r *http.Request) {
 			getStandings(w, r, roundMgr, seasonMgr)
 		})
