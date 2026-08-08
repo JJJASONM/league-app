@@ -38,12 +38,12 @@ These items should stay small enough to review and ship independently.
   - Keep backend/domain/store/adapter boundaries explicit and purpose-built for
     any new work added.
 
-- Finish incremental route-level auth for current admin mutations.
+- Incremental route-level auth for admin mutations is complete.
   - Phases 1-5 protect clearance, schedule mutation, match mutation, season
     setup mutation, and global league/player/team CRUD routes with
-    personal-key role auth.
-  - Remaining unprotected mutation: `POST /api/backup`, treated separately as
-    a system-admin operation.
+    personal-key role auth (league_admin, admin, system_admin).
+  - Phase 6 protects `POST /api/backup` with a stricter system-admin-only
+    check (system_admin, admin; league_admin rejected).
   - Keep `handicap-apply` static-token fallback unchanged until a focused
     attribution/auth cleanup phase.
 
@@ -119,11 +119,15 @@ stable.
     lineup plans) gated by the same auth. GET reads remain unprotected.
   - Phase 5 wired 2026-08-08: global league, player, and team CRUD mutation
     routes (9 routes) gated by the same auth. GET reads remain unprotected.
-  - Remaining unprotected mutation routes after Phase 5: `POST /api/backup`
-    only, deferred to a separate system-admin phase rather than treated as
-    league-admin setup work. `handicap-apply` retains its dual-tier
-    `requireApplyAuth` (personal key + static token fallback) by design; no
-    change planned until a focused attribution/auth cleanup phase.
+  - Phase 6 wired 2026-08-08: `POST /api/backup` gated by personal-key-only
+    auth with a stricter role check (`system_admin`, `admin`; `league_admin`
+    rejected). Distinct from the league_admin-allowing check used in Phases
+    1-5 because backup is a system-level operation, not league-admin setup
+    work.
+  - No unprotected admin mutation routes remain from this rollout.
+    `handicap-apply` retains its dual-tier `requireApplyAuth` (personal key +
+    static token fallback) by design; no change planned until a focused
+    attribution/auth cleanup phase.
   - For future online score entry, prefer rostered players assigned to the
     match over a generic scorekeeper role (deferred to MATCHES-Q002).
   - Browser sessions and JWTs are deferred until online score entry or a users

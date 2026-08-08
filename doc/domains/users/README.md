@@ -4,7 +4,7 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.9`
+**Current version:** `0.10`
 **Last reviewed:** `2026-08-08`
 
 Users are authenticated accounts with roles and permissions. They are separate
@@ -149,6 +149,61 @@ POST /api/seasons/{id}/weeks/{week}/close  Authorization: Bearer <token>
 - No login endpoint, browser sessions, or JWTs
 - No `system_admin`-gated user-management route protection (POST/GET /api/users
   remain gated by static admin token)
+
+## Users Auth Phase 6 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-08-08`
+
+### What Phase 6 added
+
+Protected `POST /api/backup` with a stricter role check than Phases 1-5.
+Backup is a system-level operation, not league-admin setup work, so it uses
+a distinct middleware pair rather than reusing `clearanceAuth`:
+
+- `requireSystemAdminRole` -- allows only `system_admin` and the legacy
+  `admin` alias; rejects `league_admin` and `score_keeper`
+- `systemAdminAuth` -- composes `requirePersonalKeyAuth` with
+  `requireSystemAdminRole`; returns the handler unmodified when the
+  resolver is nil, matching the nil-resolver compatibility behavior of
+  `clearanceAuth` from Phases 1-5
+
+### Protected route (Phase 6)
+
+| Route | Auth requirement |
+|-------|-----------------|
+| `POST /api/backup` | personal key + system_admin role (admin alias accepted; league_admin rejected) |
+
+### Key behavioral difference from Phases 1-5
+
+Every route protected in Phases 1-5 allows `league_admin`, `admin`, and
+`system_admin`. Backup allows only `system_admin` and `admin` --
+`league_admin` receives 403. This is intentional: backup is treated as a
+system-admin operation, not an operational league-admin action.
+
+### Discovery findings (script/deploy dependency check)
+
+Before implementing, confirmed no script or frontend code depends on
+`POST /api/backup` being unauthenticated:
+
+- `scripts/deploy/staging-common.ps1` (`Backup-StagingDatabase`) copies the
+  SQLite file directly (`Copy-Item`) and never calls the HTTP API.
+- No file under `web/` references `/api/backup`.
+- `QUICKSTART.md` references a "Backup DB" action "in the app," but no such
+  UI action exists in the current frontend. This is stale documentation,
+  not a live dependency. Deferred as a documentation cleanup item, out of
+  scope for this auth phase.
+
+### What Phase 6 defers
+
+- `QUICKSTART.md` backup UI reference cleanup (stale docs, unrelated to
+  auth behavior)
+- No change to `handicap-apply`, `POST/GET /api/users`, or GET read policy
+
+With Phase 6 complete, all mutation routes identified in the incremental
+route-level auth rollout are protected. `handicap-apply` retains its
+dual-tier `requireApplyAuth` by design (see Phase C1 above); `POST/GET
+/api/users` retain `requireAdminToken` by design.
 
 ## Users Auth Phase 5 Implementation
 

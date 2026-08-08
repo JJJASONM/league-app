@@ -449,15 +449,18 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		)
 	}
 
-	// Backup
-	mux.HandleFunc("POST /api/backup", func(w http.ResponseWriter, r *http.Request) {
-		path, err := db.Backup(dataDir)
-		if err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		jsonOK(w, map[string]string{"path": path})
-	})
+	// Backup -- system-admin only (Phase 6). league_admin is rejected here,
+	// unlike the clearanceAuth-wrapped routes above.
+	mux.HandleFunc("POST /api/backup",
+		systemAdminAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			path, err := db.Backup(dataDir)
+			if err != nil {
+				jsonError(w, err.Error(), 500)
+				return
+			}
+			jsonOK(w, map[string]string{"path": path})
+		}),
+	)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -650,6 +653,38 @@ func clearanceAuth(resolver ApplyAuthResolver, h http.HandlerFunc) http.HandlerF
 		return h
 	}
 	return requirePersonalKeyAuth(resolver, requireLeagueAdminRole(h))
+}
+
+// requireSystemAdminRole checks that the user in context has an allowed role
+// for system-level operations. Allowed: "system_admin", "admin" (legacy
+// system-admin-compatible alias). Unlike requireLeagueAdminRole, "league_admin"
+// is not allowed here. Returns 403 when no user is in context or when the role
+// is not in the allowed set.
+func requireSystemAdminRole(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := clearanceUserFromContext(r.Context())
+		if user == nil {
+			jsonError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		switch user.Role {
+		case "system_admin", "admin":
+			next(w, r)
+		default:
+			jsonError(w, "forbidden", http.StatusForbidden)
+		}
+	}
+}
+
+// systemAdminAuth wraps h with personal-key auth and requireSystemAdminRole
+// when resolver is non-nil. When resolver is nil, h is returned unmodified,
+// matching the nil-resolver compatibility behavior of clearanceAuth so
+// existing test setups without ApplyAuth remain unaffected.
+func systemAdminAuth(resolver ApplyAuthResolver, h http.HandlerFunc) http.HandlerFunc {
+	if resolver == nil {
+		return h
+	}
+	return requirePersonalKeyAuth(resolver, requireSystemAdminRole(h))
 }
 
 // ─── Leagues ─────────────────────────────────────────────────────────────────
