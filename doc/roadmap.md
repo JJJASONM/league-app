@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-07
+**Last reviewed:** 2026-08-08
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -38,6 +38,14 @@ These items should stay small enough to review and ship independently.
   - Keep backend/domain/store/adapter boundaries explicit and purpose-built for
     any new work added.
 
+- Finish incremental route-level auth for current admin mutations.
+  - Phases 1-4 protect clearance, schedule mutation, match mutation, and season
+    setup mutation routes with personal-key role auth.
+  - Next auth slice: protect global league, player, and team CRUD routes.
+  - Treat `POST /api/backup` separately as a system-admin operation.
+  - Keep `handicap-apply` static-token fallback unchanged until a focused
+    attribution/auth cleanup phase.
+
 - Stabilize current official-results workflow.
   - Keep Close Week, Reopen, warning acknowledgment, and advance
     preview/result behavior correct.
@@ -59,6 +67,22 @@ stable.
   - Reduce monolithic handler/shell ownership further.
   - Keep new work inside domain boundaries rather than adding more temporary
     logic to shared files.
+  - Architecture review on 2026-08-08 found the domain migration is healthy, but
+    `handlers/api.go` is now the main ownership bottleneck. Split route
+    registration by domain/context while keeping the existing public
+    `handlers.Register` entry point and URL surface.
+
+- Clarify ownership for multi-domain workflows.
+  - Start with score-save eligibility (`RosterEligible` plus `SaveRounds`) and
+    season close (`weeks` plus `standings` plus close policy).
+  - Prefer named workflow/application ownership only where a use case crosses
+    domains. Do not add a generic workflow layer for simple CRUD.
+
+- Run a small operations hardening pass.
+  - Review SQLite backup/WAL safety before relying on backup copies for
+    rollback.
+  - Add a dedicated `/healthz` endpoint and basic request logging/request IDs.
+  - Keep this focused; do not start a broad app-server rewrite.
 
 - Keep roadmap and domain documentation aligned with accepted decisions.
   - Promote useful TODO inbox items into the relevant roadmap or domain README.
@@ -92,8 +116,9 @@ stable.
   - Phase 4 wired 2026-08-07: season setup mutation routes (19 routes: season
     CRUD, activate, rules, skipped-weeks, bye-requests, season teams, roster,
     lineup plans) gated by the same auth. GET reads remain unprotected.
-  - Remaining unprotected mutation routes: CRUD (leagues, teams, players) and
-    `POST /api/backup`. Wire incrementally per phase.
+  - Remaining unprotected mutation routes after Phase 4: CRUD (leagues, teams,
+    players) and `POST /api/backup`. Wire incrementally per phase. Treat backup
+    as system-admin-only rather than league-admin setup work.
   - For future online score entry, prefer rostered players assigned to the
     match over a generic scorekeeper role (deferred to MATCHES-Q002).
   - Browser sessions and JWTs are deferred until online score entry or a users
@@ -109,6 +134,13 @@ stable.
 - Season setup polish.
   - Explore default lineup setup during season creation or immediately after
     season creation, without making Close Week depend on future lineups.
+
+- Architecture review follow-up.
+  - Defer `models/models.go` decomposition until a touched workflow needs
+    clearer API/read-model boundaries.
+  - Leave the frontend architecture alone except for opportunistic component
+    splits. Do not add an npm build, framework, or global state library just to
+    modernize.
 
 ## Later
 
@@ -161,6 +193,9 @@ admin workflows are stable.
   - Continue researching the longer-term production database direction while
     keeping SQLite supported for local/dev/test.
   - Reserve PostgreSQL adapter work until an explicit data-access phase calls
+    for it.
+  - Longer-term startup/data-access cleanup: move away from process-global
+    `db.DB` toward an owned DB handle when a focused persistence phase calls
     for it.
 
 - Historical import tooling.
