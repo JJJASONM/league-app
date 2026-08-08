@@ -4,8 +4,8 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.8`
-**Last reviewed:** `2026-08-07`
+**Current version:** `0.9`
+**Last reviewed:** `2026-08-08`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
@@ -149,6 +149,52 @@ POST /api/seasons/{id}/weeks/{week}/close  Authorization: Bearer <token>
 - No login endpoint, browser sessions, or JWTs
 - No `system_admin`-gated user-management route protection (POST/GET /api/users
   remain gated by static admin token)
+
+## Users Auth Phase 5 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-08-08`
+
+### What Phase 5 added
+
+Protected 9 global CRUD mutation routes (leagues, players, teams) with the
+same `clearanceAuth` middleware chain from Phases 1 through 4 (personal-key-only
+Bearer auth + league_admin role). No new middleware or infrastructure required.
+
+### Protected routes (Phase 5)
+
+| Route | Auth requirement |
+|-------|-----------------|
+| `POST /api/leagues` | personal key + league_admin role |
+| `PUT /api/leagues/{id}` | personal key + league_admin role |
+| `DELETE /api/leagues/{id}` | personal key + league_admin role |
+| `POST /api/players` | personal key + league_admin role |
+| `PUT /api/players/{id}` | personal key + league_admin role |
+| `DELETE /api/players/{id}` | personal key + league_admin role |
+| `POST /api/teams` | personal key + league_admin role |
+| `PUT /api/teams/{id}` | personal key + league_admin role |
+| `DELETE /api/teams/{id}` | personal key + league_admin role |
+
+### Intentionally unprotected (Phase 5)
+
+- `GET /api/leagues`, `GET /api/leagues/{id}`, `GET /api/players`,
+  `GET /api/players/{id}`, `GET /api/teams`, `GET /api/teams/{id}` -- GET reads
+  are public
+- `POST /api/backup` -- deferred to a separate system-admin phase
+- `POST /api/seasons/{id}/handicap-apply` -- retains its existing dual-tier
+  `requireApplyAuth` (personal key + static token fallback); no change
+- `POST /api/users`, `GET /api/users` -- retain `requireAdminToken`; no change
+
+### What Phase 5 defers
+
+- `POST /api/backup` role protection (system-admin-only phase, not yet scoped)
+- Any change to the `handicap-apply` static-token fallback (deferred to a
+  focused attribution/auth cleanup phase per the 2026-08-08 architecture
+  review roadmap alignment)
+
+With Phase 5 complete, all admin mutation routes covered by the incremental
+route-level auth rollout are protected except `POST /api/backup` and the
+`handicap-apply` static-token bridge.
 
 ## Users Auth Phase 4 Implementation
 

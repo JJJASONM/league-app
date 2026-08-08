@@ -39,10 +39,11 @@ These items should stay small enough to review and ship independently.
     any new work added.
 
 - Finish incremental route-level auth for current admin mutations.
-  - Phases 1-4 protect clearance, schedule mutation, match mutation, and season
-    setup mutation routes with personal-key role auth.
-  - Next auth slice: protect global league, player, and team CRUD routes.
-  - Treat `POST /api/backup` separately as a system-admin operation.
+  - Phases 1-5 protect clearance, schedule mutation, match mutation, season
+    setup mutation, and global league/player/team CRUD routes with
+    personal-key role auth.
+  - Remaining unprotected mutation: `POST /api/backup`, treated separately as
+    a system-admin operation.
   - Keep `handicap-apply` static-token fallback unchanged until a focused
     attribution/auth cleanup phase.
 
@@ -116,9 +117,13 @@ stable.
   - Phase 4 wired 2026-08-07: season setup mutation routes (19 routes: season
     CRUD, activate, rules, skipped-weeks, bye-requests, season teams, roster,
     lineup plans) gated by the same auth. GET reads remain unprotected.
-  - Remaining unprotected mutation routes after Phase 4: CRUD (leagues, teams,
-    players) and `POST /api/backup`. Wire incrementally per phase. Treat backup
-    as system-admin-only rather than league-admin setup work.
+  - Phase 5 wired 2026-08-08: global league, player, and team CRUD mutation
+    routes (9 routes) gated by the same auth. GET reads remain unprotected.
+  - Remaining unprotected mutation routes after Phase 5: `POST /api/backup`
+    only, deferred to a separate system-admin phase rather than treated as
+    league-admin setup work. `handicap-apply` retains its dual-tier
+    `requireApplyAuth` (personal key + static token fallback) by design; no
+    change planned until a focused attribution/auth cleanup phase.
   - For future online score entry, prefer rostered players assigned to the
     match over a generic scorekeeper role (deferred to MATCHES-Q002).
   - Browser sessions and JWTs are deferred until online score entry or a users
