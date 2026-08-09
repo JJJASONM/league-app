@@ -83,130 +83,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	registerPlayerRoutes(mux, deps.PlayerMgr, deps.ApplyAuth)
 	registerTeamRoutes(mux, deps.TeamMgr, deps.ApplyAuth)
 
-	// Seasons — scoped to ?league_id=
+	// Season CRUD, activation, rules, skipped-weeks, bye-requests, and season
+	// team/roster route registration live in api_season_setup_routes.go.
+	// seasonMgr is also used later by the round-results block and by
+	// registerSeasonCloseRoutes below.
 	seasonMgr := deps.SeasonMgr
-	mux.HandleFunc("GET /api/seasons", func(w http.ResponseWriter, r *http.Request) {
-		listSeasons(w, r, seasonMgr)
-	})
-	mux.HandleFunc("POST /api/seasons",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			createSeason(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("GET /api/seasons/{id}", func(w http.ResponseWriter, r *http.Request) {
-		getSeason(w, r, seasonMgr)
-	})
-	mux.HandleFunc("PUT /api/seasons/{id}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			updateSeason(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/seasons/{id}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			deleteSeason(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("POST /api/seasons/{id}/activate",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			activateSeason(w, r, seasonMgr)
-		}),
-	)
-
-	// Season sub-resources
-	ruleMgr := deps.RuleMgr
-	mux.HandleFunc("GET /api/seasons/{id}/rules", func(w http.ResponseWriter, r *http.Request) {
-		listSeasonRules(w, r, ruleMgr)
-	})
-	mux.HandleFunc("POST /api/seasons/{id}/rules",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			createSeasonRule(w, r, ruleMgr)
-		}),
-	)
-	mux.HandleFunc("PUT /api/seasons/{id}/rules/{rid}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			updateSeasonRule(w, r, ruleMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/seasons/{id}/rules/{rid}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			deleteSeasonRule(w, r, ruleMgr)
-		}),
-	)
-
-	mux.HandleFunc("GET /api/seasons/{id}/skipped-weeks", func(w http.ResponseWriter, r *http.Request) {
-		listSkippedWeeks(w, r, seasonMgr)
-	})
-	mux.HandleFunc("POST /api/seasons/{id}/skipped-weeks",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			createSkippedWeek(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/seasons/{id}/skipped-weeks/{sid}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			deleteSkippedWeek(w, r, seasonMgr)
-		}),
-	)
-
-	mux.HandleFunc("GET /api/seasons/{id}/bye-requests", func(w http.ResponseWriter, r *http.Request) {
-		listByeRequests(w, r, seasonMgr)
-	})
-	mux.HandleFunc("POST /api/seasons/{id}/bye-requests",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			createByeRequest(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("PUT /api/seasons/{id}/bye-requests/{bid}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			updateByeRequest(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/seasons/{id}/bye-requests/{bid}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			deleteByeRequest(w, r, seasonMgr)
-		}),
-	)
-
-	// Season teams and rosters
-	mux.HandleFunc("GET /api/seasons/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
-		listSeasonTeams(w, r, seasonMgr)
-	})
-	mux.HandleFunc("POST /api/seasons/{id}/teams",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			addSeasonTeam(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("GET /api/seasons/{id}/previous", func(w http.ResponseWriter, r *http.Request) {
-		getPreviousSeasonTeams(w, r, seasonMgr)
-	})
-	mux.HandleFunc("PUT /api/seasons/{id}/teams/{tid}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			updateSeasonTeam(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			removeSeasonTeam(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("GET /api/seasons/{id}/teams/{tid}/roster", func(w http.ResponseWriter, r *http.Request) {
-		listSeasonRoster(w, r, seasonMgr)
-	})
-	mux.HandleFunc("POST /api/seasons/{id}/teams/{tid}/roster",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			addRosterPlayer(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			removeRosterPlayer(w, r, seasonMgr)
-		}),
-	)
-	mux.HandleFunc("GET /api/seasons/{id}/players/available", func(w http.ResponseWriter, r *http.Request) {
-		listAvailablePlayers(w, r, seasonMgr)
-	})
-	mux.HandleFunc("GET /api/seasons/{id}/checklist", func(w http.ResponseWriter, r *http.Request) {
-		getSeasonChecklist(w, r, seasonMgr)
-	})
+	registerSeasonSetupRoutes(mux, seasonMgr, deps.RuleMgr, deps.ApplyAuth)
 
 	// Matches — scoped to ?season_id= (season implies league)
 	if deps.MatchMgr != nil {
@@ -364,23 +246,11 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		})
 	}
 
-	// Season close — requires both WeekMgr (ListWeeks) and RoundMgr (GetStandings).
+	// Season close, close-preview, and reopen route registration live in
+	// api_season_close_routes.go. Requires both WeekMgr (ListWeeks) and
+	// RoundMgr (GetStandings).
 	if deps.WeekMgr != nil && deps.RoundMgr != nil {
-		weekMgrClose := deps.WeekMgr
-		roundMgrClose := deps.RoundMgr
-		mux.HandleFunc("GET /api/seasons/{id}/close-preview", func(w http.ResponseWriter, r *http.Request) {
-			closeSeasonPreviewHandler(w, r, seasonMgr, weekMgrClose, roundMgrClose)
-		})
-		mux.HandleFunc("POST /api/seasons/{id}/close",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				closeSeasonHandler(w, r, seasonMgr, weekMgrClose, roundMgrClose)
-			}),
-		)
-		mux.HandleFunc("POST /api/seasons/{id}/reopen",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				reopenSeasonHandler(w, r, seasonMgr)
-			}),
-		)
+		registerSeasonCloseRoutes(mux, seasonMgr, deps.WeekMgr, deps.RoundMgr, deps.ApplyAuth)
 	}
 
 	// Backup -- system-admin only (Phase 6). league_admin is rejected here,
