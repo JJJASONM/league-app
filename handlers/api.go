@@ -105,82 +105,31 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 			}),
 		)
 	}
+	// Schedule generation and pushback route registration live in
+	// api_schedule_routes.go.
 	if deps.ScheduleMgr != nil {
-		scheduleMgr := deps.ScheduleMgr
-		mux.HandleFunc("POST /api/matches/generate",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				generateSchedule(w, r, scheduleMgr)
-			}),
-		)
+		registerScheduleGenerateRoute(mux, deps.ScheduleMgr, deps.ApplyAuth)
 	}
 	if deps.PushbackMgr != nil {
-		pushbackMgr := deps.PushbackMgr
-		// pushback-preview is read-only despite using POST (body carries cutoff/shift params).
-		// It carries no side effects and is intentionally left unprotected.
-		mux.HandleFunc("POST /api/seasons/{id}/schedule/pushback-preview", func(w http.ResponseWriter, r *http.Request) {
-			pushbackPreview(w, r, pushbackMgr)
-		})
+		registerPushbackPreviewRoute(mux, deps.PushbackMgr)
 	}
 	if deps.PushbackApplyMgr != nil {
-		pushbackApplyMgr := deps.PushbackApplyMgr
-		mux.HandleFunc("POST /api/seasons/{id}/schedule/pushback-apply",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				pushbackApply(w, r, pushbackApplyMgr)
-			}),
-		)
+		registerPushbackApplyRoute(mux, deps.PushbackApplyMgr, deps.ApplyAuth)
 	}
 
-	// Lineup plans — pre-game slot assignments per team/week
+	// Lineup plan route registration lives in api_lineup_routes.go.
 	if deps.LineupMgr != nil {
-		lineupMgr := deps.LineupMgr
-		mux.HandleFunc("GET /api/lineup-plans", func(w http.ResponseWriter, r *http.Request) {
-			listLineupPlans(w, r, lineupMgr)
-		})
-		mux.HandleFunc("POST /api/lineup-plans",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				saveTeamLineup(w, r, lineupMgr)
-			}),
-		)
-		mux.HandleFunc("DELETE /api/lineup-plans/{id}",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				deleteLineupPlan(w, r, lineupMgr)
-			}),
-		)
+		registerLineupRoutes(mux, deps.LineupMgr, deps.ApplyAuth)
 	}
 
 	// Rule definitions — developer-owned, served by the backend
 	mux.HandleFunc("GET /api/rules/definitions", listRuleDefinitions)
 
-	// Week workflow -- Close Week gate
+	// Week workflow route registration lives in api_week_routes.go.
 	// Routes are registered only when a WeekManager is wired in (always in production,
 	// conditionally in tests that don't exercise week routes).
 	if deps.WeekMgr != nil {
-		weekMgr := deps.WeekMgr
-		mux.HandleFunc("GET /api/seasons/{id}/weeks", func(w http.ResponseWriter, r *http.Request) {
-			listWeeks(w, r, weekMgr)
-		})
-		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/validate", func(w http.ResponseWriter, r *http.Request) {
-			validateWeekHandler(w, r, weekMgr)
-		})
-		mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				closeWeekHandler(w, r, weekMgr)
-			}),
-		)
-		mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				reopenWeekHandler(w, r, weekMgr)
-			}),
-		)
-		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/acknowledgments", func(w http.ResponseWriter, r *http.Request) {
-			getWeekAcknowledgments(w, r, weekMgr)
-		})
-		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/advance-preview", func(w http.ResponseWriter, r *http.Request) {
-			getAdvancePreview(w, r, weekMgr)
-		})
-		mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/recap", func(w http.ResponseWriter, r *http.Request) {
-			recapWeekHandler(w, r, weekMgr)
-		})
+		registerWeekRoutes(mux, deps.WeekMgr, deps.ApplyAuth)
 	}
 	hcSvc := deps.HandicapSvc
 	mux.HandleFunc("GET /api/seasons/{id}/handicap-recommendations", func(w http.ResponseWriter, r *http.Request) {
