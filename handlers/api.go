@@ -77,77 +77,11 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	if v := reflect.ValueOf(deps.TeamMgr); v.Kind() == reflect.Ptr && v.IsNil() {
 		panic("handlers.Register: deps.TeamMgr must not be a typed nil")
 	}
-	// Leagues
-	leagueMgr := deps.LeagueMgr
-	mux.HandleFunc("GET /api/leagues", func(w http.ResponseWriter, r *http.Request) {
-		listLeagues(w, r, leagueMgr)
-	})
-	mux.HandleFunc("POST /api/leagues",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			createLeague(w, r, leagueMgr)
-		}),
-	)
-	mux.HandleFunc("GET /api/leagues/{id}", func(w http.ResponseWriter, r *http.Request) {
-		getLeague(w, r, leagueMgr)
-	})
-	mux.HandleFunc("PUT /api/leagues/{id}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			updateLeague(w, r, leagueMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/leagues/{id}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			deleteLeague(w, r, leagueMgr)
-		}),
-	)
-
-	// Players — scoped to ?league_id=
-	playerMgr := deps.PlayerMgr
-	mux.HandleFunc("GET /api/players", func(w http.ResponseWriter, r *http.Request) {
-		listPlayers(w, r, playerMgr)
-	})
-	mux.HandleFunc("POST /api/players",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			createPlayer(w, r, playerMgr)
-		}),
-	)
-	mux.HandleFunc("GET /api/players/{id}", func(w http.ResponseWriter, r *http.Request) {
-		getPlayer(w, r, playerMgr)
-	})
-	mux.HandleFunc("PUT /api/players/{id}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			updatePlayer(w, r, playerMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/players/{id}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			deletePlayer(w, r, playerMgr)
-		}),
-	)
-
-	// Teams — scoped to ?league_id=
-	teamMgr := deps.TeamMgr
-	mux.HandleFunc("GET /api/teams", func(w http.ResponseWriter, r *http.Request) {
-		listTeams(w, r, teamMgr)
-	})
-	mux.HandleFunc("POST /api/teams",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			createTeam(w, r, teamMgr)
-		}),
-	)
-	mux.HandleFunc("GET /api/teams/{id}", func(w http.ResponseWriter, r *http.Request) {
-		getTeam(w, r, teamMgr)
-	})
-	mux.HandleFunc("PUT /api/teams/{id}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			updateTeam(w, r, teamMgr)
-		}),
-	)
-	mux.HandleFunc("DELETE /api/teams/{id}",
-		clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-			deleteTeam(w, r, teamMgr)
-		}),
-	)
+	// Leagues, players, and teams route registration live in
+	// api_leagues_routes.go, api_players_routes.go, and api_teams_routes.go.
+	registerLeagueRoutes(mux, deps.LeagueMgr, deps.ApplyAuth)
+	registerPlayerRoutes(mux, deps.PlayerMgr, deps.ApplyAuth)
+	registerTeamRoutes(mux, deps.TeamMgr, deps.ApplyAuth)
 
 	// Seasons — scoped to ?league_id=
 	seasonMgr := deps.SeasonMgr
