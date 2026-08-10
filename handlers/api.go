@@ -90,20 +90,10 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	seasonMgr := deps.SeasonMgr
 	registerSeasonSetupRoutes(mux, seasonMgr, deps.RuleMgr, deps.ApplyAuth)
 
-	// Matches — scoped to ?season_id= (season implies league)
+	// Match read and assignment route registration lives in api_match_routes.go.
+	// Scoped to ?season_id= (season implies league).
 	if deps.MatchMgr != nil {
-		matchMgr := deps.MatchMgr
-		mux.HandleFunc("GET /api/matches", func(w http.ResponseWriter, r *http.Request) {
-			listMatches(w, r, matchMgr)
-		})
-		mux.HandleFunc("GET /api/matches/{id}", func(w http.ResponseWriter, r *http.Request) {
-			getMatch(w, r, matchMgr)
-		})
-		mux.HandleFunc("PATCH /api/matches/{id}/assign",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				assignMatchTeams(w, r, matchMgr)
-			}),
-		)
+		registerMatchRoutes(mux, deps.MatchMgr, deps.ApplyAuth)
 	}
 	// Schedule generation and pushback route registration live in
 	// api_schedule_routes.go.
@@ -166,33 +156,10 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		)
 	}
 
-	// Round results, standings, and stats — gated on RoundMgr.
+	// Match results, rounds, standings, and player-stats route registration
+	// live in api_match_results_routes.go. Gated on RoundMgr.
 	if deps.RoundMgr != nil {
-		roundMgr := deps.RoundMgr
-		mux.HandleFunc("POST /api/matches/{id}/results",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				submitResults(w, r, roundMgr)
-			}),
-		)
-		mux.HandleFunc("DELETE /api/matches/{id}/results",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				clearResults(w, r, roundMgr)
-			}),
-		)
-		mux.HandleFunc("GET /api/matches/{id}/rounds", func(w http.ResponseWriter, r *http.Request) {
-			getRounds(w, r, roundMgr)
-		})
-		mux.HandleFunc("POST /api/matches/{id}/rounds",
-			clearanceAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
-				saveRounds(w, r, roundMgr, seasonMgr)
-			}),
-		)
-		mux.HandleFunc("GET /api/standings", func(w http.ResponseWriter, r *http.Request) {
-			getStandings(w, r, roundMgr, seasonMgr)
-		})
-		mux.HandleFunc("GET /api/player-stats", func(w http.ResponseWriter, r *http.Request) {
-			getPlayerStats(w, r, roundMgr)
-		})
+		registerMatchResultsRoutes(mux, deps.RoundMgr, seasonMgr, deps.ApplyAuth)
 	}
 
 	// Season close, close-preview, and reopen route registration live in
