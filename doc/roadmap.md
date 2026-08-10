@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-08
+**Last reviewed:** 2026-08-09
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -68,10 +68,11 @@ stable.
   - Reduce monolithic handler/shell ownership further.
   - Keep new work inside domain boundaries rather than adding more temporary
     logic to shared files.
-  - Architecture review on 2026-08-08 found the domain migration is healthy, but
-    `handlers/api.go` is now the main ownership bottleneck. Split route
-    registration by domain/context while keeping the existing public
-    `handlers.Register` entry point and URL surface.
+  - Handler route registration was split by domain/context in Phases A-D
+    (2026-08-08 to 2026-08-09); see Completed / Largely Completed below.
+    Handler function implementations still live in `handlers/api.go` --
+    remaining ownership-reduction work is about handler logic, not route
+    registration.
 
 - Clarify ownership for multi-domain workflows.
   - Start with score-save eligibility (`RosterEligible` plus `SaveRounds`) and
@@ -233,6 +234,26 @@ follow-up.
     season to Historical state (active=0, activated_at preserved); `SEASON_NOT_CLOSED`
     (409) when season is not closed; Reopen Season button in management panel.
   - Paid/unpaid player status remains outside the app.
+
+- Handler route split (Phases A-D, 2026-08-08 to 2026-08-09).
+  - Route registration for every sizeable shared route family was extracted
+    out of `handlers/api.go` into focused `handlers/api_*_routes.go` files,
+    while keeping `handlers.Register` as the sole public entry point and
+    preserving every URL, auth wrapper, nil-manager guard, and handler call.
+  - Phase A: global league, player, and team CRUD route registration.
+  - Phase B: season setup (CRUD, activation, rules, skipped-weeks,
+    bye-requests, season teams/roster) and season close/close-preview/reopen
+    route registration.
+  - Phase C: schedule generation, schedule pushback preview/apply, lineup
+    plan, and week-workflow route registration.
+  - Phase D: match read/assignment, match results, rounds, standings, and
+    player-stats route registration.
+  - Remaining intentionally inline in `handlers/api.go`: small special-case
+    routes with distinct auth wiring (rule definitions, handicap
+    recommendations/apply, user management, backup), and all handler
+    function implementations. This closure covers route registration only
+    -- handler logic ownership is unchanged and remains a Next-section
+    concern.
 
 - Backend scoresheet validation foundation.
 - Scoresheet save/review guardrails.
