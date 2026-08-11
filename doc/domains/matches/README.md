@@ -1339,8 +1339,15 @@ saveRounds handler
 
 - `ValidateWeek` data-loading signature change (store-interface refactor, deferred)
 - The `seasons.RosterEligible` pre-TX guard in `saveRounds` handler (intentional;
-  see B3 decision Q-B3-3)
+  see "RosterEligible ownership decision" below, not B3 decision Q-B3-3, which
+  covers `getStandings`' active-season fallback instead)
 - Route or JSON shape changes
+
+### RosterEligible ownership decision (2026-08-10)
+
+RosterEligible remains a handler-level cross-domain pre-TX guard for now; no
+workflow layer is introduced. This records the decision for the roadmap's
+"Clarify ownership for multi-domain workflows" item.
 
 ## Phase A — Schedule Generation Extraction (implemented 2026-07-03)
 

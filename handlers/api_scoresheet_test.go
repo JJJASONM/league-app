@@ -711,3 +711,54 @@ func TestSaveRounds_BlockedByRosterGate(t *testing.T) {
 		t.Fatalf("roster gate must return 422 when home team has < 3 players, got %d: %s", resp.StatusCode, b)
 	}
 }
+
+// TestSaveRounds_WeekClosedAndRosterShort_RosterEligibleWinsPrecedence pins the
+// current handler precedence when both a closed week and an insufficient
+// roster are true at the same time. The saveRounds handler checks
+// RosterEligible before calling matches.RoundService.SaveRounds, so it
+// returns 422 before ever reaching SaveRounds' own week-closed guard (which
+// would otherwise return 409). This is not a claim that 422 is the
+// permanently correct outcome for this combined case -- it documents the
+// current intentional handler-level ordering (see
+// doc/domains/matches/README.md "RosterEligible ownership decision") so a
+// future change to this precedence is a deliberate decision, not a silent
+// regression.
+func TestSaveRounds_WeekClosedAndRosterShort_RosterEligibleWinsPrecedence(t *testing.T) {
+	f := weekTestSeed(t)
+
+	// Mark the season as managed so the roster gate applies.
+	db.DB.Exec(`UPDATE seasons SET teams_managed=1 WHERE id=?`, f.sid)
+
+	// Also close the week -- SaveRounds' own guard would return 409 for this,
+	// but only if the handler ever reached SaveRounds.
+	db.DB.Exec(`UPDATE matches SET week_closed=1 WHERE id=?`, f.matchID)
+
+	// Add team records but only 1 player on the home team roster (< 3 required).
+	db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team A')`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Team B')`, f.sid, f.teamB)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	// Away team has 3 players -- only home is short.
+	rP2, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('B2','P',?,3.0)`, f.teamB)
+	rP3, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('B3','P',?,3.0)`, f.teamB)
+	p2, _ := rP2.LastInsertId()
+	p3, _ := rP3.LastInsertId()
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, f.playerB)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, p2)
+	db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, p3)
+
+	body := fmt.Sprintf(`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`,
+		f.playerA, f.playerB)
+	req, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 422 (RosterEligible checked before SaveRounds' week-closed guard is reached), got %d: %s", resp.StatusCode, b)
+	}
+}
