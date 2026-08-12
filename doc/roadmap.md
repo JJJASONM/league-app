@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-09
+**Last reviewed:** 2026-08-12
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -73,12 +73,6 @@ stable.
     Handler function implementations still live in `handlers/api.go` --
     remaining ownership-reduction work is about handler logic, not route
     registration.
-
-- Clarify ownership for multi-domain workflows.
-  - Start with score-save eligibility (`RosterEligible` plus `SaveRounds`) and
-    season close (`weeks` plus `standings` plus close policy).
-  - Prefer named workflow/application ownership only where a use case crosses
-    domains. Do not add a generic workflow layer for simple CRUD.
 
 - Run a small operations hardening pass.
   - Review SQLite backup/WAL safety before relying on backup copies for
@@ -254,6 +248,26 @@ follow-up.
     function implementations. This closure covers route registration only
     -- handler logic ownership is unchanged and remains a Next-section
     concern.
+
+- Workflow ownership clarification -- score-save and season close
+  (2026-08-10 to 2026-08-12).
+  - Score-save eligibility: `RosterEligible` remains a handler-level
+    cross-domain pre-TX guard; `SaveRounds` stays in `matches`;
+    `RosterEligible` stays in `seasons`. No workflow layer introduced.
+    Current roster-eligible-vs-week-closed precedence is pinned by
+    `TestSaveRounds_WeekClosedAndRosterShort_RosterEligibleWinsPrecedence`.
+    See `doc/domains/matches/README.md` "RosterEligible ownership
+    decision."
+  - Season close: policy stays in `seasons.computeClose`, shared by both
+    `ClosePreview` and `CloseSeason` so preview and commit cannot drift.
+    The handler gathers weeks (`WeekManager.ListWeeks`) and standings
+    (`RoundManager.GetStandings`) only -- it makes no close-policy
+    decisions. No workflow layer introduced. Final-standings-snapshot
+    persistence and reopen preservation are covered end-to-end by
+    `TestCloseSeason_SnapshotPersistedAndPreservedOnReopen`. See
+    `doc/domains/seasons/README.md` "Season close ownership decision."
+  - Both decisions conclude the two starter cases named in this roadmap
+    item; no workflow/application layer was added in either case.
 
 - Backend scoresheet validation foundation.
 - Scoresheet save/review guardrails.
