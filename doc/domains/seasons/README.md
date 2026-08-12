@@ -93,6 +93,16 @@ draft-season banner.
 A season may be closed from Active or Historical state. Closing an Active season
 also sets `active=0`. Closing a Draft season is blocked.
 
+### Season close ownership decision (2026-08-11)
+
+Season close policy stays in `seasons.computeClose`. The handler may gather
+weeks and standings from matches-owned managers (`WeekManager.ListWeeks`,
+`RoundManager.GetStandings`), but it makes no close-policy decisions itself.
+No workflow layer is introduced because the handler performs data gathering
+only, not close-policy decisions. Preview and commit consistency is
+protected by both `ClosePreview` and `CloseSeason` calling the same
+`computeClose` method.
+
 ### Phase 1 - Core Close Season (implemented 2026-07-26)
 
 Phase 1 adds the minimum viable close-season workflow: a read-only preview
@@ -151,7 +161,7 @@ Previously it fell through to the `default` case (500).
 **New domain files:**
 - `backend/domains/seasons/close_service.go` - `ClosePreview`, `CloseSeason`,
   `computeClose`, `blockerCategory`
-- `backend/domains/seasons/close_service_test.go` - 10 unit tests
+- `backend/domains/seasons/close_service_test.go` - 18 unit tests
 
 **New store methods (SeasonStore interface):**
 - `GetSeasonMissingCount(ctx, seasonID)` - `COUNT(*)` of incomplete matches
@@ -163,7 +173,7 @@ Previously it fell through to the `default` case (500).
 
 **New handler files:**
 - `handlers/api_season_close.go` - `closeSeasonPreviewHandler`, `closeSeasonHandler`
-- `handlers/api_season_close_test.go` - 7 integration tests
+- `handlers/api_season_close_test.go` - 13 integration tests
 
 **Frontend changes:**
 - `web/domains/seasons/season-api-service.js` - `closeSeasonPreview`, `closeSeason`

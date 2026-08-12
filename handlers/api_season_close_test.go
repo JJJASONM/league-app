@@ -352,3 +352,67 @@ func TestReopenSeason_Success_ClearsClosedAt(t *testing.T) {
 		t.Errorf("want activated_at preserved after reopen, got %v", season["activated_at"])
 	}
 }
+
+// TestCloseSeason_SnapshotPersistedAndPreservedOnReopen closes a season through
+// the real HTTP route with DB-backed standings data, verifies
+// final_standings_snapshot is persisted with expected content, then reopens
+// through the HTTP route and verifies the snapshot is preserved unchanged.
+// final_standings_snapshot is intentionally not part of any JSON response
+// (see doc/domains/seasons/README.md Phase 1 note); this test reads it
+// directly from the database, consistent with the existing store-level
+// snapshot tests.
+func TestCloseSeason_SnapshotPersistedAndPreservedOnReopen(t *testing.T) {
+	srv := testServer(t)
+	sid := closeTestActiveSeason(t, srv.URL)
+	closeWeekDirect(t, sid)
+
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/close", srv.URL, sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, err := http.DefaultClient.Do(closeReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeResp.Body.Close()
+	if closeResp.StatusCode != http.StatusOK {
+		t.Fatalf("close: want 200, got %d", closeResp.StatusCode)
+	}
+
+	var snapshotAfterClose string
+	if err := db.DB.QueryRow(
+		`SELECT final_standings_snapshot FROM seasons WHERE id=?`, sid,
+	).Scan(&snapshotAfterClose); err != nil {
+		t.Fatalf("query snapshot after close: %v", err)
+	}
+	if snapshotAfterClose == "" {
+		t.Fatal("want non-empty final_standings_snapshot after close")
+	}
+	for _, want := range []string{"schema_version", "Alpha"} {
+		if !strings.Contains(snapshotAfterClose, want) {
+			t.Errorf("snapshot after close missing %q; snapshot: %s", want, snapshotAfterClose)
+		}
+	}
+
+	reopenReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/reopen", srv.URL, sid), nil)
+	reopenResp, err := http.DefaultClient.Do(reopenReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenResp.Body.Close()
+	if reopenResp.StatusCode != http.StatusOK {
+		t.Fatalf("reopen: want 200, got %d", reopenResp.StatusCode)
+	}
+
+	var snapshotAfterReopen string
+	if err := db.DB.QueryRow(
+		`SELECT final_standings_snapshot FROM seasons WHERE id=?`, sid,
+	).Scan(&snapshotAfterReopen); err != nil {
+		t.Fatalf("query snapshot after reopen: %v", err)
+	}
+	if snapshotAfterReopen != snapshotAfterClose {
+		t.Errorf("want snapshot unchanged after reopen\nafter close:  %s\nafter reopen: %s",
+			snapshotAfterClose, snapshotAfterReopen)
+	}
+}
