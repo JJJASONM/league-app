@@ -49,7 +49,16 @@ func Seed(sql string) error {
 }
 
 // Backup copies the database to a timestamped file in dataDir.
+// WAL mode is enabled (see Init), so recently committed writes may still be
+// sitting in league.db-wal rather than league.db itself. A TRUNCATE
+// checkpoint forces all WAL content back into league.db (and empties the
+// WAL file) before the copy, so the resulting file is a complete, restorable
+// snapshot on its own.
 func Backup(dataDir string) (string, error) {
+	if _, err := DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return "", fmt.Errorf("checkpoint before backup: %w", err)
+	}
+
 	src := filepath.Join(dataDir, "league.db")
 	stamp := time.Now().Format("2006-01-02_150405")
 	dst := filepath.Join(dataDir, fmt.Sprintf("league_backup_%s.db", stamp))

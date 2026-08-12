@@ -12,10 +12,9 @@ package handlers
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
+	"league_app/db"
 	"league_app/models"
 )
 
@@ -120,9 +119,10 @@ func TestBackupRoute_AdminCompat_ReachesHandler(t *testing.T) {
 	user := &models.User{ID: 1, Role: "admin", Active: true}
 	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: user}
 	dataDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dataDir, "league.db"), []byte("fake-db"), 0644); err != nil {
-		t.Fatalf("seed league.db: %v", err)
+	if err := db.Init(dataDir); err != nil {
+		t.Fatalf("db.Init: %v", err)
 	}
+	t.Cleanup(func() { db.DB.Close() })
 	mux := http.NewServeMux()
 	Register(mux, dataDir, backupDeps(auth))
 
@@ -139,9 +139,10 @@ func TestBackupRoute_SystemAdmin_ReachesHandler(t *testing.T) {
 	user := &models.User{ID: 1, Role: "system_admin", Active: true}
 	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: user}
 	dataDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dataDir, "league.db"), []byte("fake-db"), 0644); err != nil {
-		t.Fatalf("seed league.db: %v", err)
+	if err := db.Init(dataDir); err != nil {
+		t.Fatalf("db.Init: %v", err)
 	}
+	t.Cleanup(func() { db.DB.Close() })
 	mux := http.NewServeMux()
 	Register(mux, dataDir, backupDeps(auth))
 

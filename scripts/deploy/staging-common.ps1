@@ -64,6 +64,20 @@ function Backup-StagingDatabase {
     $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
     $backup = Join-Path $StagingRoot "backups\league_$stamp.db"
     Copy-Item -LiteralPath $database -Destination $backup
+
+    # WAL mode may leave recently committed writes in league.db-wal /
+    # league.db-shm rather than league.db itself, especially since the app
+    # is force-stopped (not gracefully shut down) before this runs. Copy any
+    # sidecar files alongside the backup using the same timestamped base
+    # name (league_<stamp>.db-wal / -shm) so Restore-StagingDatabase can
+    # find and restore them together; SQLite replays the WAL on next open.
+    foreach ($suffix in @('-wal', '-shm')) {
+        $sidecar = "$database$suffix"
+        if (Test-Path -LiteralPath $sidecar) {
+            Copy-Item -LiteralPath $sidecar -Destination "$backup$suffix"
+        }
+    }
+
     return $backup
 }
 
@@ -172,4 +186,13 @@ function Restore-StagingDatabase {
         }
     }
     Copy-Item -LiteralPath $BackupPath -Destination (Join-Path $data 'league.db')
+
+    # Restore matching WAL/SHM sidecars if this backup captured them, so
+    # SQLite replays any writes that were not yet checkpointed at backup time.
+    foreach ($suffix in @('-wal', '-shm')) {
+        $sidecar = "$BackupPath$suffix"
+        if (Test-Path -LiteralPath $sidecar) {
+            Copy-Item -LiteralPath $sidecar -Destination (Join-Path $data "league.db$suffix")
+        }
+    }
 }

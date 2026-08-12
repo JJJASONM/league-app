@@ -102,8 +102,12 @@ Run `build_all.bat` once to get platform binaries. Give each user:
 - the correct binary for their OS
 - the matching `data/` folder if they need the same database
 
-To back up: use the `Backup DB` action in the app. It writes a timestamped copy
-to the data directory.
+To back up: `POST /api/backup` (requires a system-admin personal API key)
+writes a timestamped copy of the database to the data directory. Staging
+deploys also create a timestamped backup automatically before each deploy.
+API backups checkpoint WAL before copying. Staging deploy backups copy any
+matching WAL sidecar files alongside the database, so both backup paths are
+safe to restore from even if the app was not shut down cleanly.
 
 ## Project Structure
 
