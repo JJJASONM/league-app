@@ -74,12 +74,6 @@ stable.
     remaining ownership-reduction work is about handler logic, not route
     registration.
 
-- Run a small operations hardening pass.
-  - Review SQLite backup/WAL safety before relying on backup copies for
-    rollback.
-  - Add a dedicated `/healthz` endpoint and basic request logging/request IDs.
-  - Keep this focused; do not start a broad app-server rewrite.
-
 - Keep roadmap and domain documentation aligned with accepted decisions.
   - Promote useful TODO inbox items into the relevant roadmap or domain README.
   - Keep resolved questions out of the active Open Questions list.
@@ -268,6 +262,27 @@ follow-up.
     `doc/domains/seasons/README.md` "Season close ownership decision."
   - Both decisions conclude the two starter cases named in this roadmap
     item; no workflow/application layer was added in either case.
+
+- Small operations hardening pass (Phases B-C, 2026-08-12).
+  - Phase B: `db.Backup` now runs `PRAGMA wal_checkpoint(TRUNCATE)` before
+    copying `league.db`, so API-triggered backups are WAL-safe. Staging
+    deploy backups (`scripts/deploy/staging-common.ps1`) copy any
+    `league.db-wal`/`league.db-shm` sidecar files alongside the timestamped
+    backup when present, and `Restore-StagingDatabase` restores matching
+    sidecars, so both backup paths are safe to restore from even if the app
+    was not shut down cleanly.
+  - Phase C: `GET /healthz` (unauthenticated, registered in
+    `handlers/api_health_routes.go`) returns 200 with `{"status":"ok"}`
+    when the database connection is reachable, or 503 when it is not.
+    Basic request logging with request IDs (`request_logging.go`) wraps
+    the HTTP handler in `main.go`: every request gets an `X-Request-Id`
+    (read from the incoming header when present, otherwise generated),
+    echoed back on the response and included in a server log line
+    alongside method, path, status, and duration. No request bodies,
+    query strings, or auth headers are logged.
+  - No new router framework, logging dependency, or metrics/tracing
+    library was added. No graceful shutdown or IIS deployment changes were
+    made -- deferred, not needed for this slice.
 
 - Backend scoresheet validation foundation.
 - Scoresheet save/review guardrails.

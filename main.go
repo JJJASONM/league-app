@@ -152,7 +152,7 @@ func main() {
 		openBrowser(url)
 	}()
 
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, withRequestLogging(mux)); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 }

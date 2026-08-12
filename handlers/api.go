@@ -77,6 +77,9 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	if v := reflect.ValueOf(deps.TeamMgr); v.Kind() == reflect.Ptr && v.IsNil() {
 		panic("handlers.Register: deps.TeamMgr must not be a typed nil")
 	}
+	// Health-check route registration lives in api_health_routes.go.
+	registerHealthRoute(mux)
+
 	// Leagues, players, and teams route registration live in
 	// api_leagues_routes.go, api_players_routes.go, and api_teams_routes.go.
 	registerLeagueRoutes(mux, deps.LeagueMgr, deps.ApplyAuth)

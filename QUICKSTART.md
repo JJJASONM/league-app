@@ -54,6 +54,11 @@ Binary run:
 The browser opens automatically at [http://localhost:8080](http://localhost:8080).
 The database is created in a `data/` folder next to the executable.
 
+`GET /healthz` returns 200 with `{"status":"ok"}` when the server and its
+database connection are up (503 if the database is unreachable). Useful for
+confirming the app is running locally or as a lightweight staging/IIS health
+check.
+
 ### Options
 
 ```powershell
