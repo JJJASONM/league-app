@@ -80,3 +80,11 @@ Raw project TODOs captured before roadmap promotion.
   Source: user
   Note: create recap for weeks ends that shows handicap changes and teams stats
   Destination: doc/domains/matches/README.md; doc/roadmap.md
+
+- Date: 2026-07-21
+  Status: completed
+  Domain: dashboard
+  Source: user
+  Note: on dashboard, the enter score button should be disabled until the scoresheets are created for the week
+  Destination: implemented directly (dashboard-score-entry-gate-phase-a); no
+    domain README or roadmap entry existed for this item to update

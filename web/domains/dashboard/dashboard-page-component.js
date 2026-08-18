@@ -10,7 +10,7 @@
 //     Fired when the user clicks a navigation action button.
 //     The shell handles this by calling navTo(section).
 
-import { fetchDashboardMatches, fetchDashboardStandings } from './dashboard-api-service.js';
+import { fetchDashboardMatches, fetchDashboardStandings, fetchDashboardLineupPlans } from './dashboard-api-service.js';
 import { displayDate } from '../../components/date-display.js';
 
 class DashboardPage extends HTMLElement {
@@ -61,6 +61,7 @@ class DashboardPage extends HTMLElement {
       }
       const navBtn = e.target.closest('[data-navigate]');
       if (navBtn) {
+        e.preventDefault();
         this.dispatchEvent(new CustomEvent('dashboard-nav-request', {
           bubbles: true,
           detail: { section: navBtn.dataset.navigate },
@@ -78,6 +79,52 @@ class DashboardPage extends HTMLElement {
   }
 
   // -- Private ------------------------------------------------------------------
+
+  // Determines, per overdue week, whether every team playing that week has a
+  // resolved lineup (week-specific plans, falling back to the default week-0
+  // plans, then the first 3 plan rows resolved to actual roster players) --
+  // the same resolution match-entry-page-component.js uses to decide whether
+  // it can render a scoresheet instead of falling back to a picker.
+  // A team/week that fails to resolve is treated as not ready (fail-safe): an
+  // admin should not be routed into entry believing lineups are set when the
+  // check could not confirm it.
+  async #loadLineupReadiness(overdueByWeek) {
+    const weekReady = {};
+    const weeks = Object.keys(overdueByWeek).map(Number);
+    if (weeks.length === 0) return weekReady;
+
+    try {
+      let defaultPlans = [];
+      try { defaultPlans = await fetchDashboardLineupPlans(this.#activeSeason.id, 0); }
+      catch (_) { defaultPlans = []; }
+
+      await Promise.all(weeks.map(async w => {
+        let weekPlans = [];
+        try { weekPlans = await fetchDashboardLineupPlans(this.#activeSeason.id, w); }
+        catch (_) { weekPlans = []; }
+
+        const isTeamReady = teamId => {
+          const forWeek = weekPlans.filter(p => p.team_id == teamId);
+          const resolved = forWeek.length >= 3 ? forWeek : defaultPlans.filter(p => p.team_id == teamId);
+          if (resolved.length < 3) return false;
+          const teamPlayers = this.#allPlayers.filter(p => p.team_id == teamId);
+          const resolvedPlayers = resolved.slice(0, 3)
+            .map(lp => teamPlayers.find(p => p.id === lp.player_id))
+            .filter(Boolean);
+          return resolvedPlayers.length === 3;
+        };
+
+        const teamIds = new Set();
+        overdueByWeek[w].forEach(m => { teamIds.add(m.home_team_id); teamIds.add(m.away_team_id); });
+        weekReady[w] = [...teamIds].every(isTeamReady);
+      }));
+    } catch (_) {
+      // Unexpected failure in the readiness check itself: fail open so a bug
+      // here does not block the core Enter Scores workflow.
+      return {};
+    }
+    return weekReady;
+  }
 
   async #load() {
     if (!this.#activeLeague) return;
@@ -134,6 +181,8 @@ class DashboardPage extends HTMLElement {
     const overdueByWeek = {};
     overdue.forEach(m => { (overdueByWeek[m.week_number] = overdueByWeek[m.week_number] || []).push(m); });
 
+    const weekLineupReady = await this.#loadLineupReadiness(overdueByWeek);
+
     const sections = [];
 
     // Setup checks
@@ -160,10 +209,19 @@ class DashboardPage extends HTMLElement {
       const weeks = Object.keys(overdueByWeek).sort((a, b) => a - b);
       weeks.forEach(w => {
         const ms = overdueByWeek[w];
+        const ready = weekLineupReady[w] !== false;
+        const matchList = ms.map(m => m.home_team_name + ' vs ' + m.away_team_name).join(' &nbsp;\u00b7&nbsp; ');
+        const detail = ready
+          ? matchList
+          : matchList + '<br><span class="text-muted">Lineups not set for Week ' + w +
+            ' \u2014 <a href="#" data-navigate="lineup">set them on the Lineup page</a> before entering scores.</span>';
+        const btnHtml = ready
+          ? `<button class="btn btn-sm btn-outline-danger action-btn" data-navigate="entry">Enter Scores</button>`
+          : `<button class="btn btn-sm btn-outline-secondary action-btn" disabled ` +
+            `title="Set lineups for Week ${w} before entering scores">Enter Scores</button>`;
         weeklyItems.push(this.#actionItem('urgent', 'bi-pencil-square',
           'Week ' + w + ' \u2014 scores not entered (' + ms.length + ' match' + (ms.length > 1 ? 'es' : '') + ')',
-          ms.map(m => m.home_team_name + ' vs ' + m.away_team_name).join(' &nbsp;\u00b7&nbsp; '),
-          `<button class="btn btn-sm btn-outline-danger action-btn" data-navigate="entry">Enter Scores</button>`));
+          detail, btnHtml));
       });
     }
 
