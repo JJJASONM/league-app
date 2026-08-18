@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-12
+**Last reviewed:** 2026-08-18
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -68,11 +68,11 @@ stable.
   - Reduce monolithic handler/shell ownership further.
   - Keep new work inside domain boundaries rather than adding more temporary
     logic to shared files.
-  - Handler route registration was split by domain/context in Phases A-D
-    (2026-08-08 to 2026-08-09); see Completed / Largely Completed below.
-    Handler function implementations still live in `handlers/api.go` --
-    remaining ownership-reduction work is about handler logic, not route
-    registration.
+  - Both the route-registration split (Phases A-D) and the handler-logic
+    split (Phases A-L) are complete; see Completed / Largely Completed
+    below. `handlers/api.go` now holds only `Register()`, shared helpers,
+    auth middleware, the backup route closure, and the rule-definitions
+    handler -- any further reduction here is a new, not-yet-scoped effort.
 
 - Keep roadmap and domain documentation aligned with accepted decisions.
   - Promote useful TODO inbox items into the relevant roadmap or domain README.
@@ -236,12 +236,48 @@ follow-up.
     plan, and week-workflow route registration.
   - Phase D: match read/assignment, match results, rounds, standings, and
     player-stats route registration.
-  - Remaining intentionally inline in `handlers/api.go`: small special-case
-    routes with distinct auth wiring (rule definitions, handicap
-    recommendations/apply, user management, backup), and all handler
-    function implementations. This closure covers route registration only
-    -- handler logic ownership is unchanged and remains a Next-section
-    concern.
+  - Remaining intentionally inline route registration in `handlers/api.go`:
+    small special-case routes with distinct auth wiring (rule definitions,
+    handicap recommendations/apply, user management, backup) -- these were
+    never split into `api_*_routes.go` files since each has unique
+    conditional/auth wiring not worth extracting on its own. This closure
+    covered route registration only; handler logic ownership was a
+    separate, subsequent effort -- see "Handler logic ownership extraction
+    (Phases A-L)" below.
+
+- Handler logic ownership extraction (Phases A-L, 2026-08-12 to 2026-08-18).
+  - Handler function bodies were extracted out of `handlers/api.go` into
+    focused `handlers/api_*_handlers.go` files, one domain/context per
+    file, completing the split that "Handler route split (Phases A-D)"
+    above started for route registration. This is pure code motion and
+    handler-file ownership cleanup, not a service/domain extraction --
+    route behavior, auth policy, JSON shapes, and domain-service
+    boundaries are all unchanged. Business logic already lived in domain
+    services before this series began; only the thin HTTP delegator
+    functions moved.
+  - Phase A: league/player/team CRUD handlers.
+  - Phase B: schedule/pushback handlers.
+  - Phase C: lineup handlers.
+  - Phase D: match core handlers.
+  - Phase E: match results/rounds/standings/player-stats handlers.
+  - Phase F: week workflow handlers.
+  - Phase G: season core handlers.
+  - Phase H: season rules handlers.
+  - Phase I: skipped-weeks and bye-request handlers.
+  - Phase J: season teams/roster/available-player/previous-season/
+    checklist handlers.
+  - Phase K: handicap recommendation/apply handlers.
+  - Phase L: users handlers.
+  - Remaining in `handlers/api.go`: `Register()`; the shared request/
+    response helpers (`jsonOK`, `jsonError`, `jsonValidation`, `pathID`,
+    `qparam`, `qparamInt`, `decode`); the auth middleware
+    (`requireAdminToken`, `requireApplyAuth`, `requirePersonalKeyAuth`,
+    `requireLeagueAdminRole`, `requireSystemAdminRole`, `clearanceAuth`,
+    `systemAdminAuth`, and their context helpers); the backup route
+    closure; the rule-definitions handler; and two pre-existing orphaned
+    section headers (`Leagues`, `Matches`) left over from Phases A and D
+    of the route-registration split, intentionally not cleaned up since
+    they predate this series.
 
 - Workflow ownership clarification -- score-save and season close
   (2026-08-10 to 2026-08-12).
@@ -296,7 +332,9 @@ follow-up.
 - Backend domain extraction — matches (week close/reopen B1–B4, schedule A, match
   B, lineup C), handicaps (service/store Data Access A, apply B1–B3, personal key
   auth C1), and domain services for seasons, leagues, players, and teams.
-  `handlers/api.go` is now a thin delegation layer for most routes.
+  Handler files now form the thin HTTP delegation layer for most routes;
+  `handlers/api.go` retains `Register()`, shared helpers/auth, backup, and
+  rule definitions.
 - Rules domain — backend-authoritative rule definitions and value validation
   (`rules.Definitions()`, `rules.ValidateValue()`); `rules.RuleStore` interface
   used by `matches.ResolveRoundConfig` and `handicaps.Service` to read season rules

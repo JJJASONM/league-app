@@ -146,7 +146,8 @@ type CalcResult struct {
 func ComputeImpliedHandicap(samples []RackSample, window int) CalcResult
 ```
 
-`samples` is ordered most-recent-first by the caller (handlers/api.go).
+`samples` is ordered most-recent-first by the caller
+(handlers/api_handicap_handlers.go).
 `ComputeImpliedHandicap` takes the first `min(len, window)` samples as the
 window slice; the caller does not need to pre-slice.
 
@@ -231,9 +232,10 @@ bearer-token authorization. There is no frontend Apply UI yet (Phase B3 scope).
   Recommendation token and request-hash helpers for stale-data and replay checks.
 - `backend/storage/sqlite/handicap_apply_store.go`
   SQLite write adapter support, idempotency lookups, history writes, and write transactions.
+- `handlers/api_handicap_handlers.go`
+  `postHandicapApply` handler body.
 - `handlers/api.go`
-  `postHandicapApply` handler body; `requireAdminToken` auth wrapper; conditional
-  route registration in `Register()`.
+  `requireApplyAuth` auth wrapper; conditional route registration in `Register()`.
 - `handlers/deps.go`
   `HandicapApplier` dependency contract; `AdminToken string` field.
 
@@ -404,7 +406,7 @@ opponent snapshots.
 ### Architecture
 
 ```
-HTTP handler (handlers/api.go)
+HTTP handler (handlers/api_handicap_handlers.go)
   |-- HandicapRecommender interface (handlers/deps.go)
         |-- *handicaps.Service (backend/domains/handicaps/service.go)
               |-- handicaps.Store interface (backend/domains/handicaps/store.go)
