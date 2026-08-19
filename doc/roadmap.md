@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-18
+**Last reviewed:** 2026-08-19
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -27,6 +27,21 @@ Stabilize current admin workflows
 ## Now
 
 These items should stay small enough to review and ship independently.
+
+- Product test readiness.
+  - Establish a realistic staging test path that exercises most current admin
+    workflows end to end, rather than continuing immediately into deeper
+    feature polish.
+  - Create or refresh a known test league/season dataset that supports setup,
+    scheduling, lineup planning, score entry, close/reopen, standings,
+    handicap review/apply, recap, season close/reopen, backup, and health
+    checks.
+  - Write a browser smoke-test checklist with clear pass/fail checkpoints for
+    the full admin journey.
+  - Run the checklist against staging, record blockers, and promote only the
+    highest-value gaps into focused follow-up branches.
+  - Treat Player merge UI, default lineup setup, and other polish as follow-up
+    candidates after this readiness pass identifies what most blocks testing.
 
 - Domain and data-access restructuring.
   - Major domains (matches, handicaps, seasons, leagues, players, teams) have
@@ -63,6 +78,14 @@ These items should stay small enough to review and ship independently.
 
 These are the next build targets after the current workflow foundation is
 stable.
+
+- Resolve product test-readiness findings.
+  - Fix only the blockers and high-friction gaps discovered by the staging
+    smoke-test pass.
+  - Prefer small branches that make the existing product easier to test,
+    explain, and recover from.
+  - Keep rare repair workflows and broader platform expansion out of the way
+    unless the readiness pass proves they are blocking real testing.
 
 - Continue backend/domain extraction where workflows are already active.
   - Reduce monolithic handler/shell ownership further.
@@ -123,7 +146,9 @@ stable.
     management screen creates the concrete need.
 
 - Player record maintenance.
-  - Build a merge UI (preview, confirm) on top of the safe-merge backend.
+  - Build a merge UI (preview, confirm) on top of the safe-merge backend after
+    product test readiness work confirms this repair path is worth bringing
+    into the tested admin surface.
   - Defer INCOMPLETE profile status and close-week blocking until match-night
     quick-add or admin review creates a concrete need.
   - Duplicate detection for player quick-add and the safe-merge backend
