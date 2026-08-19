@@ -123,11 +123,11 @@ stable.
     management screen creates the concrete need.
 
 - Player record maintenance.
-  - Define a safe player-record merge workflow for accidental duplicates.
+  - Build a merge UI (preview, confirm) on top of the safe-merge backend.
   - Defer INCOMPLETE profile status and close-week blocking until match-night
     quick-add or admin review creates a concrete need.
-  - Duplicate detection for player quick-add shipped as Phase A; see
-    Completed / Largely Completed below.
+  - Duplicate detection for player quick-add and the safe-merge backend
+    shipped as Phase A; see Completed / Largely Completed below.
 
 - Season setup polish.
   - Explore default lineup setup during season creation or immediately after
@@ -373,9 +373,28 @@ follow-up.
   name as an existing player in the active league. The admin can cancel or
   add the player anyway; no match means quick-add proceeds unchanged.
   Client-side only (`web/domains/players/players-page-component.js`) -- no
-  backend, schema, or API change. Safe player-record merge, INCOMPLETE
-  profile status, and match-entry quick-add remain deferred; see "Player
+  backend, schema, or API change. Safe player-record merge was a separate,
+  subsequent effort -- see "Player safe merge backend" below. INCOMPLETE
+  profile status and match-entry quick-add remain deferred; see "Player
   record maintenance" above.
+- Player safe merge backend (Phase A, 2026-08-19). Admins can merge a
+  duplicate player into a surviving one:
+  `POST /api/players/{source_id}/merge` with `{"target_id": <id>}`, gated by
+  the same personal-key admin mutation auth as player CRUD. All nine
+  supported player-ID references across seven tables (match_results,
+  handicap_history, round_results home/away, lineup_plans player/sub_for,
+  season_teams captain, season_rosters, teams captain) are repointed from
+  source to target in one transaction, then the source player is deleted;
+  any failure rolls back everything. Handicap snapshot columns and
+  handicap_history values are preserved untouched -- only foreign keys move.
+  Refused with nothing changed: 400 for same source/target player, 404 for a
+  missing player, 409 for an unsafe collision (season-roster, round-results
+  participation in the same match/round in any role, self-opponent, or
+  lineup-plan) -- the round-results check covers any combination of home/away
+  across rows, not just both-as-home; self-opponent, the full round-results
+  participation check, and the lineup-plan check were all discovered or
+  broadened during implementation. Backend and store only; no merge UI yet,
+  see "Player record maintenance" above.
 - Schedule pushback workflow (Phases M/N/O). Read-only preview endpoint, atomic
   apply endpoint, and Schedule page admin UI. Unplayed matches at or after the
   cutoff shift week number and date atomically; completed matches are preserved;

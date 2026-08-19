@@ -26,4 +26,9 @@ func registerPlayerRoutes(mux *http.ServeMux, playerMgr PlayerManager, applyAuth
 			deletePlayer(w, r, playerMgr)
 		}),
 	)
+	mux.HandleFunc("POST /api/players/{id}/merge",
+		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+			mergePlayer(w, r, playerMgr)
+		}),
+	)
 }

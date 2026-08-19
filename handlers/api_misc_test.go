@@ -181,6 +181,7 @@ func (n *noopPlayerMgr) UpdatePlayer(_ context.Context, _ int64, _ players.Updat
 	return nil
 }
 func (n *noopPlayerMgr) DeletePlayer(_ context.Context, _ int64) error { return nil }
+func (n *noopPlayerMgr) MergePlayers(_ context.Context, _, _ int64) error { return nil }
 
 // noopTeamMgr satisfies handlers.TeamManager for tests that only exercise
 // non-team handler logic.

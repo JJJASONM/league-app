@@ -104,6 +104,41 @@ func deletePlayer(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
+// mergePlayerRequest is the body for POST /api/players/{id}/merge.
+type mergePlayerRequest struct {
+	TargetID int64 `json:"target_id"`
+}
+
+// mergePlayer handles POST /api/players/{id}/merge. The path ID is the
+// source (duplicate) player; target_id in the body is the surviving player.
+// See players.PlayerService.MergePlayers for the full behavior and error
+// contract.
+func mergePlayer(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
+	sourceID, err := pathID(r, "id")
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	var body mergePlayerRequest
+	if err := decode(r, &body); err != nil {
+		jsonError(w, "invalid body", 400)
+		return
+	}
+	if body.TargetID == 0 {
+		jsonError(w, "target_id is required", 400)
+		return
+	}
+	if err := mgr.MergePlayers(r.Context(), sourceID, body.TargetID); err != nil {
+		mapPlayerErr(w, err)
+		return
+	}
+	jsonOK(w, map[string]any{
+		"status":    "merged",
+		"source_id": sourceID,
+		"target_id": body.TargetID,
+	})
+}
+
 // mapPlayerErr translates player domain errors to HTTP responses.
 func mapPlayerErr(w http.ResponseWriter, err error) {
 	var de *domainerr.Err

@@ -132,6 +132,10 @@ type PlayerManager interface {
 	CreatePlayer(ctx context.Context, input players.CreatePlayerInput) (models.Player, error)
 	UpdatePlayer(ctx context.Context, id int64, input players.UpdatePlayerInput) error
 	DeletePlayer(ctx context.Context, id int64) error
+	// MergePlayers merges sourceID into targetID: repoints supported
+	// references and deletes the source player. See players.PlayerService
+	// for the full error contract.
+	MergePlayers(ctx context.Context, sourceID, targetID int64) error
 }
 
 // TeamManager handles team CRUD operations.

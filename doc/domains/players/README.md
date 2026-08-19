@@ -49,17 +49,73 @@ no backend validation, DB constraint, or API change was made. Two different
 real people who share a name will still see the warning every time they are
 quick-added -- that is expected, not a bug, given the warn-only design.
 
+## Safe Merge (Backend Phase A, 2026-08-19)
+
+Admins can merge a duplicate player record into a surviving one:
+`POST /api/players/{source_id}/merge` with body `{"target_id": <id>}`. Backend
+and store only in this phase -- there is no merge UI yet.
+
+Every supported reference to `source_id` is repointed to `target_id`, then the
+source player row is deleted, all inside one transaction (all-or-nothing;
+any failure rolls back everything):
+
+- `match_results.player_id`
+- `handicap_history.player_id`
+- `round_results.home_player_id` and `round_results.away_player_id`
+- `lineup_plans.player_id` and `lineup_plans.sub_for_id`
+- `season_teams.captain_id`
+- `season_rosters.player_id`
+- `teams.captain_id`
+
+`round_results`' handicap snapshot columns (`home_handicap_used`,
+`away_handicap_used`, `handicap_pts_used`, `handicap_to`) and all game-score
+columns are untouched by a merge -- only the player-ID columns move.
+`handicap_history` rows from both players survive the merge and are
+repointed, not rewritten or deduplicated; a merged player's history is the
+union of both players' prior rows.
+
+The merge is refused, with nothing changed, in three ways:
+
+- **400 Bad Request** -- `source_id == target_id`.
+- **404 Not Found** -- source or target player does not exist.
+- **409 Conflict** -- an unsafe collision blocks the merge:
+  - Source and target already both have a `season_rosters` row for the same
+    season, regardless of team -- this is the general form of "source and
+    target are rostered on different teams in the same season," since
+    `season_rosters` has no `team_id` in its unique key.
+  - Source and target already played against each other (one home, one away)
+    in the same `round_results` row -- merging would make a player play
+    themselves. Discovered while implementing; not in the original blocker
+    list. Checked ahead of the broader participation check below so this
+    more specific error takes priority when both would otherwise apply.
+  - Source and target already both participate (as home player, away
+    player, or both, in any row -- not necessarily the same row) in the
+    same `(match_id, round_number)` of `round_results`. Covers both as
+    home, both as away, and one as home in one row while the other is away
+    in a different row of the same match/round -- any of these would make
+    target appear more than once in one round after merging, the same
+    condition Close Week rejects as `WEEK_PLAYER_DUPLICATE`. The narrower
+    "both as home" case was the original implementation; broadened to full
+    participation after review.
+  - Source and target already both have a `lineup_plans` row for the same
+    team/week/season (would violate its unique constraint). Discovered while
+    implementing; not in the original blocker list.
+
+The route is protected by the same personal-key admin mutation auth as the
+rest of player CRUD (`league_admin`, `admin`, or `system_admin` role via
+`clearanceAuth`).
+
 ## Deferred Player Maintenance
 
 The following player-record maintenance items remain parked:
 
-- Safe merge workflow for accidental duplicate player records.
+- Merge UI (preview, confirm) -- backend/store only so far.
 - INCOMPLETE profile status and close-week blocking for incomplete profiles.
 - Match-entry quick-add integration.
 
-Duplicate detection for quick-added players is implemented as of Phase A above
-(client-side, warn-only, normalized-exact name match); it is no longer in this
-deferred list.
+Duplicate detection for quick-added players and the safe merge backend are
+both implemented as of the phases above; neither is in this deferred list
+anymore.
 
 ## Questions
 
@@ -111,5 +167,24 @@ deferred. Resolves PLAYERS-Q001.
 
 Added a client-side, warn-only, normalized-exact-name duplicate check to
 Players page quick-add, comparing against the already-loaded league-scoped
-player list. No backend, schema, or API change. Safe merge, INCOMPLETE profile
-status, and match-entry quick-add remain deferred.
+player list. No backend, schema, or API change. Safe merge remained deferred
+at this point (see the Safe Merge Backend Phase A entry below); INCOMPLETE
+profile status and match-entry quick-add remain deferred.
+
+### 2026-08-19 - Safe merge backend Phase A
+
+**Status:** `accepted`
+
+Added `players.PlayerService.MergePlayers` / `PlayerStore.MergePlayers` and
+`POST /api/players/{id}/merge`: repoints all nine supported player-ID
+references across seven tables from a source (duplicate) player to a target
+(surviving) player in one transaction, then deletes the source. Backend and
+store only -- no merge UI in this phase. Statuses: 400 same player, 404
+missing player, 409 for an unsafe collision (season-roster, round-results
+participation, self-opponent, or lineup-plan). The round-results check
+started as "both as home" only and was broadened during review to any
+participation (home or away, any row) in the same match/round, since the
+narrower check missed both-away and cross-role cases. The self-opponent,
+round-participation, and lineup-plan blockers were all discovered during
+implementation, not specified up front. Handicap snapshot columns and
+handicap_history values are preserved exactly; only foreign keys move.

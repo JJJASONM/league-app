@@ -12,11 +12,12 @@ import (
 
 // stubPlayerStore implements players.PlayerStore using configurable function fields.
 type stubPlayerStore struct {
-	listFn   func(ctx context.Context, leagueID *int64) ([]models.Player, error)
-	getFn    func(ctx context.Context, id int64) (models.Player, error)
+	listFn  func(ctx context.Context, leagueID *int64) ([]models.Player, error)
+	getFn   func(ctx context.Context, id int64) (models.Player, error)
 	createFn func(ctx context.Context, input players.CreatePlayerInput) (models.Player, error)
 	updateFn func(ctx context.Context, id int64, input players.UpdatePlayerInput) error
 	deleteFn func(ctx context.Context, id int64) error
+	mergeFn  func(ctx context.Context, sourceID, targetID int64) error
 }
 
 func (s *stubPlayerStore) ListPlayers(ctx context.Context, leagueID *int64) ([]models.Player, error) {
@@ -46,6 +47,12 @@ func (s *stubPlayerStore) UpdatePlayer(ctx context.Context, id int64, input play
 func (s *stubPlayerStore) DeletePlayer(ctx context.Context, id int64) error {
 	if s.deleteFn != nil {
 		return s.deleteFn(ctx, id)
+	}
+	return nil
+}
+func (s *stubPlayerStore) MergePlayers(ctx context.Context, sourceID, targetID int64) error {
+	if s.mergeFn != nil {
+		return s.mergeFn(ctx, sourceID, targetID)
 	}
 	return nil
 }
@@ -259,4 +266,141 @@ func TestPlayerService_GetPlayer_PropagatesNotFound(t *testing.T) {
 	if !errors.Is(err, players.ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
 	}
+}
+
+// -- MergePlayers ----------------------------------------------------------
+
+// wantDomainErr fails the test unless err is a *domainerr.Err with the given
+// code and category.
+func wantDomainErr(t *testing.T, err error, wantCode string, wantCat domainerr.Category) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	var de *domainerr.Err
+	if !errors.As(err, &de) {
+		t.Fatalf("want domainerr.Err, got %T: %v", err, err)
+	}
+	if de.Code != wantCode {
+		t.Errorf("want code %q, got %q", wantCode, de.Code)
+	}
+	if de.Category != wantCat {
+		t.Errorf("want category %v, got %v", wantCat, de.Category)
+	}
+}
+
+func TestPlayerService_MergePlayers_SamePlayer_ReturnsInvalidInput(t *testing.T) {
+	svc := newSvc(&stubPlayerStore{})
+	err := svc.MergePlayers(context.Background(), 5, 5)
+	wantDomainErr(t, err, "PLAYER_MERGE_SAME_PLAYER", domainerr.InvalidInput)
+}
+
+func TestPlayerService_MergePlayers_SourceNotFound_ReturnsNotFound(t *testing.T) {
+	svc := newSvc(&stubPlayerStore{
+		getFn: func(_ context.Context, id int64) (models.Player, error) {
+			if id == 1 {
+				return models.Player{}, players.ErrNotFound
+			}
+			return models.Player{ID: id}, nil
+		},
+	})
+	err := svc.MergePlayers(context.Background(), 1, 2)
+	wantDomainErr(t, err, "PLAYER_MERGE_SOURCE_NOT_FOUND", domainerr.NotFound)
+}
+
+func TestPlayerService_MergePlayers_TargetNotFound_ReturnsNotFound(t *testing.T) {
+	svc := newSvc(&stubPlayerStore{
+		getFn: func(_ context.Context, id int64) (models.Player, error) {
+			if id == 2 {
+				return models.Player{}, players.ErrNotFound
+			}
+			return models.Player{ID: id}, nil
+		},
+	})
+	err := svc.MergePlayers(context.Background(), 1, 2)
+	wantDomainErr(t, err, "PLAYER_MERGE_TARGET_NOT_FOUND", domainerr.NotFound)
+}
+
+func TestPlayerService_MergePlayers_Success_DelegatesToStore(t *testing.T) {
+	var gotSource, gotTarget int64
+	svc := newSvc(&stubPlayerStore{
+		getFn: func(_ context.Context, id int64) (models.Player, error) {
+			return models.Player{ID: id}, nil
+		},
+		mergeFn: func(_ context.Context, sourceID, targetID int64) error {
+			gotSource, gotTarget = sourceID, targetID
+			return nil
+		},
+	})
+	if err := svc.MergePlayers(context.Background(), 1, 2); err != nil {
+		t.Fatalf("MergePlayers: %v", err)
+	}
+	if gotSource != 1 || gotTarget != 2 {
+		t.Errorf("want store called with (1, 2), got (%d, %d)", gotSource, gotTarget)
+	}
+}
+
+func TestPlayerService_MergePlayers_SeasonRosterConflict_ReturnsConflict(t *testing.T) {
+	svc := newSvc(&stubPlayerStore{
+		getFn: func(_ context.Context, id int64) (models.Player, error) {
+			return models.Player{ID: id}, nil
+		},
+		mergeFn: func(_ context.Context, _, _ int64) error {
+			return players.ErrMergeSeasonRosterConflict
+		},
+	})
+	err := svc.MergePlayers(context.Background(), 1, 2)
+	wantDomainErr(t, err, "PLAYER_MERGE_SEASON_ROSTER_CONFLICT", domainerr.Conflict)
+}
+
+func TestPlayerService_MergePlayers_RoundResultConflict_ReturnsConflict(t *testing.T) {
+	svc := newSvc(&stubPlayerStore{
+		getFn: func(_ context.Context, id int64) (models.Player, error) {
+			return models.Player{ID: id}, nil
+		},
+		mergeFn: func(_ context.Context, _, _ int64) error {
+			return players.ErrMergeRoundResultConflict
+		},
+	})
+	err := svc.MergePlayers(context.Background(), 1, 2)
+	wantDomainErr(t, err, "PLAYER_MERGE_ROUND_RESULT_CONFLICT", domainerr.Conflict)
+}
+
+func TestPlayerService_MergePlayers_SelfOpponentConflict_ReturnsConflict(t *testing.T) {
+	svc := newSvc(&stubPlayerStore{
+		getFn: func(_ context.Context, id int64) (models.Player, error) {
+			return models.Player{ID: id}, nil
+		},
+		mergeFn: func(_ context.Context, _, _ int64) error {
+			return players.ErrMergeSelfOpponentConflict
+		},
+	})
+	err := svc.MergePlayers(context.Background(), 1, 2)
+	wantDomainErr(t, err, "PLAYER_MERGE_SELF_OPPONENT_CONFLICT", domainerr.Conflict)
+}
+
+func TestPlayerService_MergePlayers_LineupPlanConflict_ReturnsConflict(t *testing.T) {
+	svc := newSvc(&stubPlayerStore{
+		getFn: func(_ context.Context, id int64) (models.Player, error) {
+			return models.Player{ID: id}, nil
+		},
+		mergeFn: func(_ context.Context, _, _ int64) error {
+			return players.ErrMergeLineupPlanConflict
+		},
+	})
+	err := svc.MergePlayers(context.Background(), 1, 2)
+	wantDomainErr(t, err, "PLAYER_MERGE_LINEUP_PLAN_CONFLICT", domainerr.Conflict)
+}
+
+func TestPlayerService_MergePlayers_StoreInternalError_ReturnsInternal(t *testing.T) {
+	svc := newSvc(&stubPlayerStore{
+		getFn: func(_ context.Context, id int64) (models.Player, error) {
+			return models.Player{ID: id}, nil
+		},
+		mergeFn: func(_ context.Context, _, _ int64) error {
+			return errors.New("boom")
+		},
+	})
+	err := svc.MergePlayers(context.Background(), 1, 2)
+	wantDomainErr(t, err, "PLAYER_MERGE_INTERNAL", domainerr.Internal)
 }
