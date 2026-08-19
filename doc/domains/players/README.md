@@ -26,18 +26,40 @@ full profile. The minimum required fields are at least one name (first or last)
 and a diff rating (defaults to 0). Player number, phone, email, and admin hold
 are optional and can be completed later using the standard Edit Player modal.
 
+Before creating the player, quick-add warns when the typed name normalizes to
+the same full name as an existing player in the active league (see Duplicate
+Warning below). This is advisory only; it does not block creation.
+
 Deferred: INCOMPLETE profile status, close-week blocking for incomplete
 profiles, and match-entry quick-add integration are not yet implemented.
 
+## Duplicate Warning (Phase A, 2026-08-19)
+
+Quick-add compares the typed first/last name against the already-loaded,
+league-scoped player list on the Players page. Both the typed name and each
+existing player's name are normalized (trimmed, internal whitespace collapsed,
+case-folded) before comparison; a match is exact-normalized only, not fuzzy.
+
+When a match is found, the admin sees the existing player's name and team (or
+"no team" if unrostered) and can either cancel or continue and add the new
+player anyway. No match means quick-add proceeds exactly as before this phase.
+
+This is entirely client-side (`web/domains/players/players-page-component.js`):
+no backend validation, DB constraint, or API change was made. Two different
+real people who share a name will still see the warning every time they are
+quick-added -- that is expected, not a bug, given the warn-only design.
+
 ## Deferred Player Maintenance
 
-The following player-record maintenance items are parked until the Phase 1
-quick-add flow has real usage:
+The following player-record maintenance items remain parked:
 
-- Duplicate detection for quick-added players.
 - Safe merge workflow for accidental duplicate player records.
 - INCOMPLETE profile status and close-week blocking for incomplete profiles.
 - Match-entry quick-add integration.
+
+Duplicate detection for quick-added players is implemented as of Phase A above
+(client-side, warn-only, normalized-exact name match); it is no longer in this
+deferred list.
 
 ## Questions
 
@@ -82,3 +104,12 @@ field set is at least one name and a diff rating (default 0). Player number,
 contact fields, and admin hold are omitted and completed later via Edit Player.
 INCOMPLETE status, close-week blocking, and match-entry integration are
 deferred. Resolves PLAYERS-Q001.
+
+### 2026-08-19 - Quick-add duplicate warning Phase A
+
+**Status:** `accepted`
+
+Added a client-side, warn-only, normalized-exact-name duplicate check to
+Players page quick-add, comparing against the already-loaded league-scoped
+player list. No backend, schema, or API change. Safe merge, INCOMPLETE profile
+status, and match-entry quick-add remain deferred.

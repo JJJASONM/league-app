@@ -123,11 +123,11 @@ stable.
     management screen creates the concrete need.
 
 - Player record maintenance.
-  - Add duplicate detection for player quick-add after the Phase 1 Players page
-    flow has been used.
   - Define a safe player-record merge workflow for accidental duplicates.
   - Defer INCOMPLETE profile status and close-week blocking until match-night
     quick-add or admin review creates a concrete need.
+  - Duplicate detection for player quick-add shipped as Phase A; see
+    Completed / Largely Completed below.
 
 - Season setup polish.
   - Explore default lineup setup during season creation or immediately after
@@ -367,6 +367,15 @@ follow-up.
   1: minimum fields are at least one name plus diff rating, with optional team.
   Duplicate detection, INCOMPLETE profile status, and match-entry quick-add are
   deferred.
+- Player quick-add duplicate warning (Phase A, 2026-08-19). Quick-add on the
+  Players page now warns, before creating a player, when the typed name
+  normalizes (trimmed, whitespace-collapsed, case-folded) to the same full
+  name as an existing player in the active league. The admin can cancel or
+  add the player anyway; no match means quick-add proceeds unchanged.
+  Client-side only (`web/domains/players/players-page-component.js`) -- no
+  backend, schema, or API change. Safe player-record merge, INCOMPLETE
+  profile status, and match-entry quick-add remain deferred; see "Player
+  record maintenance" above.
 - Schedule pushback workflow (Phases M/N/O). Read-only preview endpoint, atomic
   apply endpoint, and Schedule page admin UI. Unplayed matches at or after the
   cutoff shift week number and date atomically; completed matches are preserved;

@@ -19,6 +19,13 @@ function esc(s) {
   );
 }
 
+// Trims, collapses internal whitespace, and case-folds a full name for
+// duplicate comparison. Symmetric with respect to which of first/last is
+// blank, so "Bob" + "" and "" + "Bob" both normalize to "bob".
+function normalizeFullName(first, last) {
+  return `${first ?? ''} ${last ?? ''}`.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 const MODAL_ID    = 'player-modal';
 const QA_MODAL_ID = 'player-quick-add-modal';
 const DASH = '\u2014';
@@ -336,10 +343,31 @@ class PlayersPage extends HTMLElement {
     new bootstrap.Modal(document.getElementById(QA_MODAL_ID)).show();
   }
 
+  // Warn-only, normalized-exact-name duplicate check against the already
+  // -loaded league-scoped player list. Returns the matching player or null.
+  #findPossibleDuplicate(firstName, lastName) {
+    const target = normalizeFullName(firstName, lastName);
+    if (!target) return null;
+    return this.#allPlayers.find(p => normalizeFullName(p.first_name, p.last_name) === target) ?? null;
+  }
+
   async #saveQuickAdd() {
     const firstName = document.getElementById('player-qa-first-name').value.trim();
     const lastName  = document.getElementById('player-qa-last-name').value.trim();
     if (!firstName && !lastName) { toast('First or last name is required', 'warning'); return; }
+
+    const dupe = this.#findPossibleDuplicate(firstName, lastName);
+    if (dupe) {
+      const dupeName = `${dupe.first_name} ${dupe.last_name}`.trim();
+      const dupeTeam = dupe.team_name ? dupe.team_name : 'no team';
+      const proceed = confirm(
+        `A player named "${dupeName}" (${dupeTeam}) already exists. ` +
+        `Click OK to add this as a new, separate player anyway, or Cancel to ` +
+        `stop and use the existing player instead.`
+      );
+      if (!proceed) return;
+    }
+
     const teamVal = document.getElementById('player-qa-team').value;
     const body = {
       first_name: firstName,
