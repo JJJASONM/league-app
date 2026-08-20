@@ -19,6 +19,12 @@ document.querySelectorAll('[data-section]').forEach(link => {
 document.getElementById('league-select')?.addEventListener('change', switchLeague);
 document.querySelector('[data-action="manage-leagues"]')?.addEventListener('click', openLeagueModal);
 document.querySelector('[data-action="backup"]')?.addEventListener('click', backup);
+document.querySelector('[data-action="admin-key"]')?.addEventListener('click', openAdminKeyModal);
+document.getElementById('admin-key-save-btn')?.addEventListener('click', saveAdminKey);
+document.getElementById('admin-key-clear-btn')?.addEventListener('click', clearAdminKeyAndClose);
+document.getElementById('admin-key-input')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') saveAdminKey();
+});
 
 function loadSection(sec) {
   const state = appContext.getState();
@@ -169,3 +175,46 @@ async function backup() {
     toast('Backup saved: ' + res.path.split(/[/\\]/).pop());
   } catch(e) { toast(e.message,'danger'); }
 }
+
+// --- Admin Key modal ------------------------------------------------------------
+// Lets an admin paste a personal API key (see web/lib/admin-key-store.js) so the
+// shared api() client can attach it to admin mutation requests in this tab.
+
+function updateAdminKeyButton() {
+  const label = document.getElementById('admin-key-status');
+  if (label) label.textContent = hasAdminKey() ? 'Admin Key (set)' : 'Admin Key';
+}
+
+function openAdminKeyModal() {
+  const input = document.getElementById('admin-key-input');
+  if (input) input.value = '';
+  const statusEl = document.getElementById('admin-key-current-status');
+  if (statusEl) {
+    statusEl.textContent = hasAdminKey()
+      ? 'A key is currently set for this tab.'
+      : 'No key is currently set -- admin actions will fail until one is set.';
+  }
+  new bootstrap.Modal(document.getElementById('admin-key-modal')).show();
+}
+
+function saveAdminKey() {
+  const input = document.getElementById('admin-key-input');
+  const raw = input?.value.trim();
+  if (!raw) { toast('Enter a key, or use Clear to remove the current one', 'warning'); return; }
+  // api() already adds the "Bearer " prefix -- strip one here in case a
+  // tester pastes the whole Authorization header value by mistake.
+  const val = raw.replace(/^Bearer\s+/i, '');
+  setAdminKey(val);
+  updateAdminKeyButton();
+  bootstrap.Modal.getInstance(document.getElementById('admin-key-modal'))?.hide();
+  toast('Admin key set for this tab');
+}
+
+function clearAdminKeyAndClose() {
+  clearAdminKey();
+  updateAdminKeyButton();
+  bootstrap.Modal.getInstance(document.getElementById('admin-key-modal'))?.hide();
+  toast('Admin key cleared');
+}
+
+updateAdminKeyButton();

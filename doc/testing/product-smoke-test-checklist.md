@@ -2,61 +2,51 @@
 
 **Owner:** Product test readiness
 **Status:** draft
-**Last reviewed:** 2026-08-19
+**Last reviewed:** 2026-08-20
 
 Purpose: give an admin tester a pass/fail path through the widest useful
 slice of the app before more feature work is added, on staging or a local
 build. This is a checklist to run, not a report of a run already performed --
-none of the steps below have been executed against staging as part of this
-discovery pass (no staging mutation or deploy was performed; see Scope note
-at the end).
+none of the steps below have been executed against staging (no staging
+mutation or deploy was performed; see Scope Note at the end).
 
 ---
 
-## Critical finding: browser cannot perform admin writes today
+## Admin Key setup (resolved 2026-08-20)
 
-**This blocks nearly every write step below and should be read before running
-the rest of this checklist.**
-
-`web/lib/api-client.js`'s shared `api()` helper -- used by every domain
-screen except Handicap Review -- never attaches an `Authorization` header.
 Every admin mutation route (league/team/player CRUD including quick-add,
-season setup CRUD, rules, skipped-weeks, bye-requests, season teams/roster,
-schedule generate/pushback-apply, lineup plan save/delete, match
-assign/results/rounds, week close/reopen, season close/reopen, and
-`POST /api/backup`) is gated by `clearanceAuth` / `systemAdminAuth`, both of
-which require a `Bearer <personal-key>` header and return 401 without one.
+season setup, rules, skipped-weeks, bye-requests, roster, schedule
+generate/pushback-apply, lineup plans, match assign/results/rounds, week
+close/reopen, season close/reopen, `POST /api/backup`) requires a
+`Bearer <personal-key>` header. Until 2026-08-20 nothing in the browser
+attached one -- see the branch history below if you need the original
+finding. `browser-admin-auth-bridge` closes that gap:
 
-Verified locally (not on staging) against the running dev server:
+- A new **Admin Key** button in the sidebar opens a small modal to paste a
+  personal API key (created via `POST /api/users` -- see Before You Start
+  step 3).
+- The key is stored in `sessionStorage` for that browser tab only (never
+  `localStorage`) -- gone when the tab closes, or immediately via the
+  modal's Clear button.
+- `web/lib/api-client.js`'s shared `api()` helper now attaches
+  `Authorization: Bearer <key>` to every request when a key is set. Every
+  domain screen that uses the shared client is covered automatically --
+  no per-screen changes were needed.
+- A 401 (no/expired key) or 403 (wrong role) now surfaces as a specific,
+  actionable toast ("Admin key required..." / "Admin key was rejected...")
+  instead of a generic error.
+- The static `LEAGUE_ADMIN_TOKEN` still never appears in browser code --
+  it's used once, server-side/via curl, to bootstrap the personal-key user.
+- **Handicap Review & Apply** (`web/domains/handicaps/handicap-review-component.js`)
+  keeps its own separate, already-working manual token field and
+  session-memory-only handling, unchanged -- it was not migrated to the
+  shared bridge (see the branch handoff for why).
 
-```
-POST /api/players  (no auth header) -> 401
-POST /api/leagues  (no auth header) -> 401
-POST /api/teams    (no auth header) -> 401
-POST /api/seasons  (no auth header) -> 401
-POST /api/backup   (no auth header) -> 401
-```
-
-The only exception is the **Handicap Review & Apply** screen
-(`web/domains/handicaps/handicap-review-component.js`), which has its own
-manually-typed "personal key" input field and attaches `Authorization`
-itself, bypassing the shared `api()` helper. Every other screen has no such
-field -- there is no login, session, or key-storage mechanism anywhere else
-in the frontend (`grep`-confirmed: `Authorization`/`Bearer`/`api_key` appear
-in exactly two files, both under `web/domains/handicaps/`).
-
-**Practical effect:** clicking Save/Add/Delete/Generate/Close/Reopen/Backup
-on any screen except Handicap Review will silently fail with a 401 toast.
-GET reads (browsing leagues, players, teams, seasons, schedule, standings,
-stats, dashboard) are unaffected and work normally in the browser.
-
-**Workaround for this checklist, until fixed:** bootstrap one personal-key
-user via curl (see Before You Start), then verify write behavior via curl
-instead of clicking the UI button. Each checklist section below marks which
-steps are browser-testable today and which need the curl workaround.
-
-**Recommended next branch:** see Recommended Next Branches at the end. This
-is the top-priority item.
+**What to do before testing:** open the app, click **Admin Key** in the
+sidebar, paste the key from Before You Start step 3, click Save. That one
+action now unblocks every write step in this checklist except Handicap
+Review, which still uses its own separate token field the first time you
+Apply a recommendation.
 
 ---
 
@@ -67,7 +57,7 @@ is the top-priority item.
 ```
 curl http://localhost:8080/healthz
 ```
-Expect `{"status":"ok"}`, 200. (Unauthenticated -- no bootstrap needed.) On
+Expect `{"status":"ok"}`, 200. (Unauthenticated -- no key needed.) On
 staging, substitute the staging URL; `GET /api/leagues` is what
 `scripts/deploy/staging-common.ps1`'s `Wait-StagingHealth` actually polls
 today, not `/healthz` -- both work, but they're not the same check
@@ -86,7 +76,7 @@ runs before testing there -- if unset, `Apply route: NOT MOUNTED` is logged
 at startup and `POST /api/users` (and Handicap Apply's static-token
 fallback) will not work either.
 
-### 3. Bootstrap one personal-key user (curl workaround, one-time per environment)
+### 3. Bootstrap one personal-key user
 
 ```
 curl -X POST http://localhost:8080/api/users \
@@ -97,9 +87,11 @@ curl -X POST http://localhost:8080/api/users \
 Every user created this way gets `role="admin"` (hardcoded in
 `backend/storage/sqlite/apply_auth_store.go`) -- the backward-compatible
 alias that satisfies both `league_admin`-tier routes and the stricter
-`system_admin`-tier backup route, so one bootstrap user covers every
-gated route in this checklist. Save the returned `api_key` (shown once,
-never re-retrievable) as `$KEY` for the curl commands below.
+`system_admin`-tier backup route, so one bootstrap user covers every gated
+route in this checklist. Save the returned `api_key` (shown once, never
+re-retrievable) -- paste it into the browser's **Admin Key** sidebar button
+(see above) for UI testing, and/or keep it as `$KEY` for any curl checks
+below.
 
 ```
 curl http://localhost:8080/api/users -H "Authorization: Bearer $env:LEAGUE_ADMIN_TOKEN"
@@ -136,9 +128,9 @@ season rules, skipped weeks, season teams with partial captain assignment
 UI state), season rosters (including partially-rostered draft seasons so the
 "available players" picker has something to show), and 13 explicit
 `handicap_history` rows for the 9-ball league. **No matches or schedule are
-seeded** -- schedule generation must be done by hand (or via curl, given the
-auth gap) against one of the seeded active seasons (season 2 or season 4)
-to exercise match entry, close week, standings, handicap review, or recap.
+seeded** -- schedule generation must be done by hand against one of the
+seeded active seasons (season 2 or season 4) to exercise match entry, close
+week, standings, handicap review, or recap.
 
 **Scoresheet fixtures (`db/scoresheet_fixtures.go`, via
 `-seed-scoresheet-fixtures`):** a separate, self-contained 4-team "Fixture
@@ -159,39 +151,39 @@ option to `seed-staging.ps1`. See Recommended Next Branches.
 2026-08-19) has no seed data exercising its "not ready" (disabled button)
 state -- every seeded/fixture lineup is complete. To see the disabled state,
 temporarily delete one `lineup_plans` row for an overdue week's team via
-`sqlite3` or a curl `DELETE /api/lineup-plans/{id}`, then restore it after.
-Not a bug -- just nothing in current seed data demonstrates the gate
-actually gating.
+`sqlite3` or a `DELETE /api/lineup-plans/{id}` (browser, with Admin Key set,
+or curl), then restore it after. Not a bug -- just nothing in current seed
+data demonstrates the gate actually gating.
 
 **Gap found:** Player safe-merge backend (Phase A, shipped 2026-08-19) has
 no admin UI yet (tracked as deferred in `doc/roadmap.md`). It can only be
 smoke-tested via curl today (see the Player Safe-Merge Backend section
-below).
+below) -- the Admin Key bridge doesn't change this, since there's no browser
+screen to test regardless of auth.
 
 ---
 
 ## Checklist
 
-Each item lists the browser path, then a pass/fail checkpoint. Steps marked
-**[AUTH-BLOCKED]** cannot be completed by clicking the UI today -- use the
-paired curl command instead, with `$KEY` from Before You Start step 3.
+Each item lists the browser path, then a pass/fail checkpoint. Write steps
+assume the Admin Key is already set (see above); a curl equivalent is given
+for anyone who prefers verifying the backend directly with `$KEY`.
 
 ### 1. League / Team / Player Setup
 
 - Browser: Dashboard -> "Manage Leagues" (sidebar) opens the league modal.
   - [ ] Existing leagues (Demo Pool League, Demo 9-Ball League) list correctly.
-  - [ ] **[AUTH-BLOCKED]** Creating/editing a league via the modal fails
-        with a 401 toast today.
+  - [ ] Creating/editing a league via the modal succeeds with Admin Key set.
     - curl check: `curl -X POST http://localhost:8080/api/leagues -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"name":"Smoke Test League","game_format":"8ball"}'` -> expect 201.
 - Browser: Teams nav.
   - [ ] Team list renders per active league, with rosters/captains as seeded.
-  - [ ] **[AUTH-BLOCKED]** Add/edit team fails with 401 in the browser.
+  - [ ] Add/edit team succeeds with Admin Key set.
     - curl check: `POST /api/teams` with `$KEY` -> expect 201.
 - Browser: Players nav.
   - [ ] Player list renders, sortable/filterable as designed, diff/handicap
         values match seed data.
-  - [ ] **[AUTH-BLOCKED]** "Add Player" (full modal) and Quick Add both fail
-        with 401 in the browser.
+  - [ ] "Add Player" (full modal) and Quick Add both succeed with Admin Key
+        set.
     - curl check: `POST /api/players` with `$KEY` -> expect 201.
 
 ### 2. Player Quick-Add Duplicate Warning (Phase A)
@@ -200,12 +192,9 @@ paired curl command instead, with `$KEY` from Before You Start step 3.
   "Rex Barlow" in Demo Pool League).
   - [ ] Warning appears naming the existing player and team, before create
         is attempted -- this check runs entirely client-side against the
-        already-loaded player list, so it fires even though the eventual
-        Add is auth-blocked. Confirms the warning logic itself independent
-        of the auth gap.
+        already-loaded player list, independent of the Admin Key.
   - [ ] Cancel closes the flow with no request sent.
-  - [ ] **[AUTH-BLOCKED]** "Add Anyway" still hits the same 401 as any other
-        create, once past the warning.
+  - [ ] "Add Anyway" succeeds with Admin Key set, once past the warning.
   - [ ] Typing a unique name shows no warning.
 
 ### 3. Player Safe-Merge Backend (Phase A, no UI)
@@ -230,7 +219,7 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
 
 - Browser: Seasons nav -> Add Season.
   - [ ] Form renders with league/name/dates/schedule-type fields.
-  - [ ] **[AUTH-BLOCKED]** Save fails with 401.
+  - [ ] Save succeeds with Admin Key set.
     - curl check: `POST /api/seasons` with `$KEY` -> expect 201.
   - [ ] Existing seasons list correctly with active/draft/historical status
         chips matching seed data (season 1 historical, season 2 active,
@@ -241,27 +230,27 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
 - Browser: Seasons nav -> open a season -> Teams tab.
   - [ ] Season 3 (draft) shows 4 of 6 teams registered, one team with no
         captain -- matches the seed data's intentional partial state.
-  - [ ] **[AUTH-BLOCKED]** Add/remove season team, set captain -- all 401.
+  - [ ] Add/remove season team, set captain -- all succeed with Admin Key set.
 - Browser: Seasons nav -> open a season -> Roster tab.
   - [ ] "Available players" list for season 3's partially-rostered teams
         shows the specific unrostered players noted in `scripts/seed.sql`
         comments (e.g. Opal Kwan, Nina Park for Bridge Over Troubled Cues).
-  - [ ] **[AUTH-BLOCKED]** Add/remove roster player -- 401.
+  - [ ] Add/remove roster player succeeds with Admin Key set.
 - Browser: Seasons nav -> open a season -> Rules tab.
   - [ ] Seeded rule values render (handicap_multiplier, etc.) for season 2/4.
-  - [ ] **[AUTH-BLOCKED]** Editing a rule value -- 401.
+  - [ ] Editing a rule value succeeds with Admin Key set.
 
 ### 6. Skipped Weeks, Bye Requests, Schedule Generation
 
 - Browser: Seasons nav -> Skipped Weeks.
   - [ ] Season 2's seeded skipped weeks (MLK Day, Memorial Day) render.
-  - [ ] **[AUTH-BLOCKED]** Add/remove a skipped week -- 401.
+  - [ ] Add/remove a skipped week succeeds with Admin Key set.
 - Browser: Seasons nav -> Bye Requests.
   - [ ] Empty state renders correctly (no bye requests are seeded).
-  - [ ] **[AUTH-BLOCKED]** Creating a bye request -- 401.
+  - [ ] Creating a bye request succeeds with Admin Key set.
 - Browser: Schedule nav -> Generate Schedule (for a season with no matches
   yet, e.g. season 2 or 4, or a fresh test season).
-  - [ ] **[AUTH-BLOCKED]** Generate -- 401.
+  - [ ] Generate succeeds with Admin Key set.
     - curl check: `POST /api/matches/generate` with `$KEY` -> expect 200
       and a generated match list on `GET /api/matches?season_id=...`.
 
@@ -269,11 +258,10 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
 
 - Browser: Schedule nav -> pushback controls (visible once a schedule
   exists).
-  - [ ] Preview (unauthenticated by design --
-        `pushback-preview` is intentionally unprotected despite POST) shows
-        the shift plan without requiring auth. This should work in the
-        browser today.
-  - [ ] **[AUTH-BLOCKED]** Apply Pushback -- 401.
+  - [ ] Preview (unauthenticated by design -- `pushback-preview` is
+        intentionally unprotected despite POST) shows the shift plan with or
+        without an Admin Key set.
+  - [ ] Apply Pushback succeeds with Admin Key set.
     - curl check: `POST /api/seasons/{id}/schedule/pushback-apply` with
       `$KEY`.
 
@@ -282,7 +270,7 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
 - Browser: Lineup nav.
   - [ ] Fixture league (if scoresheet fixtures were loaded) shows full
         3-player lineups per team per week.
-  - [ ] **[AUTH-BLOCKED]** Save/delete a lineup plan -- 401.
+  - [ ] Save/delete a lineup plan succeeds with Admin Key set.
     - curl check: `POST /api/lineup-plans` with `$KEY`.
 
 ### 9. Dashboard Score-Entry Readiness Gate (Phase A)
@@ -293,13 +281,12 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
         button (this is the only state current seed/fixture data produces
         -- see Data Readiness gap above).
   - [ ] To see the disabled state: temporarily remove a lineup_plans row for
-        an overdue week's team (curl `DELETE /api/lineup-plans/{id}` with
-        `$KEY`, or direct sqlite3 edit locally), reload Dashboard, confirm
-        the button is disabled with the "set lineups" explanatory link, then
-        restore the row.
+        an overdue week's team (browser with Admin Key set, curl, or direct
+        sqlite3 edit), reload Dashboard, confirm the button is disabled with
+        the "set lineups" explanatory link, then restore the row.
   - This whole check is read-driven (GET /api/matches, GET /api/lineup-plans)
-    and not affected by the auth gap -- only the "set lineups" link target
-    (Lineup Plans save) is auth-blocked, consistently with section 8.
+    and unaffected by the Admin Key either way -- only the "set lineups"
+    link target (Lineup Plans save) needs it, consistently with section 8.
 
 ### 10. Match Entry and Score Save
 
@@ -307,33 +294,32 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
   ready for entry).
   - [ ] Scoresheet renders with correct lineup, handicaps, and game-entry
         grid.
-  - [ ] **[AUTH-BLOCKED]** Save Scoresheet -- 401.
+  - [ ] Save Scoresheet succeeds with Admin Key set.
     - curl check: `POST /api/matches/{id}/rounds` with `$KEY` and a rounds
       payload -> expect 200, then confirm via `GET /api/matches/{id}/rounds`.
   - [ ] Week 3 fixture matches (pre-completed) display correctly as
         completed with correct adjusted scores and round-winner badges --
-        this is read-only and browser-testable today.
+        this is read-only and browser-testable regardless of the key.
 
 ### 11. Close / Reopen Week
 
 - Browser: Schedule nav -> Review & Close on a week with all matches scored
   (e.g. fixture week 3).
   - [ ] Validation preview renders (warnings, missing-score detection).
-  - [ ] **[AUTH-BLOCKED]** Confirm Close -- 401.
+  - [ ] Confirm Close succeeds with Admin Key set.
     - curl check: `POST /api/seasons/{id}/weeks/{week}/close` with `$KEY`.
-  - [ ] **[AUTH-BLOCKED]** Reopen Week button -- 401.
+  - [ ] Reopen Week button succeeds with Admin Key set.
     - curl check: `POST /api/seasons/{id}/weeks/{week}/reopen` with `$KEY`.
 
 ### 12. Standings and Player Stats
 
 - Browser: Standings nav / Player Stats nav, on a season with at least one
-  closed week (requires section 11's curl workaround first, since closing
-  is auth-blocked).
+  closed week (section 11).
   - [ ] Standings reflect only officially closed-week results (per
         `doc/roadmap.md`'s stated invariant).
   - [ ] Player Stats table renders per-player win/loss/diff correctly.
-  - Both are read-only GET screens -- fully browser-testable today once
-    at least one week is closed via the curl workaround.
+  - Both are read-only GET screens -- browser-testable regardless of the key,
+    once at least one week is closed.
 
 ### 13. Handicap Review / Apply
 
@@ -341,9 +327,10 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
   - [ ] Recommendations list renders (read-only, unauthenticated GET) for a
         season with closed-week history, e.g. the 9-ball league using its
         seeded `handicap_history` rows.
-  - [ ] This is the **one screen with a working browser auth path today**:
-        paste a personal key (from Before You Start step 3) into its manual
-        token field, then Apply a recommendation.
+  - [ ] This screen still uses its own, separate token field (unchanged by
+        the Admin Key bridge -- see the Admin Key setup section above):
+        paste a personal key into its manual token field the first time you
+        Apply a recommendation.
   - [ ] Applied change appears in the player's handicap and in
         `handicap_history`.
 
@@ -352,8 +339,8 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
 - Browser: Schedule nav -> Recap toggle on a closed week.
   - [ ] Recap panel renders match results, missing-match count, handicap
         changes applied, and next-week readiness -- fully read-only GET,
-        browser-testable today (once a week is closed via section 11's
-        curl workaround).
+        browser-testable regardless of the key (once a week is closed via
+        section 11).
 
 ### 15. Season Close / Reopen
 
@@ -362,18 +349,20 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
   - [ ] Season 1 (already historical/closed in seed data) shows the Reopen
         affordance and season 2 (active) shows the Close affordance,
         confirming button visibility logic without needing a write.
-  - [ ] **[AUTH-BLOCKED]** Close Season -- 401.
+  - [ ] Close Season succeeds with Admin Key set.
     - curl check: `POST /api/seasons/{id}/close` (exact path per
       `handlers/api_season_close_routes.go`) with `$KEY`.
-  - [ ] **[AUTH-BLOCKED]** Reopen Season -- 401.
+  - [ ] Reopen Season succeeds with Admin Key set.
 
 ### 16. Backup and Health Endpoint
 
 - Browser: sidebar "Backup DB" button.
-  - [ ] **[AUTH-BLOCKED]** Fails with 401 -- verified locally, see the
-        Critical Finding above. This button has never worked from the
-        browser since the Phase 6 backup-auth rollout
-        (`doc/roadmap.md`, "Then" section, Phase 6, 2026-08-08).
+  - [ ] Succeeds with Admin Key set (`role=admin` from bootstrap satisfies
+        the stricter system-admin-tier check this route uses). Confirmed
+        locally via a real browser-equivalent smoke test -- see the branch
+        handoff for detail; this button had never worked from the browser
+        since the Phase 6 backup-auth rollout
+        (`doc/roadmap.md`, "Then" section, Phase 6, 2026-08-08) until now.
     - curl check: `POST /api/backup` with `$KEY` -> expect 200 and a backup
       file path in the response; confirm the file exists in the data
       directory's backup location.
@@ -385,45 +374,44 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
 
 ## Known Gaps Summary
 
-| # | Gap | Severity | Where |
-|---|-----|----------|-------|
-| 1 | Browser cannot perform any admin write except Handicap Apply -- shared `api()` client never sends an Authorization header, and no other screen has a way to obtain/store a personal key | **Critical** | `web/lib/api-client.js`, all domain screens except handicaps |
-| 2 | `seed-staging.ps1` does not load scoresheet fixtures, so a freshly seeded staging has no matches to test match-entry/close-week/standings/handicap/recap without manual schedule generation | Medium | `scripts/deploy/seed-staging.ps1` |
-| 3 | No seed/fixture data demonstrates the Dashboard readiness gate's "disabled" state | Low | seed data only; documented workaround above |
-| 4 | Player safe-merge has no admin UI (already tracked as deferred in `doc/roadmap.md`) | Low (known/tracked) | `doc/roadmap.md` "Player record maintenance" |
-| 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` |
+| # | Gap | Severity | Where | Status |
+|---|-----|----------|-------|--------|
+| 1 | Browser could not perform any admin write except Handicap Apply | ~~Critical~~ | `web/lib/api-client.js` | **Resolved 2026-08-20** by `browser-admin-auth-bridge` -- see Admin Key setup above |
+| 2 | `seed-staging.ps1` does not load scoresheet fixtures, so a freshly seeded staging has no matches to test match-entry/close-week/standings/handicap/recap without manual schedule generation | Medium | `scripts/deploy/seed-staging.ps1` | Open |
+| 3 | No seed/fixture data demonstrates the Dashboard readiness gate's "disabled" state | Low | seed data only; documented workaround above | Open |
+| 4 | Player safe-merge has no admin UI (already tracked as deferred in `doc/roadmap.md`) | Low (known/tracked) | `doc/roadmap.md` "Player record maintenance" | Open |
+| 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` | Open |
 
 ## Recommended Next Branches
 
-1. **`browser-admin-auth-bridge`** (highest priority -- unblocks nearly every
-   item in this checklist). Smallest safe shape: generalize the pattern
-   already proven on the Handicap Review screen -- a single place in the
-   shell (e.g. a sidebar field or small settings panel) where an admin
-   pastes a personal key once per browser session, stored in memory or
-   `sessionStorage`, with `web/lib/api-client.js`'s shared `api()` helper
-   attaching it to every request when present. This matches the roadmap's
-   own framing ("browser sessions and JWTs are deferred until... a users
-   management screen creates the concrete need") -- a paste-once bridge is
-   not full session/JWT work, just closing the gap the existing
-   `clearanceAuth` rollout left open on the frontend side.
-2. **`staging-seed-fixtures-option`** -- add an opt-in switch to
-   `seed-staging.ps1` to also run `-seed-scoresheet-fixtures`, so a fresh
-   staging seed has ready-to-use match data without manual schedule
-   generation. Small, isolated, deploy-tooling-only change.
-3. Everything else discovered above (dashboard gate demo data, staging
+1. **`staging-seed-fixtures-option`** (now top priority, since the auth
+   bridge is done) -- add an opt-in switch to `seed-staging.ps1` to also run
+   `-seed-scoresheet-fixtures`, so a fresh staging seed has ready-to-use
+   match data without manual schedule generation. Small, isolated,
+   deploy-tooling-only change.
+2. Everything else discovered above (dashboard gate demo data, staging
    health-check endpoint choice, merge UI) is low severity and can stay
-   backlog until the auth bridge unblocks broader testing and shows whether
-   they're still worth prioritizing.
+   backlog until a broader staging pass with the Admin Key bridge shows
+   whether they're still worth prioritizing.
+3. Once staging data is ready, actually run this checklist against staging
+   end to end and record real pass/fail results here -- everything above is
+   still a checklist to run, not a completed run.
 
 ---
 
 ## Scope Note
 
-This discovery pass inspected code, deploy/seed scripts, and the local dev
-database; it made no staging deployment, no staging data mutation, and no
-staging network calls. All empirical checks (the 401 confirmations,
-`/healthz`, env var checks) were run against the local dev server and local
-Windows environment only, per the "do not mutate staging data or deploy
-unless PM explicitly asks" instruction. Running this checklist against
-actual staging is the next step once PM decides how to sequence it against
-the `browser-admin-auth-bridge` branch above.
+This document's data/gap findings came from inspecting code, deploy/seed
+scripts, and the local dev database -- no staging deployment, staging data
+mutation, or staging network calls were made at any point. The Admin Key
+bridge (2026-08-20) was verified locally: `node --check` on all changed/new
+JS, the full Go test suite, and a real functional smoke test that loaded
+the actual shipped `web/lib/admin-key-store.js` and `web/lib/api-client.js`
+source into a sandboxed Node context and drove the real `api()` function
+against the local dev server -- confirming the friendly 401 message with no
+key, a successful `POST /api/players` after `setAdminKey()`, a return to
+the 401 after `clearAdminKey()`, and unaffected GET reads throughout. Also
+curl-verified `POST /api/leagues`, `/api/teams`, `/api/seasons`, and
+`/api/backup` directly against the real key. All test data created during
+that smoke test was cleaned up afterward. Running this checklist against
+actual staging is still the next step.

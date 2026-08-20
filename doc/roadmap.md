@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-19
+**Last reviewed:** 2026-08-20
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -42,6 +42,12 @@ These items should stay small enough to review and ship independently.
     highest-value gaps into focused follow-up branches.
   - Treat Player merge UI, default lineup setup, and other polish as follow-up
     candidates after this readiness pass identifies what most blocks testing.
+  - The checklist's top blocker -- the browser could not perform any admin
+    write except Handicap Apply -- is resolved; see "Browser admin auth
+    bridge" in Completed / Largely Completed below. Remaining before a full
+    staging run: seed staging with the scoresheet fixtures, or generate a
+    schedule by hand, so match-entry/close-week/standings/handicap/recap
+    have data to exercise there.
 
 - Domain and data-access restructuring.
   - Major domains (matches, handicaps, seasons, leagues, players, teams) have
@@ -443,6 +449,24 @@ follow-up.
   Missing matches are excluded from standings until resolved. Deferred: team-
   level record and stat summaries, recommendation-change detail in recap,
   print/export, persisted recap snapshots.
+- Browser admin auth bridge (2026-08-20). Every admin mutation route
+  requires a personal-key Bearer token, but the shared frontend `api()`
+  client (`web/lib/api-client.js`) never attached one -- discovered during
+  the Product Test Readiness pass (`doc/testing/product-smoke-test-checklist.md`),
+  where it was the top blocker to browser-based smoke testing. Added
+  `web/lib/admin-key-store.js`, holding a personal key in `sessionStorage`
+  (never `localStorage`) for the current browser tab; a new "Admin Key"
+  button/modal in the shell sidebar to paste or clear it; and `api()` now
+  attaches `Authorization: Bearer <key>` to every request when one is set,
+  covering every domain screen that uses the shared client with no
+  per-screen changes. 401/403 responses now surface as specific, actionable
+  toasts instead of a generic error. The static `LEAGUE_ADMIN_TOKEN` still
+  never appears in browser code -- it is only ever used server-side or via
+  curl to bootstrap a personal-key user. Handicap Review & Apply keeps its
+  own separate, already-working manual token field unchanged -- not
+  migrated, since doing so was not clearly simpler and risked its existing
+  retry/clear-on-403 behavior for no scope benefit. No backend auth policy
+  changed.
 
 ## Open Questions To Resolve
 

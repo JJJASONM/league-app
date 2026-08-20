@@ -39,6 +39,7 @@
 
     <div class="mt-auto px-3 pb-3">
       <button class="btn btn-sm btn-outline-secondary w-100 mb-2" data-action="manage-leagues"><i class="bi bi-gear"></i> Manage Leagues</button>
+      <button class="btn btn-sm btn-outline-secondary w-100 mb-2" data-action="admin-key" id="admin-key-btn"><i class="bi bi-key"></i> <span id="admin-key-status">Admin Key</span></button>
       <button class="btn btn-sm btn-outline-secondary w-100" data-action="backup"><i class="bi bi-cloud-download"></i> Backup DB</button>
     </div>
   </nav>
@@ -173,8 +174,37 @@
   </div>
 </div>
 
+<!-- Admin Key Modal -->
+<div class="modal fade" id="admin-key-modal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title mb-0">Admin Key</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted">
+          Paste a personal API key (created via <code>POST /api/users</code>)
+          to enable admin actions -- create/edit/delete, schedule generation,
+          close week, backup, and similar -- in this browser tab. Stored only
+          in this tab's session storage; cleared when the tab closes, or by
+          Clear below.
+        </p>
+        <label class="form-label small mb-1" for="admin-key-input">Personal API key</label>
+        <input type="password" class="form-control form-control-sm" id="admin-key-input" autocomplete="off" placeholder="Personal API key&hellip;">
+        <div class="form-text" id="admin-key-current-status"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-danger btn-sm" id="admin-key-clear-btn">Clear</button>
+        <button type="button" class="btn btn-primary btn-sm" id="admin-key-save-btn">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/lib/html-escape.js" defer></script>
+    <script src="/lib/admin-key-store.js" defer></script>
     <script src="/lib/api-client.js" defer></script>
     <script src="/lib/ui-feedback.js" defer></script>
     <script src="/lib/app-context.js" defer></script>
