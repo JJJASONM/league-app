@@ -37,7 +37,7 @@ to test player-stats against real team-assigned players). Confirmed
 restored to baseline afterward: match counts per season, fixture week
 statuses (all open), and season-2 rule value all matched the pre-run state.
 
-### Critical blocker found: bodyless POST fails on staging (IIS), independent of the Admin Key
+### Critical blocker found 2026-08-23, fixed (locally verified; staging re-verification pending): bodyless POST fails on staging (IIS), independent of the Admin Key
 
 Five real sidebar/screen buttons call the shared `api()` client with **no
 body argument**: Backup DB (`POST /backup`), Season Activate
@@ -69,7 +69,21 @@ calls `res.json()` unconditionally, so a real browser hitting this would
 get a JSON-parse exception on top of the 411, not even the friendly error
 message path. **This means Backup DB, Close/Reopen Season, and Reopen Week
 do not work from the browser on staging today even with an Admin Key set.**
-See Recommended Next Branches for the fix.
+
+**Fix status (2026-08-23, `api-client-bodyless-post-fix`):** `api()` now
+sends a real `'{}'` body for `POST`/`PUT`/`PATCH` calls when the caller
+passes none, instead of omitting the body entirely -- `GET`/`DELETE` are
+unchanged, matching the earlier finding that bodyless `DELETE` was never
+affected. **Locally verified**: loaded the actual shipped
+`web/lib/api-client.js` into a sandboxed Node context with a `fetch` spy
+and confirmed `api('POST', '/backup')` (and `PUT`/`PATCH` with no body) now
+send `opts.body === '{}'`, while `GET`/`DELETE` still send no body and an
+explicit body still passes through unchanged -- 6/6 cases passed. **Not yet
+re-verified against real staging behind IIS** -- that needs a deploy, which
+this branch did not perform (scope was implementation + local verification
+only). Until that re-verification happens, treat this as fixed-in-code and
+locally proven, not yet confirmed to have actually resolved the IIS 411 in
+the environment where it was originally observed.
 
 ---
 
@@ -636,7 +650,7 @@ sequence -- but worth a friendlier error message.
 | 3 | No seed/fixture data demonstrates the Dashboard readiness gate's "disabled" state | Low | seed data only; documented workaround above | Open |
 | 4 | Player safe-merge has no admin UI (already tracked as deferred in `doc/roadmap.md`) | Low (known/tracked) | `doc/roadmap.md` "Player record maintenance" | Open |
 | 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` | Open |
-| 6 | Bodyless `POST` calls (Backup, Season Activate/Close/Reopen, Reopen Week) return IIS 411 on staging, independent of the Admin Key -- discovered 2026-08-23 | **Critical** | `web/lib/api-client.js` (doesn't send a body when none is passed) | Open -- see Recommended Next Branches |
+| 6 | Bodyless `POST` calls (Backup, Season Activate/Close/Reopen, Reopen Week) return IIS 411 on staging, independent of the Admin Key -- discovered 2026-08-23 | ~~Critical~~ | `web/lib/api-client.js` (doesn't send a body when none is passed) | **Fixed in code 2026-08-23** by `api-client-bodyless-post-fix`, locally verified -- staging re-verification still pending a deploy, not yet fully closed |
 | 7 | `GET /api/player-stats` silently returns empty for players assigned only via `season_rosters`/`lineup_plans` without a direct `players.team_id` -- discovered 2026-08-23 | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | Open -- does not affect current seed/fixture data (which always sets `team_id`), but is a landmine for season-roster-only workflows |
 | 8 | Week Recap's embedded handicap preview and the dedicated Handicap Recommendations endpoint disagree on eligibility for the same season/players -- discovered 2026-08-23 | Medium | `backend/domains/handicaps/service.go` `HandicapPreview` vs `Recommendations` | Open |
 | 9 | No way to cleanly undo a generated schedule (`Generate Schedule` has no matching `DELETE`) short of deleting the whole season/league -- discovered 2026-08-23 | Low | `handlers/api_match_routes.go` (no `DELETE /api/matches/{id}`) | Open |
@@ -645,15 +659,16 @@ sequence -- but worth a friendlier error message.
 
 ## Recommended Next Branches
 
-1. **`api-client-bodyless-post-fix`** (highest priority -- new, critical,
-   staging-specific). Make `web/lib/api-client.js`'s `api()` always send a
-   real body (e.g. `'{}'`) for `POST`/`PUT` when the caller passes none,
-   instead of omitting the body entirely. This is a small, low-risk,
-   frontend-only change that unblocks Backup DB, Season Activate, Season
-   Close, Season Reopen, and Reopen Week on staging -- all five currently
-   fail with a raw IIS 411 page even with a valid Admin Key set. Smallest
-   safe fix found during this pass; did not apply it here since this branch
-   is evidence/reporting only per scope.
+1. **`api-client-bodyless-post-fix`** -- **implemented and locally verified
+   2026-08-23**, staging re-verification still pending. `api()` now always
+   sends a real body (`'{}'`) for `POST`/`PUT`/`PATCH` when the caller
+   passes none, instead of omitting the body entirely; `GET`/`DELETE`
+   unchanged. This should unblock Backup DB, Season Activate, Season Close,
+   Season Reopen, and Reopen Week on staging, but that has not been
+   confirmed against the actual IIS environment yet -- the next step is a
+   PM-approved deploy followed by re-testing those five actions on real
+   staging (repeat the relevant curl checks in sections 6/15/16 above, or
+   click the buttons directly) before this is fully closed out.
 2. **`player-stats-roster-join-fix`** -- change `GetPlayerStats`'s SQL to
    resolve team via `season_rosters` (or a `LEFT JOIN` that doesn't drop
    roster-only players) instead of an INNER JOIN on the legacy

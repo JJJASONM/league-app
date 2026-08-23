@@ -49,8 +49,18 @@ These items should stay small enough to review and ship independently.
     now has an opt-in `-SeedFixtures` switch to load the scoresheet fixtures
     right after the base seed, so match-entry/close-week/standings/
     handicap/recap have data to exercise on staging without generating a
-    schedule by hand; see "Staging seed fixtures option" below. What
-    remains is simply running the checklist against staging end to end.
+    schedule by hand; see "Staging seed fixtures option" below.
+  - The checklist was run against real staging 2026-08-23; see "Staging
+    product smoke pass" below for the full results. It found one new
+    critical, staging-only blocker (bodyless `POST` calls -- Backup,
+    Season Activate/Close/Reopen, Reopen Week -- rejected with IIS 411
+    regardless of the Admin Key) plus several smaller product findings.
+    The critical one is fixed in code and locally verified as of
+    2026-08-23 (`api-client-bodyless-post-fix`); staging re-verification
+    after a deploy is the one remaining step before this readiness pass is
+    fully closed out. See Completed / Largely Completed below for both
+    entries and `doc/testing/product-smoke-test-checklist.md` for full
+    detail on every other finding.
 
 - Domain and data-access restructuring.
   - Major domains (matches, handicaps, seasons, leagues, players, teams) have
@@ -485,6 +495,43 @@ follow-up.
   `.codex/skills/deploy-staging/scripts/` mirror of these staging scripts
   has drifted out of sync independent of this work and does not have this
   switch either.
+- Staging product smoke pass (2026-08-23). Ran
+  `doc/testing/product-smoke-test-checklist.md` against real
+  `http://league-staging.local` for the first time (no browser automation
+  available, so every result is API-verified via curl or explicitly marked
+  NOT VERIFIED for pure rendering checks). Confirmed the core workflow
+  chain works end to end against real staging data: league/team/player
+  CRUD, quick-add's create call, all four player-merge outcomes, season
+  create/setup/rosters/rules, skipped weeks, schedule generation, pushback
+  preview/apply, lineup plans, match entry/score save, close/reopen week,
+  standings, handicap-recommendation eligibility gating, week recap, and
+  season close/reopen. Found one new critical, staging-only blocker
+  (bodyless `POST` -- see "API client bodyless POST fix" below) plus four
+  smaller product findings, all documented with full evidence in the
+  checklist doc: `GET /api/player-stats` drops players not assigned via the
+  legacy `players.team_id`; Week Recap's handicap preview and the
+  dedicated Handicap Recommendations endpoint disagree on eligibility for
+  the same season; no way to cleanly undo a generated schedule; and two
+  low-severity rough edges (a leaked-SQL 500 on a season-team name
+  collision, a response-echo gap on season-rule updates). Used a disposable
+  sandbox league/season for schedule/lineup/match-entry/close-week flows
+  rather than real seeded data, and confirmed staging was fully restored to
+  its pre-run baseline afterward. Did not fix any of the bugs found (out of
+  scope for that branch).
+- API client bodyless POST fix (2026-08-23, implemented and locally
+  verified; staging re-verification pending). `web/lib/api-client.js`'s
+  `api()` now sends a real `'{}'` body for `POST`/`PUT`/`PATCH` calls when
+  the caller passes none, instead of omitting the body entirely --
+  `GET`/`DELETE` unchanged, since the smoke pass confirmed bodyless
+  `DELETE` was never affected. Fixes the critical finding from the staging
+  smoke pass: IIS in front of staging rejects a bodyless `POST` with 411
+  before it reaches the Go app, breaking Backup DB, Season
+  Activate/Close/Reopen, and Reopen Week regardless of the Admin Key.
+  Verified locally by loading the actual shipped source into a sandboxed
+  Node context with a `fetch` spy and confirming `POST`/`PUT`/`PATCH` now
+  send `'{}'`, `GET`/`DELETE` still send nothing, and an explicit body still
+  passes through unchanged. Not yet re-verified against the real staging
+  IIS environment -- that needs a deploy, which is the next step.
 
 ## Open Questions To Resolve
 
