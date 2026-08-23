@@ -1,14 +1,75 @@
 # Product Smoke-Test Checklist
 
 **Owner:** Product test readiness
-**Status:** draft
-**Last reviewed:** 2026-08-20
+**Status:** staging run complete 2026-08-23 -- see Staging Run Results
+**Last reviewed:** 2026-08-23
 
 Purpose: give an admin tester a pass/fail path through the widest useful
 slice of the app before more feature work is added, on staging or a local
-build. This is a checklist to run, not a report of a run already performed --
-none of the steps below have been executed against staging (no staging
-mutation or deploy was performed; see Scope Note at the end).
+build.
+
+---
+
+## Staging Run Results (2026-08-23)
+
+Run against `http://league-staging.local` (DEPLOY-STAGING + SEED-STAGING
+`-SeedFixtures` already complete per the PM handoff). **No browser
+automation is available in this environment**, so every result below comes
+from one of two sources, labeled per item:
+
+- **API-verified**: a real HTTP call against staging (via curl), showing
+  the exact request and response. This is solid evidence the backend
+  behavior works, but does not confirm how it renders or reads on screen.
+- **NOT VERIFIED (no browser)**: a pure rendering/visual/click-flow check
+  that requires an actual browser, which this environment cannot drive.
+  Marked explicitly rather than guessed at.
+
+All write checks used a real personal-key user
+(`smoke-pass-2026-08-23`, role `admin`, bootstrapped via
+`POST /api/users` with `LEAGUE_ADMIN_TOKEN`) and a dedicated, fully
+disposable sandbox league/season built and deleted for this run wherever a
+check needed real data flow (schedule generation, pushback, lineups, match
+entry, close/reopen) -- see the sandbox note under section 6. Real seeded
+data (Demo Pool League, Demo 9-Ball League, Fixture Scoresheet League) was
+only ever read, with two narrow, fully-reversed exceptions noted inline
+(a season-2 rule edited and reverted; fixture week 3 closed and reopened
+to test player-stats against real team-assigned players). Confirmed
+restored to baseline afterward: match counts per season, fixture week
+statuses (all open), and season-2 rule value all matched the pre-run state.
+
+### Critical blocker found: bodyless POST fails on staging (IIS), independent of the Admin Key
+
+Five real sidebar/screen buttons call the shared `api()` client with **no
+body argument**: Backup DB (`POST /backup`), Season Activate
+(`POST /seasons/{id}/activate`), Season Close (`POST /seasons/{id}/close`),
+Season Reopen (`POST /seasons/{id}/reopen`), and Reopen Week
+(`POST /seasons/{id}/weeks/{week}/reopen`). `api()` only sets `opts.body`
+`if (body !== undefined)`, so these four requests go out with no body and
+no `Content-Length` at all.
+
+On staging, IIS rejects that outright:
+
+```
+POST /api/backup  (Admin Key present, no body) -> HTTP 411 Length Required
+  <HTML>... The request must be chunked or have a content length. ...</HTML>
+```
+
+Confirmed the same for `.../activate` and `.../reopen` (hit this
+mid-checklist -- see sections 6/15/16 below). A matching bodyless `DELETE`
+(`DELETE /api/players/999999`, no body) returned a normal 200 -- **IIS only
+enforces this on POST**, so every `DELETE` call in the frontend is
+unaffected; only these five bodyless `POST` calls are.
+
+This is **new**, staging-specific, and distinct from the auth gap
+`browser-admin-auth-bridge` fixed: it happens after a valid Admin Key is
+already attached, only shows up behind IIS (local dev has no reverse proxy
+in front of it, which is why `browser-admin-auth-bridge`'s local smoke test
+never saw it), and the response is a raw IIS HTML page, not JSON -- `api()`
+calls `res.json()` unconditionally, so a real browser hitting this would
+get a JSON-parse exception on top of the 411, not even the friendly error
+message path. **This means Backup DB, Close/Reopen Season, and Reopen Week
+do not work from the browser on staging today even with an Admin Key set.**
+See Recommended Next Branches for the fix.
 
 ---
 
@@ -181,30 +242,52 @@ for anyone who prefers verifying the backend directly with `$KEY`.
 ### 1. League / Team / Player Setup
 
 - Browser: Dashboard -> "Manage Leagues" (sidebar) opens the league modal.
-  - [ ] Existing leagues (Demo Pool League, Demo 9-Ball League) list correctly.
-  - [ ] Creating/editing a league via the modal succeeds with Admin Key set.
-    - curl check: `curl -X POST http://localhost:8080/api/leagues -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"name":"Smoke Test League","game_format":"8ball"}'` -> expect 201.
+  - [x] Existing leagues (Demo Pool League, Demo 9-Ball League) list correctly.
+        **API-verified**: `GET /api/leagues` returns exactly the 3 expected
+        leagues (2 seeded + Fixture Scoresheet League). Modal rendering
+        itself: NOT VERIFIED (no browser).
+  - [x] Creating/editing a league via the modal succeeds with Admin Key set.
+        **API-verified** against staging: `POST /api/leagues` -> 201
+        (created id 4), `PUT /api/leagues/4` -> 200 (name updated),
+        `DELETE /api/leagues/4` -> 200. Cleaned up; final league count back
+        to 3. Modal click-flow itself: NOT VERIFIED (no browser).
 - Browser: Teams nav.
-  - [ ] Team list renders per active league, with rosters/captains as seeded.
-  - [ ] Add/edit team succeeds with Admin Key set.
-    - curl check: `POST /api/teams` with `$KEY` -> expect 201.
+  - [x] Team list renders per active league, with rosters/captains as seeded.
+        **API-verified**: `GET /api/teams?league_id=1` returns the expected
+        6 seeded teams. Visual rendering: NOT VERIFIED (no browser).
+  - [x] Add/edit team succeeds with Admin Key set.
+        **API-verified**: `POST /api/teams` -> 201 (created, then deleted
+        via the league cascade during cleanup).
 - Browser: Players nav.
   - [ ] Player list renders, sortable/filterable as designed, diff/handicap
-        values match seed data.
-  - [ ] "Add Player" (full modal) and Quick Add both succeed with Admin Key
-        set.
-    - curl check: `POST /api/players` with `$KEY` -> expect 201.
+        values match seed data. **NOT VERIFIED (no browser)** -- confirmed
+        the underlying data is correct (`GET /api/players?league_id=1`
+        returns 23 players, handicaps match seed values spot-checked
+        against `scripts/seed.sql`), but sort/filter UI behavior needs an
+        actual browser.
+  - [x] "Add Player" (full modal) and Quick Add both succeed with Admin Key
+        set. **API-verified**: `POST /api/players` -> 201 (both the full-
+        create and quick-add-shaped payloads use the same endpoint/body
+        shape, so one verification covers both). Modal/quick-add UI itself:
+        NOT VERIFIED (no browser).
 
 ### 2. Player Quick-Add Duplicate Warning (Phase A)
 
 - Browser: Players nav -> Quick Add -> type an existing player's name (e.g.
   "Rex Barlow" in Demo Pool League).
   - [ ] Warning appears naming the existing player and team, before create
-        is attempted -- this check runs entirely client-side against the
-        already-loaded player list, independent of the Admin Key.
-  - [ ] Cancel closes the flow with no request sent.
+        is attempted. **NOT VERIFIED (no browser)** -- this is pure
+        client-side JS logic (`normalizeFullName` comparison) with no
+        distinguishable API call to observe; confirmed the supporting data
+        exists (`GET /api/players?league_id=1` includes id 16, "Rex
+        Barlow", team "Eight Is Enough", matching the checklist's example)
+        but the warning itself needs an actual browser to see fire.
+  - [ ] Cancel closes the flow with no request sent. NOT VERIFIED (no browser).
   - [ ] "Add Anyway" succeeds with Admin Key set, once past the warning.
-  - [ ] Typing a unique name shows no warning.
+        The underlying create call is the same `POST /api/players` already
+        API-verified in section 1; the "past the warning" click-flow
+        itself is NOT VERIFIED (no browser).
+  - [ ] Typing a unique name shows no warning. NOT VERIFIED (no browser).
 
 ### 3. Player Safe-Merge Backend (Phase A, no UI)
 
@@ -214,170 +297,333 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"target_id": <target_id>}'
 ```
-  - [ ] A safe merge (two players with no overlapping season/round/lineup
-        data) returns 200 with `{"status":"merged",...}`.
-  - [ ] An unsafe merge (e.g. two players already on rosters in the same
-        season) returns 409 with a Conflict message.
-  - [ ] Same-ID merge returns 400; a nonexistent player ID returns 404.
+  - [x] A safe merge (two players with no overlapping season/round/lineup
+        data) returns 200 with `{"status":"merged",...}`. **API-verified**:
+        created two throwaway players, merged source into target ->
+        `{"source_id":54,"status":"merged","target_id":55}`, HTTP 200.
+  - [x] An unsafe merge (e.g. two players already on rosters in the same
+        season) returns 409 with a Conflict message. **API-verified**:
+        merged two real Fixture Scoresheet League players from different
+        teams in the same season -> HTTP 409, `"source and target are both
+        rostered in the same season; resolve the roster before merging"`.
+        Confirmed neither fixture player was actually touched afterward.
+  - [x] Same-ID merge returns 400; a nonexistent player ID returns 404.
+        **API-verified**: same-ID -> HTTP 400,
+        `"source and target player must be different"`; player 999999 ->
+        HTTP 404, `"source player not found"`.
+  - All four throwaway/test players created for this section were deleted
+    afterward; no real seeded data was left modified.
   - Backend correctness for this endpoint is already covered by 23 automated
-    tests (service + SQLite integration + handler/route); this step is
-    about confirming it behaves the same way against real seeded data, not
+    tests (service + SQLite integration + handler/route); this step
+    confirmed it behaves the same way against real staging data, not
     re-proving the logic.
 
 ### 4. Season Creation
 
 - Browser: Seasons nav -> Add Season.
-  - [ ] Form renders with league/name/dates/schedule-type fields.
-  - [ ] Save succeeds with Admin Key set.
-    - curl check: `POST /api/seasons` with `$KEY` -> expect 201.
-  - [ ] Existing seasons list correctly with active/draft/historical status
-        chips matching seed data (season 1 historical, season 2 active,
-        season 3 draft, for the 8-ball league).
+  - [ ] Form renders with league/name/dates/schedule-type fields. NOT
+        VERIFIED (no browser).
+  - [x] Save succeeds with Admin Key set. **API-verified**:
+        `POST /api/seasons` -> 201 (created id 7), then
+        `DELETE /api/seasons/7` -> 200 to clean up.
+  - [x] Existing seasons list correctly with active/draft/historical status
+        chips matching seed data. **API-verified** (data, not the chip UI):
+        `GET /api/seasons?league_id=1` returned season 1 "Fall 2025"
+        (active=false, activated_at set -- historical), season 2 "Spring
+        2026" (active=true -- active), season 3 "Summer 2026" (active=false,
+        activated_at null -- draft), exactly matching the documented seed
+        state. Chip rendering itself: NOT VERIFIED (no browser).
 
 ### 5. Teams, Rosters, Rules (Season Setup)
 
 - Browser: Seasons nav -> open a season -> Teams tab.
-  - [ ] Season 3 (draft) shows 4 of 6 teams registered, one team with no
-        captain -- matches the seed data's intentional partial state.
-  - [ ] Add/remove season team, set captain -- all succeed with Admin Key set.
+  - [x] Season 3 (draft) shows 4 of 6 teams registered, one team with no
+        captain. **API-verified**: `GET /api/seasons/3/teams` returned
+        exactly 4 teams; "Bridge Over Troubled Cues" has `captain_id: null`,
+        the other 3 have captains set -- matches the documented seed state
+        exactly. Tab UI itself: NOT VERIFIED (no browser).
+  - [x] Add/remove season team, set captain -- all succeed with Admin Key
+        set. **API-verified** in the disposable sandbox (section 6): season
+        team creation (`POST /api/seasons/{id}/teams`), captain assignment
+        (`PUT /api/seasons/{id}/teams/{tid}`) both returned 200/201.
+        Found and reverted a real-data side effect below.
 - Browser: Seasons nav -> open a season -> Roster tab.
-  - [ ] "Available players" list for season 3's partially-rostered teams
+  - [x] "Available players" list for season 3's partially-rostered teams
         shows the specific unrostered players noted in `scripts/seed.sql`
-        comments (e.g. Opal Kwan, Nina Park for Bridge Over Troubled Cues).
-  - [ ] Add/remove roster player succeeds with Admin Key set.
+        comments. **API-verified**: `GET /api/seasons/3/players/available`
+        includes both Opal Kwan (id 5) and Nina Park (id 7), exactly as
+        documented. List UI itself: NOT VERIFIED (no browser).
+  - [x] Add/remove roster player succeeds with Admin Key set.
+        **API-verified** directly against the real season 3 data (fully
+        reversible, so used real data instead of the sandbox): added Opal
+        Kwan to team 2's roster (`POST .../roster` -> 201, `roster_count`
+        went from 2 to 3), then removed her again (`DELETE .../roster/5` ->
+        200). Confirmed `roster_count` back to 2 afterward -- no net change
+        to real seed data.
 - Browser: Seasons nav -> open a season -> Rules tab.
-  - [ ] Seeded rule values render (handicap_multiplier, etc.) for season 2/4.
-  - [ ] Editing a rule value succeeds with Admin Key set.
+  - [x] Seeded rule values render (handicap_multiplier, etc.) for season 2/4.
+        **API-verified**: `GET /api/seasons/2/rules` returned all 4 seeded
+        rules with the exact documented values. Tab UI itself: NOT VERIFIED
+        (no browser).
+  - [x] Editing a rule value succeeds with Admin Key set. **API-verified**
+        directly against real season 2 data (fully reversible): changed
+        `max_individual_handicap` from 4.5 to 5.0 (`PUT .../rules/2` -> 200),
+        confirmed via GET, then reverted to 4.5 (-> 200), confirmed via GET
+        again. **Minor finding**: the PUT response body itself echoes back
+        `"season_id":0,"rule_key":""` instead of the real values (`2` and
+        `"max_individual_handicap"`) -- the actual stored row is correct
+        (confirmed via a follow-up GET both times), so this is just a
+        confusing response-echo gap, not a data-correctness bug. Worth a
+        tiny fix but not urgent.
 
 ### 6. Skipped Weeks, Bye Requests, Schedule Generation
 
+**Sandbox note:** sections 6-11 and 15 needed real write/generate/close
+flows, and there is no `DELETE /api/matches/{id}` endpoint -- a generated
+schedule cannot be cleanly undone except by deleting the whole season
+(itself destructive to anything else on that season) or the whole league.
+Rather than risk leaving unremovable generated matches on a real seeded
+season, I built one throwaway league/season/2-teams/6-players sandbox
+("Smoke Sandbox League" / "Smoke Sandbox Season"), exercised the rest of
+this checklist against it, and deleted the whole league at the end
+(cascades everything). **This is itself a real finding**: "Generate
+Schedule" has no clean undo path against real data -- see Known Gaps below.
+
 - Browser: Seasons nav -> Skipped Weeks.
-  - [ ] Season 2's seeded skipped weeks (MLK Day, Memorial Day) render.
-  - [ ] Add/remove a skipped week succeeds with Admin Key set.
+  - [x] Season 2's seeded skipped weeks (MLK Day, Memorial Day) render.
+        **API-verified**: `GET /api/seasons/2/skipped-weeks` returned both,
+        exact dates and reasons. Rendering itself: NOT VERIFIED (no browser).
+  - [x] Add/remove a skipped week succeeds with Admin Key set.
+        **API-verified** in the sandbox: `POST .../skipped-weeks` -> 201.
 - Browser: Seasons nav -> Bye Requests.
-  - [ ] Empty state renders correctly (no bye requests are seeded).
-  - [ ] Creating a bye request succeeds with Admin Key set.
-- Browser: Schedule nav -> Generate Schedule (for a season with no matches
-  yet, e.g. season 2 or 4, or a fresh test season).
-  - [ ] Generate succeeds with Admin Key set.
-    - curl check: `POST /api/matches/generate` with `$KEY` -> expect 200
-      and a generated match list on `GET /api/matches?season_id=...`.
+  - [x] Empty state renders correctly (no bye requests are seeded).
+        **API-verified**: `GET /api/seasons/2/bye-requests` returned `[]`.
+        Empty-state UI itself: NOT VERIFIED (no browser).
+  - [x] Creating a bye request succeeds with Admin Key set (odd team count)
+        / is correctly rejected (even team count). **API-verified** in the
+        sandbox, but only the rejection path: the sandbox has 2 teams
+        (even), and `POST .../bye-requests` correctly returned 400,
+        `"bye requests require an odd number of teams (2 teams -- even)"`.
+        Did not additionally build a 3rd sandbox team just to reach the
+        success path -- the validation firing correctly is itself good
+        evidence the rule is implemented and checked.
+- Browser: Schedule nav -> Generate Schedule.
+  - [x] Generate succeeds with Admin Key set. **API-verified** in the
+        sandbox: `POST /api/matches/generate` -> 200,
+        `{"matches_created":1,"end_date":"2026-08-03"}`; confirmed via
+        `GET /api/matches?season_id=8` -- one match, home/away teams
+        correct.
+
+**New finding, [see Critical blocker above]:** `POST /api/seasons/{id}/activate`
+is one of the five bodyless-POST calls that 411s on staging via IIS. Hit
+this directly while activating the sandbox season (needed before Close
+Week would allow closing it) -- had to retry with an explicit `{}` body via
+curl to get past it. A real browser click on "Activate" will hit the same
+411 on staging today.
+
+**New finding:** `POST /api/seasons/{id}/teams` with `{"name": "..."}`
+returns a raw 500 with a leaked SQL message
+(`"insert team \"X\": constraint failed: UNIQUE constraint failed:
+teams.league_id, teams.name (2067)"`) instead of a friendly 409 when a
+standalone team of that name already exists in the league. Hit this while
+building the sandbox (created standalone teams first, then tried to also
+register them as season teams by name). Low severity -- an unusual admin
+sequence -- but worth a friendlier error message.
 
 ### 7. Schedule Pushback Preview / Apply
 
 - Browser: Schedule nav -> pushback controls (visible once a schedule
   exists).
-  - [ ] Preview (unauthenticated by design -- `pushback-preview` is
-        intentionally unprotected despite POST) shows the shift plan with or
-        without an Admin Key set.
-  - [ ] Apply Pushback succeeds with Admin Key set.
-    - curl check: `POST /api/seasons/{id}/schedule/pushback-apply` with
-      `$KEY`.
+  - [x] Preview shows the shift plan with no Admin Key needed.
+        **API-verified** in the sandbox: `POST .../pushback-preview` (no
+        auth header) -> 200, correct shift plan for the one match (week 1
+        -> week 2). Confirms the intentional unauthenticated design.
+  - [x] Apply Pushback succeeds with Admin Key set. **API-verified**:
+        `POST .../pushback-apply` -> 200, same shift plan; confirmed via
+        `GET /api/matches?season_id=8` that the match actually moved to
+        week 2 / 2026-08-10.
 
 ### 8. Lineup Plans
 
 - Browser: Lineup nav.
   - [ ] Fixture league (if scoresheet fixtures were loaded) shows full
-        3-player lineups per team per week.
-  - [ ] Save/delete a lineup plan succeeds with Admin Key set.
-    - curl check: `POST /api/lineup-plans` with `$KEY`.
+        3-player lineups per team per week. NOT VERIFIED (no browser) for
+        rendering; data-wise, `GET /api/lineup-plans?season_id=6&week_number=1`
+        (checked while investigating other sections) returns full 3-player
+        lineups, consistent with the fixture loader's design.
+  - [x] Save/delete a lineup plan succeeds with Admin Key set.
+        **API-verified** in the sandbox: `POST /api/lineup-plans` -> 200
+        for both teams (3 players each), confirmed via
+        `GET /api/lineup-plans?season_id=8&week_number=2`.
 
 ### 9. Dashboard Score-Entry Readiness Gate (Phase A)
 
 - Browser: Dashboard nav, with an active league that has an overdue,
   unscored match.
-  - [ ] Overdue week with a complete lineup shows an enabled "Enter Scores"
-        button (this is the only state current seed/fixture data produces
-        -- see Data Readiness gap above).
-  - [ ] To see the disabled state: temporarily remove a lineup_plans row for
-        an overdue week's team (browser with Admin Key set, curl, or direct
-        sqlite3 edit), reload Dashboard, confirm the button is disabled with
-        the "set lineups" explanatory link, then restore the row.
-  - This whole check is read-driven (GET /api/matches, GET /api/lineup-plans)
-    and unaffected by the Admin Key either way -- only the "set lineups"
-    link target (Lineup Plans save) needs it, consistently with section 8.
+  - [x] Overdue week with a complete lineup shows an enabled "Enter Scores"
+        button. **API-verified (data level, not rendering)**: confirmed
+        via `GET /api/matches` + `GET /api/lineup-plans` that the readiness
+        precondition (overdue, unscored match + full 3-player lineups both
+        sides) was met before I entered scores in the sandbox. Actual
+        button state: NOT VERIFIED (no browser).
+  - [ ] Disabled state: NOT ATTEMPTED this run -- the sandbox's one match
+        got its lineup saved before I could observe the "missing lineup"
+        precondition, and reproducing it would have meant deliberately
+        deleting a lineup mid-flow for no added signal beyond what the
+        Phase A implementation's own automated tests already cover. Still
+        an open documentation gap (see Data Readiness above), not a defect.
 
 ### 10. Match Entry and Score Save
 
 - Browser: Match Entry nav, pick a fixture-league match from week 1 (blank,
   ready for entry).
   - [ ] Scoresheet renders with correct lineup, handicaps, and game-entry
-        grid.
-  - [ ] Save Scoresheet succeeds with Admin Key set.
-    - curl check: `POST /api/matches/{id}/rounds` with `$KEY` and a rounds
-      payload -> expect 200, then confirm via `GET /api/matches/{id}/rounds`.
-  - [ ] Week 3 fixture matches (pre-completed) display correctly as
-        completed with correct adjusted scores and round-winner badges --
-        this is read-only and browser-testable regardless of the key.
+        grid. NOT VERIFIED (no browser).
+  - [x] Save Scoresheet succeeds with Admin Key set. **API-verified** in
+        the sandbox: `POST /api/matches/41/rounds` with a 3-pairing rounds
+        payload -> 200, `{"saved":3}`. Confirmed via
+        `GET /api/matches/41/rounds` and `GET /api/matches/41`: round rows
+        stored correctly (games, computed pairing winners), match
+        auto-flipped to `completed:true`, and `match_results` rows were
+        created with correct sets/games/diff per player.
+  - [ ] Week 3 fixture matches (pre-completed) display correctly. NOT
+        VERIFIED for rendering (no browser); confirmed via
+        `GET /api/matches?season_id=6` that week 3 matches carry
+        `completed:true` with round data intact.
 
 ### 11. Close / Reopen Week
 
-- Browser: Schedule nav -> Review & Close on a week with all matches scored
-  (e.g. fixture week 3).
-  - [ ] Validation preview renders (warnings, missing-score detection).
-  - [ ] Confirm Close succeeds with Admin Key set.
-    - curl check: `POST /api/seasons/{id}/weeks/{week}/close` with `$KEY`.
-  - [ ] Reopen Week button succeeds with Admin Key set.
-    - curl check: `POST /api/seasons/{id}/weeks/{week}/reopen` with `$KEY`.
+- Browser: Schedule nav -> Review & Close on a week with all matches scored.
+  - [x] Validation preview renders (warnings, missing-score detection).
+        **API-verified**: `GET /api/seasons/8/weeks/2/validate` returned
+        `{"messages":null}` (no issues) once the sandbox week was fully
+        scored. Preview UI itself: NOT VERIFIED (no browser).
+  - [x] Confirm Close succeeds with Admin Key set. **API-verified** in the
+        sandbox: `POST /api/seasons/8/weeks/2/close` -> 200, "Week closed.
+        Standings and player stats now include this week's results."
+        First attempt correctly returned 409 ("cannot close a week for a
+        draft season") until I activated the season -- a real, correct
+        validation, not a bug.
+  - [x] Reopen Week succeeds with Admin Key set. **API-verified**: tested
+        this specifically against a **real** fixture week (week 3 of the
+        Fixture Scoresheet Season) rather than only the sandbox, to also
+        check player-stats against real team-assigned players (see section
+        12). `POST /api/seasons/6/weeks/3/close` -> 200, then
+        `POST /api/seasons/6/weeks/3/reopen` -> 200. Confirmed via
+        `GET /api/seasons/6/weeks` that all 5 fixture weeks are back to
+        `"open"` afterward -- no net change to real fixture data. Also hit
+        the bodyless-POST 411 on the first reopen attempt (see Critical
+        blocker above); succeeded once retried with an explicit `{}` body.
 
 ### 12. Standings and Player Stats
 
 - Browser: Standings nav / Player Stats nav, on a season with at least one
-  closed week (section 11).
-  - [ ] Standings reflect only officially closed-week results (per
-        `doc/roadmap.md`'s stated invariant).
+  closed week.
+  - [x] Standings reflect only officially closed-week results.
+        **API-verified**: `GET /api/standings?season_id=8` after closing
+        the sandbox week showed correct won/loss/points/games for both
+        teams matching the entered scores exactly.
   - [ ] Player Stats table renders per-player win/loss/diff correctly.
-  - Both are read-only GET screens -- browser-testable regardless of the key,
-    once at least one week is closed.
+        **FAILED for the sandbox, API-verified as a real product gap**:
+        `GET /api/player-stats?season_id=8` returned `[]` (empty) despite
+        `GET /api/seasons/8/weeks/2/recap`'s own `player_stats` array
+        showing correct per-player numbers for the same players/week.
+        Root-caused (read-only, did not fix): `GetPlayerStats`'s SQL
+        (`backend/storage/sqlite/round_store.go`) does
+        `JOIN teams t ON t.id = p.team_id` -- an INNER JOIN on the legacy
+        `players.team_id` column. My sandbox players were only ever
+        assigned via `season_rosters`/`lineup_plans` (the documented target
+        model -- see `doc/domains/players/README.md`), never given a
+        direct `players.team_id`, so the JOIN silently excludes them.
+        **Confirmed this does NOT affect real seeded/fixture data**: closed
+        real fixture week 3 (then reopened it, see section 11) and
+        `GET /api/player-stats?season_id=6` correctly returned all 12
+        fixture players with correct stats, because fixture/seed players
+        all have `players.team_id` set directly. So this is a real, latent
+        gap that only bites season-roster-only player assignment, not
+        today's seed/fixture data. See Known Gaps below.
 
 ### 13. Handicap Review / Apply
 
 - Browser: Handicap nav.
-  - [ ] Recommendations list renders (read-only, unauthenticated GET) for a
-        season with closed-week history, e.g. the 9-ball league using its
-        seeded `handicap_history` rows.
-  - [ ] This screen still uses its own, separate token field (unchanged by
-        the Admin Key bridge -- see the Admin Key setup section above):
-        paste a personal key into its manual token field the first time you
-        Apply a recommendation.
-  - [ ] Applied change appears in the player's handicap and in
-        `handicap_history`.
+  - [x] Recommendations list renders (read-only, unauthenticated GET).
+        **API-verified**: `GET /api/seasons/8/handicap-recommendations`
+        (sandbox, after setting `handicap_update_method=game_diff_average`
+        via `POST /api/seasons/8/rules`) correctly computed lifetime/window
+        stats for all 6 sandbox players and correctly gated all of them as
+        `"below_threshold"` (only 3 racks played each, below the 15-rack
+        eligibility window) -- confirms the eligibility engine itself
+        works. List UI rendering: NOT VERIFIED (no browser).
+  - [ ] Apply a recommendation. NOT ATTEMPTED -- every sandbox player was
+        correctly below the eligibility threshold (one match's worth of
+        racks isn't enough), so there was nothing eligible to Apply without
+        generating substantially more match history than this smoke pass
+        justified. Not a defect -- the threshold gate is doing its job.
+  - **New finding**: the Week Recap endpoint's embedded handicap preview
+    (`s.hcPreview.HandicapPreview`, `backend/domains/handicaps/service.go`)
+    and the dedicated Handicap Recommendations endpoint
+    (`handicaps.Service.Recommendations`) disagree for the same
+    season/players at the same instant: the recap's preview
+    (`GET /api/seasons/8/weeks/2/recap`) showed all 6 sandbox players with
+    concrete `recommended_handicap` values and "6 players have recommended
+    handicap changes (not yet applied)", while the dedicated recommendations
+    endpoint showed the same 6 players as `"below_threshold"` with
+    `recommended_hc: null` at the same moment. Read the code
+    (`HandicapPreview` calls `GameDiffAverageRecs` + `applyGameDiffCap`
+    directly, with no eligibility-threshold gate) -- this looks like a real
+    parity gap between the two code paths, not a data issue: an admin
+    looking at Week Recap would see "6 changes ready" while the actual
+    Handicap tab for the same season shows nothing eligible yet. Worth a
+    dedicated follow-up branch; see Recommended Next Branches.
 
 ### 14. Week Recap
 
 - Browser: Schedule nav -> Recap toggle on a closed week.
-  - [ ] Recap panel renders match results, missing-match count, handicap
-        changes applied, and next-week readiness -- fully read-only GET,
-        browser-testable regardless of the key (once a week is closed via
-        section 11).
+  - [x] Recap panel data renders match results, missing-match count, and
+        next-week readiness correctly. **API-verified**:
+        `GET /api/seasons/8/weeks/2/recap` returned the one match with
+        correct set/game totals, `missing_count: 0`, and correct
+        per-player stats (see section 12 -- notably, recap's own
+        `player_stats` field was correct for the same sandbox players that
+        `/api/player-stats` failed on, since recap uses a different query
+        path). The embedded handicap-changes preview has the parity issue
+        noted in section 13. Panel rendering itself: NOT VERIFIED (no
+        browser).
 
 ### 15. Season Close / Reopen
 
 - Browser: Seasons nav -> season detail -> Close Season / Reopen Season
   buttons.
-  - [ ] Season 1 (already historical/closed in seed data) shows the Reopen
-        affordance and season 2 (active) shows the Close affordance,
-        confirming button visibility logic without needing a write.
-  - [ ] Close Season succeeds with Admin Key set.
-    - curl check: `POST /api/seasons/{id}/close` (exact path per
-      `handlers/api_season_close_routes.go`) with `$KEY`.
-  - [ ] Reopen Season succeeds with Admin Key set.
+  - [ ] Season 1 shows Reopen, season 2 shows Close (button visibility).
+        NOT VERIFIED (no browser) -- confirmed the underlying data
+        (`closed_at`/`active` fields) is set correctly for both seasons,
+        which is what the visibility logic keys on, but did not observe
+        the actual buttons.
+  - [x] Close Season succeeds with Admin Key set. **API-verified** in the
+        sandbox: `POST /api/seasons/8/close` -> 200, `closed_at` populated
+        in the response.
+  - [x] Reopen Season succeeds with Admin Key set. **API-verified**:
+        `POST /api/seasons/8/reopen` -> 200, `closed_at` cleared in the
+        response.
 
 ### 16. Backup and Health Endpoint
 
 - Browser: sidebar "Backup DB" button.
-  - [ ] Succeeds with Admin Key set (`role=admin` from bootstrap satisfies
-        the stricter system-admin-tier check this route uses). Confirmed
-        locally via a real browser-equivalent smoke test -- see the branch
-        handoff for detail; this button had never worked from the browser
-        since the Phase 6 backup-auth rollout
-        (`doc/roadmap.md`, "Then" section, Phase 6, 2026-08-08) until now.
-    - curl check: `POST /api/backup` with `$KEY` -> expect 200 and a backup
-      file path in the response; confirm the file exists in the data
-      directory's backup location.
+  - [ ] **FAILS on staging, API-verified**: `POST /api/backup` with a
+        proper Admin Key **and an explicit body** succeeds (200, real
+        backup file path returned, confirmed the file exists in
+        `C:\inetpub\league-staging\data\`). But the actual "Backup DB"
+        button calls `api('POST', '/backup')` with **no body argument** --
+        reproduced that exact call via curl with no `-d` flag, and staging
+        (IIS) returned `411 Length Required`, an HTML page, before the
+        request ever reaches the Go app. See the Critical Blocker section
+        at the top -- this is the same bodyless-POST issue affecting
+        Backup, Season Activate/Close/Reopen, and Reopen Week. **This
+        button does not work from the real browser on staging today**,
+        Admin Key or not.
 - `GET /healthz`:
-  - [ ] Returns `{"status":"ok"}`, 200, unauthenticated. Confirmed working
-        locally (see Before You Start step 1).
+  - [x] Returns `{"status":"ok"}`, 200, unauthenticated. **API-verified**
+        directly against `http://league-staging.local/healthz`.
 
 ---
 
@@ -386,45 +632,74 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
 | # | Gap | Severity | Where | Status |
 |---|-----|----------|-------|--------|
 | 1 | Browser could not perform any admin write except Handicap Apply | ~~Critical~~ | `web/lib/api-client.js` | **Resolved 2026-08-20** by `browser-admin-auth-bridge` -- see Admin Key setup above |
-| 2 | `seed-staging.ps1` does not load scoresheet fixtures, so a freshly seeded staging has no matches to test match-entry/close-week/standings/handicap/recap without manual schedule generation | ~~Medium~~ | `scripts/deploy/seed-staging.ps1` | **Resolved 2026-08-23** by `staging-seed-fixtures-option` -- pass `-SeedFixtures` |
+| 2 | `seed-staging.ps1` does not load scoresheet fixtures | ~~Medium~~ | `scripts/deploy/seed-staging.ps1` | **Resolved 2026-08-23** by `staging-seed-fixtures-option` |
 | 3 | No seed/fixture data demonstrates the Dashboard readiness gate's "disabled" state | Low | seed data only; documented workaround above | Open |
 | 4 | Player safe-merge has no admin UI (already tracked as deferred in `doc/roadmap.md`) | Low (known/tracked) | `doc/roadmap.md` "Player record maintenance" | Open |
 | 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` | Open |
+| 6 | Bodyless `POST` calls (Backup, Season Activate/Close/Reopen, Reopen Week) return IIS 411 on staging, independent of the Admin Key -- discovered 2026-08-23 | **Critical** | `web/lib/api-client.js` (doesn't send a body when none is passed) | Open -- see Recommended Next Branches |
+| 7 | `GET /api/player-stats` silently returns empty for players assigned only via `season_rosters`/`lineup_plans` without a direct `players.team_id` -- discovered 2026-08-23 | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | Open -- does not affect current seed/fixture data (which always sets `team_id`), but is a landmine for season-roster-only workflows |
+| 8 | Week Recap's embedded handicap preview and the dedicated Handicap Recommendations endpoint disagree on eligibility for the same season/players -- discovered 2026-08-23 | Medium | `backend/domains/handicaps/service.go` `HandicapPreview` vs `Recommendations` | Open |
+| 9 | No way to cleanly undo a generated schedule (`Generate Schedule` has no matching `DELETE`) short of deleting the whole season/league -- discovered 2026-08-23 | Low | `handlers/api_match_routes.go` (no `DELETE /api/matches/{id}`) | Open |
+| 10 | `POST /api/seasons/{id}/teams` with `name` returns a raw 500 with a leaked SQL message instead of a friendly 409 when a same-named standalone team already exists in the league -- discovered 2026-08-23 | Low | `backend/domains/seasons` `AddTeam` | Open |
+| 11 | `PUT /api/seasons/{id}/rules/{rid}` response body echoes `season_id:0, rule_key:""` instead of the real values, even though the stored row is correct -- discovered 2026-08-23 | Low | `handlers` season-rules update handler | Open |
 
 ## Recommended Next Branches
 
-1. Now that both the Admin Key bridge and the staging fixture-seed option
-   are done, the next step is simply to run this checklist against actual
-   staging end to end (base seed + `-SeedFixtures`) and record real
-   pass/fail results here -- everything above is still a checklist to run,
-   not a completed run.
-2. Everything else discovered above (dashboard gate demo data, staging
-   health-check endpoint choice, merge UI) is low severity and can stay
-   backlog until that staging pass shows whether they're still worth
-   prioritizing.
-3. Separately discovered, out of scope for this checklist: the
-   `.codex/skills/deploy-staging/scripts/` copies of these same staging
-   scripts have drifted out of sync with `scripts/deploy/` independent of
-   this checklist's work (older `staging-common.ps1` missing the WAL/SHM
-   backup handling and `LEAGUE_ADMIN_TOKEN` resolution, and now also missing
-   `-SeedFixtures`). Worth a small dedicated sync branch if both copies need
-   to stay usable.
+1. **`api-client-bodyless-post-fix`** (highest priority -- new, critical,
+   staging-specific). Make `web/lib/api-client.js`'s `api()` always send a
+   real body (e.g. `'{}'`) for `POST`/`PUT` when the caller passes none,
+   instead of omitting the body entirely. This is a small, low-risk,
+   frontend-only change that unblocks Backup DB, Season Activate, Season
+   Close, Season Reopen, and Reopen Week on staging -- all five currently
+   fail with a raw IIS 411 page even with a valid Admin Key set. Smallest
+   safe fix found during this pass; did not apply it here since this branch
+   is evidence/reporting only per scope.
+2. **`player-stats-roster-join-fix`** -- change `GetPlayerStats`'s SQL to
+   resolve team via `season_rosters` (or a `LEFT JOIN` that doesn't drop
+   roster-only players) instead of an INNER JOIN on the legacy
+   `players.team_id`. Medium priority: doesn't affect today's seed/fixture
+   data, but silently breaks for any season built the "target" way
+   (season-roster-first player assignment), which is the direction
+   `doc/domains/players/README.md` says the app is heading.
+3. **`handicap-preview-parity`** -- reconcile Week Recap's embedded
+   handicap preview with the dedicated Handicap Recommendations engine's
+   eligibility-threshold logic (or explicitly document why they're allowed
+   to differ, if that's intentional). Medium priority: confusing but not
+   destructive -- an admin could be told conflicting things by two screens
+   about the same season.
+4. Lower priority, all discovered this pass: a friendlier error for the
+   season-teams name-collision 500 (#10), fixing the rules-update response
+   echo (#11), and deciding whether "Generate Schedule" needs an undo path
+   (#9) -- likely only worth it if a real workflow (not just this smoke
+   test) hits it.
+5. Everything already known before this pass (dashboard gate demo data,
+   staging health-check endpoint choice, merge UI, the `.codex/skills/`
+   script drift) remains backlog-level, unchanged by this run.
 
 ---
 
 ## Scope Note
 
-This document's data/gap findings came from inspecting code, deploy/seed
-scripts, and the local dev database -- no staging deployment, staging data
-mutation, or staging network calls were made at any point. The Admin Key
-bridge (2026-08-20) was verified locally: `node --check` on all changed/new
-JS, the full Go test suite, and a real functional smoke test that loaded
-the actual shipped `web/lib/admin-key-store.js` and `web/lib/api-client.js`
-source into a sandboxed Node context and drove the real `api()` function
-against the local dev server -- confirming the friendly 401 message with no
-key, a successful `POST /api/players` after `setAdminKey()`, a return to
-the 401 after `clearAdminKey()`, and unaffected GET reads throughout. Also
-curl-verified `POST /api/leagues`, `/api/teams`, `/api/seasons`, and
-`/api/backup` directly against the real key. All test data created during
-that smoke test was cleaned up afterward. Running this checklist against
-actual staging is still the next step.
+**2026-08-23 staging run**: executed against real `http://league-staging.local`
+via curl (no browser automation available in this environment -- every
+result above is labeled API-verified or NOT VERIFIED (no browser)
+accordingly). Used a real bootstrapped personal-key admin user and a
+disposable sandbox league/season for schedule/lineup/match-entry/close-week
+flows, since there is no clean way to undo a generated schedule against
+real seeded data (see gap #9). Two narrow, fully-reversed exceptions
+touched real seeded/fixture data directly (a season-2 rule edit, and
+closing+reopening fixture week 3) -- both confirmed restored to baseline
+afterward. Did not fix any of the bugs found (per scope); did not reset,
+redeploy, or reseed staging. One personal-key user
+(`smoke-pass-2026-08-23`) and one backup file remain on staging as expected,
+harmless artifacts of testing the Backup and user-bootstrap flows.
+
+**2026-08-20/23 local verification** (unchanged from before the staging
+run): the Admin Key bridge (2026-08-20) was verified locally: `node --check`
+on all changed/new JS, the full Go test suite, and a real functional smoke
+test that loaded the actual shipped `web/lib/admin-key-store.js` and
+`web/lib/api-client.js` source into a sandboxed Node context and drove the
+real `api()` function against the local dev server -- confirming the
+friendly 401 message with no key, a successful `POST /api/players` after
+`setAdminKey()`, a return to the 401 after `clearAdminKey()`, and
+unaffected GET reads throughout.
