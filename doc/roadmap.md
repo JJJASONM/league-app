@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-20
+**Last reviewed:** 2026-08-23
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -44,10 +44,13 @@ These items should stay small enough to review and ship independently.
     candidates after this readiness pass identifies what most blocks testing.
   - The checklist's top blocker -- the browser could not perform any admin
     write except Handicap Apply -- is resolved; see "Browser admin auth
-    bridge" in Completed / Largely Completed below. Remaining before a full
-    staging run: seed staging with the scoresheet fixtures, or generate a
-    schedule by hand, so match-entry/close-week/standings/handicap/recap
-    have data to exercise there.
+    bridge" in Completed / Largely Completed below.
+  - The remaining staging data blocker is also resolved: `seed-staging.ps1`
+    now has an opt-in `-SeedFixtures` switch to load the scoresheet fixtures
+    right after the base seed, so match-entry/close-week/standings/
+    handicap/recap have data to exercise on staging without generating a
+    schedule by hand; see "Staging seed fixtures option" below. What
+    remains is simply running the checklist against staging end to end.
 
 - Domain and data-access restructuring.
   - Major domains (matches, handicaps, seasons, leagues, players, teams) have
@@ -467,6 +470,21 @@ follow-up.
   migrated, since doing so was not clearly simpler and risked its existing
   retry/clear-on-403 behavior for no scope benefit. No backend auth policy
   changed.
+- Staging seed fixtures option (2026-08-23). `scripts/deploy/seed-staging.ps1`
+  gained an opt-in `-SeedFixtures` switch; default behavior (base seed only)
+  is unchanged. With the switch, it runs
+  `--seed-scoresheet-fixtures --fixture-weeks all` against the same staging
+  executable and data directory immediately after the base seed succeeds
+  (not `go run .`, so fixture data always comes from the exact binary
+  already deployed to staging, never a possibly-different local checkout),
+  and verifies the fixture league appears via the API before reporting
+  success. A fixture-seed failure rolls back the same way a base-seed
+  failure already did. This was the last item blocking a full Product Test
+  Readiness pass on staging; see `doc/testing/product-smoke-test-checklist.md`.
+  Discovered separately, out of scope for this branch: the
+  `.codex/skills/deploy-staging/scripts/` mirror of these staging scripts
+  has drifted out of sync independent of this work and does not have this
+  switch either.
 
 ## Open Questions To Resolve
 

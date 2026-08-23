@@ -140,12 +140,21 @@ see `doc/domains/matches/scoresheet-fixtures.md`). This is the fastest path
 to a working match-entry / close-week / standings / recap smoke test without
 touching schedule generation at all.
 
-**Gap found:** `scripts/deploy/seed-staging.ps1` only runs `--seed`, not
-`-seed-scoresheet-fixtures`. Staging's out-of-the-box data (after a fresh
-seed) will have the base league/team/player/roster data but no matches --
-match-entry/close-week/standings/handicap/recap testing on staging requires
-either generating a schedule by hand first or adding a `-SeedFixtures`
-option to `seed-staging.ps1`. See Recommended Next Branches.
+**Resolved 2026-08-23** by `staging-seed-fixtures-option`:
+`scripts/deploy/seed-staging.ps1` now accepts an opt-in `-SeedFixtures`
+switch. Default behavior (no switch) is unchanged -- base seed only. With
+the switch, it also runs `--seed-scoresheet-fixtures --fixture-weeks all`
+against the same staging executable and data directory immediately after
+the base seed succeeds, and verifies the fixture league appears via the API
+before reporting success:
+
+```powershell
+.\scripts\deploy\seed-staging.ps1 -ConfirmSeed SEED-STAGING -SeedFixtures
+```
+
+A fixture-seed failure rolls back the same way a base-seed failure already
+did (restore the pre-seed backup, restart staging on the old data). See
+`QUICKSTART.md`'s Staging section for the one-line usage.
 
 **Gap found:** the Dashboard's score-entry readiness gate (Phase A, shipped
 2026-08-19) has no seed data exercising its "not ready" (disabled button)
@@ -377,25 +386,29 @@ curl -X POST http://localhost:8080/api/players/<source_id>/merge \
 | # | Gap | Severity | Where | Status |
 |---|-----|----------|-------|--------|
 | 1 | Browser could not perform any admin write except Handicap Apply | ~~Critical~~ | `web/lib/api-client.js` | **Resolved 2026-08-20** by `browser-admin-auth-bridge` -- see Admin Key setup above |
-| 2 | `seed-staging.ps1` does not load scoresheet fixtures, so a freshly seeded staging has no matches to test match-entry/close-week/standings/handicap/recap without manual schedule generation | Medium | `scripts/deploy/seed-staging.ps1` | Open |
+| 2 | `seed-staging.ps1` does not load scoresheet fixtures, so a freshly seeded staging has no matches to test match-entry/close-week/standings/handicap/recap without manual schedule generation | ~~Medium~~ | `scripts/deploy/seed-staging.ps1` | **Resolved 2026-08-23** by `staging-seed-fixtures-option` -- pass `-SeedFixtures` |
 | 3 | No seed/fixture data demonstrates the Dashboard readiness gate's "disabled" state | Low | seed data only; documented workaround above | Open |
 | 4 | Player safe-merge has no admin UI (already tracked as deferred in `doc/roadmap.md`) | Low (known/tracked) | `doc/roadmap.md` "Player record maintenance" | Open |
 | 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` | Open |
 
 ## Recommended Next Branches
 
-1. **`staging-seed-fixtures-option`** (now top priority, since the auth
-   bridge is done) -- add an opt-in switch to `seed-staging.ps1` to also run
-   `-seed-scoresheet-fixtures`, so a fresh staging seed has ready-to-use
-   match data without manual schedule generation. Small, isolated,
-   deploy-tooling-only change.
+1. Now that both the Admin Key bridge and the staging fixture-seed option
+   are done, the next step is simply to run this checklist against actual
+   staging end to end (base seed + `-SeedFixtures`) and record real
+   pass/fail results here -- everything above is still a checklist to run,
+   not a completed run.
 2. Everything else discovered above (dashboard gate demo data, staging
    health-check endpoint choice, merge UI) is low severity and can stay
-   backlog until a broader staging pass with the Admin Key bridge shows
-   whether they're still worth prioritizing.
-3. Once staging data is ready, actually run this checklist against staging
-   end to end and record real pass/fail results here -- everything above is
-   still a checklist to run, not a completed run.
+   backlog until that staging pass shows whether they're still worth
+   prioritizing.
+3. Separately discovered, out of scope for this checklist: the
+   `.codex/skills/deploy-staging/scripts/` copies of these same staging
+   scripts have drifted out of sync with `scripts/deploy/` independent of
+   this checklist's work (older `staging-common.ps1` missing the WAL/SHM
+   backup handling and `LEAGUE_ADMIN_TOKEN` resolution, and now also missing
+   `-SeedFixtures`). Worth a small dedicated sync branch if both copies need
+   to stay usable.
 
 ---
 

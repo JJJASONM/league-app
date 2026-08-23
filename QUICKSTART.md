@@ -86,6 +86,22 @@ Behavior:
 - `-fixture-weeks N` -> weeks 1 through N
 - `-fixture-weeks all` -> all available fixture weeks
 
+### Staging
+
+`scripts/deploy/seed-staging.ps1` runs the base seed only by default. Pass
+`-SeedFixtures` to also load the scoresheet fixtures above (all weeks)
+immediately afterward, using the same staging executable and data
+directory -- so match-entry, close-week, standings, handicap, and recap
+workflows have ready data to smoke-test without generating a schedule by
+hand:
+
+```powershell
+.\scripts\deploy\seed-staging.ps1 -ConfirmSeed SEED-STAGING -SeedFixtures
+```
+
+Staging operations are Project-Manager-owned; see `doc/testing/product-smoke-test-checklist.md`
+for the full smoke-test checklist this supports.
+
 ## Current Workflow
 
 1. `Seasons` -> create a season and manage setup
