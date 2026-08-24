@@ -392,6 +392,11 @@ The prior formula remains in `computeGameDiffAverageRecs` (used by the
 advance-preview / close-week path via `buildAdvanceResult`). The Handicap Review
 screen (`getHandicapRecommendations`) uses the new formula exclusively.
 
+**Update 2026-08-24:** this split became a real parity bug in production --
+see "HandicapPreview unified with Recommendations" further down. The
+advance-preview / close-week path no longer has its own formula; it now
+shares the same rack-windowed engine as the Handicap Review screen.
+
 ### 2026-06-27 - Excluded racks do not count toward threshold
 
 **Status:** `accepted`
@@ -463,6 +468,52 @@ directly without nesting.
 | adapter (integration) | `handicap_store_test.go` | real SQLite via `db.Init(tempDir)` |
 | handler (stub-based) | `handlers/api_test.go` | 404/500/200 error-mapping via `stubHandicapSvc` |
 | handler (integration) | `handlers/api_test.go` | existing `TestHandicapRecs_*` and `TestHandicapReview_*` tests now run through the real service+adapter |
+
+### 2026-08-24 - HandicapPreview unified with Recommendations; matches_played renamed to included_racks
+
+**Status:** `accepted`
+
+Fixes a parity gap found during the 2026-08-23 staging smoke pass: Week Recap's
+embedded handicap preview (`HandicapPreview`, consumed by both `WeekRecap` and
+`AdvancePreview`) and the dedicated Handicap Recommendations endpoint could
+disagree on eligibility and recommended value for the same season/players at
+the same instant. The root cause predates this file's "Opponent-normalized
+rack formula replaces game_diff_average" entry above: that change moved the
+Handicap Review screen onto the new rack-windowed engine but left
+`HandicapPreview`'s `game_diff_average` case on the old match-averaged
+`GameDiffAverageRecs`/`applyGameDiffCap` path, with no eligibility-threshold
+gate at all. The two paths were never just missing a shared threshold number
+-- they were two different algorithms over two different units (racks vs.
+whole matches), so patching a threshold onto the old path would still have
+left the computed values themselves inconsistent.
+
+`HandicapPreview`'s `game_diff_average` case now calls `Service.Recommendations`
+directly and reshapes the `HandicapReviewResponse` into the existing
+`models.AdvancePreviewHandicap`/`PlayerHandicapRec` shape
+(`reviewResponseToPreview` in `service.go`). Week Recap, Advance Preview, and
+the Handicap Recommendations tab now share one computation and one
+15-rack eligibility gate; a `below_threshold` player can no longer show as an
+actionable change in one screen while showing no recommendation in the other.
+`applyGameDiffCap` and the match-averaged code path are deleted.
+`manual_review` and `kicker_average_preview` routing is unchanged.
+
+One user-visible contract change came out of the unification:
+`PlayerHandicapRec.MatchesPlayed` (`matches_played`) is renamed to
+`IncludedRacks` (`included_racks`). The old field counted whole matches under
+the retired algorithm; the shared engine counts individual eligible racks
+(matching `HandicapReviewRec.IncludedRacks`), so the old name no longer
+described what was in it. Updated in the JSON response, the Week
+Recap/Advance Preview table in
+`web/domains/schedules/schedule-page-component.js` (header changed from
+"Matches" to "Racks"), and all `handlers/api_handicap_test.go` assertions.
+
+Verified with new `backend/domains/handicaps/service_test.go` tests proving
+parity for a below-threshold player and an eligible one against identical
+stub data, and by rewriting the affected `handlers/api_handicap_test.go`
+integration tests, several of which previously seeded `match_results` rows
+and relied on the retired algorithm's lack of a threshold or season-roster
+requirement (the real engine requires roster players to come from
+`season_rosters`, which the old algorithm did not).
 
 ### 2026-07-24 - Phase D2: week recap shows applied handicap changes; Apply forwards week number
 

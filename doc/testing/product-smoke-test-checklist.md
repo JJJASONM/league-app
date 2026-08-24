@@ -634,6 +634,28 @@ sequence -- but worth a friendlier error message.
     Handicap tab for the same season shows nothing eligible yet. Worth a
     dedicated follow-up branch; see Recommended Next Branches.
 
+  **Fix status (2026-08-24, `handicap-preview-parity`):** `HandicapPreview`'s
+  `game_diff_average` case no longer runs its own separate calculation --
+  it now calls `Service.Recommendations` directly and reshapes that
+  response, so Week Recap, Advance Preview, and the dedicated Handicap
+  Recommendations endpoint all share one computation and one eligibility
+  gate. The old match-averaged, threshold-free `applyGameDiffCap` path is
+  deleted. A player below the 15-rack eligibility window now shows the same
+  `"below_threshold"` reason and no actionable change in both places --
+  the exact conflict this gap described can no longer occur. One
+  user-visible contract change came out of the fix: `PlayerHandicapRec`'s
+  `matches_played` field is renamed to `included_racks` (the old field
+  counted whole matches under the retired algorithm; the shared engine
+  counts individual eligible racks), updated in the JSON response, the
+  Week Recap/Advance Preview table rendering
+  (`web/domains/schedules/schedule-page-component.js`), and all handler
+  tests. Verified with new backend tests proving parity for both a
+  below-threshold player (`TestHandicapPreview_Recommendations_ParityBelowThreshold`)
+  and an eligible one (`TestHandicapPreview_Recommendations_ParityEligible`),
+  plus updated integration tests in `handlers/api_handicap_test.go`. Full
+  `go test ./...` and `go build ./...` pass. Not re-verified against the
+  actual staging environment this run -- that would need a deploy.
+
 ### 14. Week Recap
 
 - Browser: Schedule nav -> Recap toggle on a closed week.
@@ -644,9 +666,9 @@ sequence -- but worth a friendlier error message.
         per-player stats (see section 12 -- notably, recap's own
         `player_stats` field was correct for the same sandbox players that
         `/api/player-stats` failed on, since recap uses a different query
-        path). The embedded handicap-changes preview has the parity issue
-        noted in section 13. Panel rendering itself: NOT VERIFIED (no
-        browser).
+        path). The embedded handicap-changes preview had the parity issue
+        noted in section 13, fixed 2026-08-24 by `handicap-preview-parity`.
+        Panel rendering itself: NOT VERIFIED (no browser).
 
 ### 15. Season Close / Reopen
 
@@ -696,29 +718,23 @@ sequence -- but worth a friendlier error message.
 | 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` | Open |
 | 6 | Bodyless `POST` calls (Backup, Season Activate/Close/Reopen, Reopen Week) return IIS 411 on staging, independent of the Admin Key -- discovered 2026-08-23 | ~~Critical~~ | `web/lib/api-client.js` (doesn't send a body when none is passed) | **Resolved 2026-08-23** by `api-client-bodyless-post-fix`, verified on staging -- all five routes now reach the Go app instead of 411ing; see the Critical Blocker section above for evidence |
 | 7 | `GET /api/player-stats` silently returns empty for players assigned only via `season_rosters`/`lineup_plans` without a direct `players.team_id` -- discovered 2026-08-23 | ~~Medium~~ | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | **Fixed 2026-08-23** by `player-stats-roster-join-fix`, verified via new SQLite store tests -- staging (browser/API) re-verification not yet done |
-| 8 | Week Recap's embedded handicap preview and the dedicated Handicap Recommendations endpoint disagree on eligibility for the same season/players -- discovered 2026-08-23 | Medium | `backend/domains/handicaps/service.go` `HandicapPreview` vs `Recommendations` | Open |
+| 8 | Week Recap's embedded handicap preview and the dedicated Handicap Recommendations endpoint disagree on eligibility for the same season/players -- discovered 2026-08-23 | ~~Medium~~ | `backend/domains/handicaps/service.go` `HandicapPreview` vs `Recommendations` | **Fixed 2026-08-24** by `handicap-preview-parity` -- `HandicapPreview` now delegates to `Recommendations` for `game_diff_average`, so both paths share one computation and eligibility gate; verified via new parity tests -- staging (browser/API) re-verification not yet done |
 | 9 | No way to cleanly undo a generated schedule (`Generate Schedule` has no matching `DELETE`) short of deleting the whole season/league -- discovered 2026-08-23 | Low | `handlers/api_match_routes.go` (no `DELETE /api/matches/{id}`) | Open |
 | 10 | `POST /api/seasons/{id}/teams` with `name` returns a raw 500 with a leaked SQL message instead of a friendly 409 when a same-named standalone team already exists in the league -- discovered 2026-08-23 | Low | `backend/domains/seasons` `AddTeam` | Open |
 | 11 | `PUT /api/seasons/{id}/rules/{rid}` response body echoes `season_id:0, rule_key:""` instead of the real values, even though the stored row is correct -- discovered 2026-08-23 | Low | `handlers` season-rules update handler | Open |
 
 ## Recommended Next Branches
 
-`api-client-bodyless-post-fix` and `player-stats-roster-join-fix` are both
-done (see the Critical Blocker section above and Known Gaps rows #6/#7) --
-no longer listed here as pending branches. Remaining, in priority order:
+`api-client-bodyless-post-fix`, `player-stats-roster-join-fix`, and
+`handicap-preview-parity` are all done (see the Critical Blocker section
+above and Known Gaps rows #6/#7/#8) -- no longer listed here as pending
+branches. Remaining, in priority order:
 
-1. **`handicap-preview-parity`** -- reconcile Week Recap's embedded
-   handicap preview with the dedicated Handicap Recommendations engine's
-   eligibility-threshold logic (or explicitly document why they're allowed
-   to differ, if that's intentional). Medium priority: confusing but not
-   destructive -- an admin could be told conflicting things by two screens
-   about the same season.
-2. Lower priority, all discovered this pass: a friendlier error for the
-   season-teams name-collision 500 (#10), fixing the rules-update response
-   echo (#11), and deciding whether "Generate Schedule" needs an undo path
-   (#9) -- likely only worth it if a real workflow (not just this smoke
-   test) hits it.
-3. Everything already known before this pass (dashboard gate demo data,
+1. A friendlier error for the season-teams name-collision 500 (#10), fixing
+   the rules-update response echo (#11), and deciding whether "Generate
+   Schedule" needs an undo path (#9) -- likely only worth it if a real
+   workflow (not just this smoke test) hits it.
+2. Everything already known before this pass (dashboard gate demo data,
    staging health-check endpoint choice, merge UI, the `.codex/skills/`
    script drift) remains backlog-level, unchanged by this run.
 

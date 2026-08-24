@@ -374,6 +374,15 @@ func (s *Service) buildRecs(
 // HandicapPreview implements matches.HandicapPreviewer. Returns a read-only
 // summary of the handicap update mode and preview recommendations for the
 // advance-preview and close-result response. No writes are performed.
+//
+// For method=game_diff_average this delegates to Recommendations (the same
+// computation the Handicap Review screen uses: rack-windowed implied
+// handicap, gated by the same eligibility threshold) instead of a separate,
+// simpler match-averaged calculation. Before this, the two paths could
+// disagree about whether a player was eligible for a change at all -- Week
+// Recap and the pre-close advance preview could show a concrete recommended
+// change for a player the Handicap tab reported as below_threshold with
+// nothing to apply. manual_review and kicker_average_preview are unchanged.
 func (s *Service) HandicapPreview(ctx context.Context, seasonID int64) (models.AdvancePreviewHandicap, error) {
 	rules, err := s.store.SeasonHandicapRules(ctx, seasonID)
 	if err != nil {
@@ -393,33 +402,11 @@ func (s *Service) HandicapPreview(ctx context.Context, seasonID int64) (models.A
 			Message: "Kicker average handicap recommendations are not implemented yet. No handicap changes are applied automatically.",
 		}, nil
 	case MethodGameDiffAverage:
-		maxHC := s.interpretMaxHC(rules)
-		raws, err := s.store.GameDiffAverageRecs(ctx, seasonID)
+		review, err := s.Recommendations(ctx, seasonID)
 		if err != nil {
-			return models.AdvancePreviewHandicap{}, fmt.Errorf("handicap preview: recs: %w", err)
+			return models.AdvancePreviewHandicap{}, fmt.Errorf("handicap preview: %w", err)
 		}
-		recs := applyGameDiffCap(raws, maxHC)
-		changedCount := 0
-		for _, r := range recs {
-			if !r.Skipped && r.Reason != ReasonNoChange {
-				changedCount++
-			}
-		}
-		var msg string
-		switch {
-		case changedCount == 1:
-			msg = "1 player has a recommended handicap change (not yet applied)."
-		case changedCount > 1:
-			msg = fmt.Sprintf("%d players have recommended handicap changes (not yet applied).", changedCount)
-		default:
-			msg = "No handicap changes recommended. No changes are applied automatically."
-		}
-		return models.AdvancePreviewHandicap{
-			Method:          method,
-			Status:          ReviewStatusPreview,
-			Message:         msg,
-			Recommendations: recs,
-		}, nil
+		return reviewResponseToPreview(review), nil
 	default: // "manual_review" and any unknown method
 		return models.AdvancePreviewHandicap{
 			Method:  method,
@@ -429,50 +416,42 @@ func (s *Service) HandicapPreview(ctx context.Context, seasonID int64) (models.A
 	}
 }
 
-// applyGameDiffCap converts raw GameDiffAverageRows into PlayerHandicapRecs,
-// applying the maxHC cap, nearest-0.1 rounding, and reason classification.
-func applyGameDiffCap(raws []GameDiffAverageRow, maxHC float64) []models.PlayerHandicapRec {
-	recs := make([]models.PlayerHandicapRec, 0, len(raws))
-	for _, raw := range raws {
+// reviewResponseToPreview projects a HandicapReviewResponse (the Handicap
+// Review screen's full shape) down to the smaller AdvancePreviewHandicap
+// shape used by Week Recap and the pre-close advance preview. This is the
+// parity fix: both callers now share Recommendations' eligibility decision
+// and recommended values exactly, not just the general shape.
+//
+// Skipped mirrors the non-actionable reasons (no_data, admin_hold,
+// below_threshold); RecommendedHandicap echoes CurrentHandicap for those
+// rows, matching the pre-fix convention where a skipped row's recommended
+// value was never meant to be read as actionable.
+func reviewResponseToPreview(review models.HandicapReviewResponse) models.AdvancePreviewHandicap {
+	recs := make([]models.PlayerHandicapRec, 0, len(review.Recommendations))
+	for _, r := range review.Recommendations {
 		rec := models.PlayerHandicapRec{
-			PlayerID:        raw.PlayerID,
-			PlayerName:      raw.PlayerName,
-			CurrentHandicap: raw.CurrentHC,
-			AdminHold:       raw.AdminHold,
-			MatchesPlayed:   raw.MatchCount,
+			PlayerID:        r.PlayerID,
+			PlayerName:      r.PlayerName,
+			CurrentHandicap: r.AssignedHC,
+			IncludedRacks:   r.IncludedRacks,
+			AdminHold:       r.AdminHold,
+			Reason:          r.Reason,
 		}
-		if raw.AdminHold {
+		if r.RecommendedHC != nil {
+			rec.RecommendedHandicap = *r.RecommendedHC
+		} else {
+			rec.RecommendedHandicap = r.AssignedHC
+		}
+		switch r.Reason {
+		case ReasonAdminHold, ReasonNoData, ReasonBelowThreshold:
 			rec.Skipped = true
-			rec.Reason = ReasonAdminHold
-			rec.RecommendedHandicap = raw.CurrentHC
-			recs = append(recs, rec)
-			continue
-		}
-		if raw.MatchCount == 0 {
-			rec.Skipped = true
-			rec.Reason = ReasonNoData
-			rec.RecommendedHandicap = raw.CurrentHC
-			recs = append(recs, rec)
-			continue
-		}
-		avg := raw.TotalDiff / float64(raw.MatchCount)
-		recommended := math.Round(avg*10) / 10
-		capped := false
-		if recommended > maxHC {
-			recommended = math.Round(maxHC*10) / 10
-			capped = true
-		} else if recommended < -maxHC {
-			recommended = math.Round(-maxHC*10) / 10
-			capped = true
-		}
-		rec.RecommendedHandicap = recommended
-		switch {
-		case capped:
-			rec.Reason = ReasonCapped
-		case math.Round(raw.CurrentHC*10)/10 == recommended:
-			rec.Reason = ReasonNoChange
 		}
 		recs = append(recs, rec)
 	}
-	return recs
+	return models.AdvancePreviewHandicap{
+		Method:          review.Method,
+		Status:          review.Status,
+		Message:         review.Message,
+		Recommendations: recs,
+	}
 }

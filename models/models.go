@@ -289,17 +289,25 @@ type AdvancePreviewNextWeek struct {
 }
 
 // PlayerHandicapRec is one player's read-only handicap recommendation in an advance preview.
-// The recommendation is computed from closed official match data only.
+// The recommendation is computed from closed official match data only, using the same
+// rack-windowed, eligibility-threshold-gated engine as the Handicap Review screen
+// (handicaps.Service.Recommendations) so Week Recap and the pre-close advance preview
+// can never disagree with the Handicap tab about whether a player is eligible.
 // No changes are written anywhere; this is informational draft output only.
 type PlayerHandicapRec struct {
 	PlayerID            int64   `json:"player_id"`
 	PlayerName          string  `json:"player_name"`
 	CurrentHandicap     float64 `json:"current_handicap"`
 	RecommendedHandicap float64 `json:"recommended_handicap"`
-	MatchesPlayed       int     `json:"matches_played"`
-	AdminHold           bool    `json:"admin_hold"`
-	Skipped             bool    `json:"skipped"`
-	Reason              string  `json:"reason,omitempty"` // "no_data"|"admin_hold"|"no_change"|"capped"|"unsupported_method"
+	// IncludedRacks is the count of eligible rack samples used in the calculation
+	// (window-limited), matching HandicapReviewRec.IncludedRacks. Renamed from the
+	// older "matches_played" -- the prior game-diff-average implementation counted
+	// whole matches, but the unified rack-based engine counts individual racks, so
+	// the old field name no longer described what was in it.
+	IncludedRacks int    `json:"included_racks"`
+	AdminHold     bool   `json:"admin_hold"`
+	Skipped       bool   `json:"skipped"`
+	Reason        string `json:"reason,omitempty"` // "no_data"|"admin_hold"|"below_threshold"|"no_change"|"capped"|"unsupported_method"
 }
 
 // HandicapReviewRec is one player's read-only entry for the Handicap Review screen.

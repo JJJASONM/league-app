@@ -60,11 +60,13 @@ These items should stay small enough to review and ship independently.
     the Go app instead of IIS 411ing. The `GET /api/player-stats`
     roster-only-player gap is also fixed as of 2026-08-23
     (`player-stats-roster-join-fix`), verified via new SQLite store tests
-    (not yet re-verified against staging). See Completed / Largely
-    Completed below for all entries and
-    `doc/testing/product-smoke-test-checklist.md` for full detail on the
-    remaining open findings (handicap-preview parity, the generated-
-    schedule undo gap, and two low-severity rough edges).
+    (not yet re-verified against staging). The Week Recap / Handicap
+    Recommendations eligibility parity gap is also fixed as of 2026-08-24
+    (`handicap-preview-parity`) -- both paths now share one computation and
+    eligibility gate. See Completed / Largely Completed below for all
+    entries and `doc/testing/product-smoke-test-checklist.md` for full
+    detail on the remaining open findings (the generated-schedule undo gap
+    and two low-severity rough edges).
 
 - Domain and data-access restructuring.
   - Major domains (matches, handicaps, seasons, leagues, players, teams) have
@@ -559,6 +561,39 @@ follow-up.
   test that predates this fix. Result shape (`models.PlayerStat`)
   unchanged. Not yet re-verified against the actual staging environment --
   that would need a deploy.
+- Handicap preview parity (2026-08-24). Fixes the staging smoke-pass
+  finding that Week Recap's embedded handicap preview and the dedicated
+  Handicap Recommendations endpoint disagreed on eligibility for the same
+  season/players: the recap preview showed concrete recommended changes
+  while the Recommendations endpoint showed the same players as
+  `below_threshold`. Root cause was deeper than a missing threshold check
+  -- `HandicapPreview`'s `game_diff_average` case computed from
+  `match_results` match-averaged diffs with no eligibility gate at all,
+  a completely different algorithm from `Recommendations`'s rack-windowed
+  implied-handicap engine, so the two paths could disagree on both
+  eligibility and the recommended value itself.
+  `backend/domains/handicaps/service.go`'s `HandicapPreview` now calls
+  `Service.Recommendations` directly for `game_diff_average` and reshapes
+  the result into the existing `models.AdvancePreviewHandicap`/
+  `PlayerHandicapRec` response shape, so Week Recap, Advance Preview, and
+  the Handicap Recommendations tab all share one computation and one
+  15-rack eligibility gate. The old `applyGameDiffCap` function is deleted
+  along with the now-unused match-averaged code path.
+  `manual_review`/`kicker_average_preview` handling is unchanged. One
+  user-visible contract change: `PlayerHandicapRec.MatchesPlayed`
+  (`matches_played`) is renamed to `IncludedRacks` (`included_racks`),
+  since the shared engine counts individual eligible racks rather than
+  whole matches -- updated in the JSON response, the Week Recap/Advance
+  Preview table header and cell in
+  `web/domains/schedules/schedule-page-component.js`, and all handler
+  tests referencing the field. Verified with new backend tests proving
+  parity for a below-threshold player and an eligible one against
+  identical stub data, plus updated `handlers/api_handicap_test.go`
+  integration tests (several needed rewriting since they previously seeded
+  `match_results` rows and relied on the retired algorithm's lack of a
+  threshold or season-roster requirement). Full `go test ./...` and
+  `go build ./...` pass. Not yet re-verified against the actual staging
+  environment -- that would need a deploy.
 
 ## Open Questions To Resolve
 

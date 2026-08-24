@@ -669,7 +669,7 @@ Because no handicap writes occur, the Reopen workflow requires no new rollback l
       "player_name": "John Smith",
       "current_handicap": 1.5,
       "recommended_handicap": 2.3,
-      "matches_played": 4,
+      "included_racks": 4,
       "admin_hold": false,
       "skipped": false
     },
@@ -678,7 +678,7 @@ Because no handicap writes occur, the Reopen workflow requires no new rollback l
       "player_name": "Jane Doe",
       "current_handicap": 2.0,
       "recommended_handicap": 2.0,
-      "matches_played": 3,
+      "included_racks": 3,
       "admin_hold": false,
       "skipped": false,
       "reason": "no_change"
@@ -688,7 +688,7 @@ Because no handicap writes occur, the Reopen workflow requires no new rollback l
       "player_name": "Bob Lee",
       "current_handicap": 3.0,
       "recommended_handicap": 3.0,
-      "matches_played": 0,
+      "included_racks": 0,
       "admin_hold": false,
       "skipped": true,
       "reason": "no_data"
@@ -698,7 +698,7 @@ Because no handicap writes occur, the Reopen workflow requires no new rollback l
       "player_name": "Alice Wu",
       "current_handicap": 2.0,
       "recommended_handicap": 2.0,
-      "matches_played": 2,
+      "included_racks": 2,
       "admin_hold": true,
       "skipped": true,
       "reason": "admin_hold"
@@ -848,6 +848,17 @@ week_closed=1` matches. Response shape:
   ]
 }
 ```
+
+**Superseded 2026-06-27 by the Phase 3E opponent-normalized rack formula, and
+field names below are historical only.** This response shape (and the
+`match_results`-based `matches_played` field shown above) reflects
+`GET /api/seasons/{id}/handicap-recommendations` as it existed at the end of
+Phase 3D, before the rack-windowed engine replaced it. The endpoint's actual
+current response shape -- `assigned_hc`, `score_eligible_racks`,
+`included_racks`, `window_size`, `lifetime_hc`, `window_hc`, etc., with no
+`skipped` field -- is documented in `doc/domains/handicaps/README.md` under
+"Handicap Review Endpoint". Do not use the JSON block above as a reference
+for today's response.
 
 **Status codes returned by method:**
 
@@ -1169,6 +1180,16 @@ interface pattern and avoids an import cycle between `matches` and `handicaps`.
   which is the legacy formula. The Handicap Review screen uses the
   opponent-normalized formula via `Recommendations`. The preview path is display-
   only and not authoritative for Apply.
+
+  **Update 2026-08-24:** this accepted debt caused a real staging finding --
+  the preview and `Recommendations` could show conflicting eligibility and
+  values for the same players. `HandicapPreview` now delegates to
+  `Recommendations` for `game_diff_average` instead of running the legacy
+  formula, so the preview path and the Handicap Review screen share one
+  computation. See `doc/domains/handicaps/README.md` Decision History,
+  "HandicapPreview unified with Recommendations." One shape note for the
+  JSON examples elsewhere in this file: `PlayerHandicapRec`'s
+  `matches_played` field is renamed to `included_racks` as part of that fix.
 
 ### Not in B2
 

@@ -67,6 +67,48 @@ func closeWeek1ForHC(t *testing.T, sid, matchID int64) {
 	}
 }
 
+// closeOtherClosedMatchForHC creates and closes a second match with new players so the
+// season has at least one closed week (required before any recommendations compute)
+// without giving teamA/teamB's existing players any eligible racks of their own.
+func closeOtherClosedMatchForHC(t *testing.T, sid, teamA, teamB int64) {
+	t.Helper()
+	rPC, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Other','Home',?,3.0)`, teamA)
+	rPD, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Other','Away',?,3.0)`, teamB)
+	pC, _ := rPC.LastInsertId()
+	pD, _ := rPD.LastInsertId()
+	rm, err := db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number) VALUES (?,?,?,2)`, sid, teamA, teamB)
+	if err != nil {
+		t.Fatalf("closeOtherClosedMatchForHC: insert match: %v", err)
+	}
+	matchID, _ := rm.LastInsertId()
+	seedRoundResult(t, matchID, pC, pD)
+	closeWeek1ForHC(t, sid, matchID)
+}
+
+// seedRoundResultsN inserts n round_results rows (round_number 1..n) for the same
+// match/players, each with identical per-game scores and handicap snapshots. Used to
+// push a player's eligible rack count to or past the default 15-rack recommendation
+// window (5 rounds x 3 games = 15 racks), since below that the rack-windowed engine
+// reports below_threshold rather than an actionable recommendation.
+func seedRoundResultsN(t *testing.T, matchID, homePlayerID, awayPlayerID int64, n, homeScore, awayScore int, homeHC, awayHC float64) {
+	t.Helper()
+	for i := 1; i <= n; i++ {
+		_, err := db.DB.Exec(`
+			INSERT INTO round_results
+			    (match_id, round_number, home_player_id, away_player_id,
+			     game1_home, game1_away, game2_home, game2_away, game3_home, game3_away,
+			     home_handicap_used, away_handicap_used, handicap_pts_used, handicap_to)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,'')`,
+			matchID, i, homePlayerID, awayPlayerID,
+			homeScore, awayScore, homeScore, awayScore, homeScore, awayScore,
+			homeHC, awayHC)
+		if err != nil {
+			t.Fatalf("seedRoundResultsN: %v", err)
+		}
+	}
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID)
+}
+
 func TestHandicapPreview_ManualReview(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
@@ -88,10 +130,14 @@ func TestHandicapPreview_GameDiffAverage_TwoPlayers(t *testing.T) {
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
 	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerB)
-	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	// playerA wins 3 games, diff=3.0; playerB loses 3 games, diff=-3.0.
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,0,3,-3.0)`, f.matchID, f.playerB, f.teamB)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamB)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamB, f.playerB)
+	// 5 rounds (15 racks, at the default eligibility threshold) of home=10/away=7
+	// against a 0.0 handicap snapshot on both sides implies playerA (home) at
+	// 0.0 + 3/0.85 = 3.53, and playerB (away) at 0.0 + (-3)/0.85 = -3.53.
+	seedRoundResultsN(t, f.matchID, f.playerA, f.playerB, 5, 10, 7, 0.0, 0.0)
 	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
@@ -109,16 +155,16 @@ func TestHandicapPreview_GameDiffAverage_TwoPlayers(t *testing.T) {
 		recHC, _ := rec["recommended_handicap"].(float64)
 		skipped, _ := rec["skipped"].(bool)
 		if pid == f.playerA {
-			if recHC != 3.0 {
-				t.Errorf("playerA: want recommended_handicap=3.0, got %v", recHC)
+			if recHC != 3.53 {
+				t.Errorf("playerA: want recommended_handicap=3.53, got %v", recHC)
 			}
 			if skipped {
 				t.Error("playerA: want skipped=false")
 			}
 		}
 		if pid == f.playerB {
-			if recHC != -3.0 {
-				t.Errorf("playerB: want recommended_handicap=-3.0, got %v", recHC)
+			if recHC != -3.53 {
+				t.Errorf("playerB: want recommended_handicap=-3.53, got %v", recHC)
 			}
 		}
 	}
@@ -141,9 +187,9 @@ func TestHandicapPreview_OpenWeeksExcluded(t *testing.T) {
 	for _, r := range recs {
 		rec, _ := r.(map[string]any)
 		if int64(rec["player_id"].(float64)) == f.playerA {
-			mp, _ := rec["matches_played"].(float64)
+			mp, _ := rec["included_racks"].(float64)
 			if int(mp) != 0 {
-				t.Errorf("open week must not count: want matches_played=0, got %v", mp)
+				t.Errorf("open week must not count: want included_racks=0, got %v", mp)
 			}
 			if rec["skipped"] != true {
 				t.Errorf("player with no closed data must be skipped")
@@ -158,9 +204,12 @@ func TestHandicapPreview_OpenWeeksExcluded(t *testing.T) {
 func TestHandicapPreview_NoMatchData(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	// playerA is on season_rosters but has no closed match_results.
+	// playerA is on season_rosters but has no CLOSED match_results: f.matchID stays
+	// open, and a separate match is closed so the season has a closed week at all
+	// (required before any recommendations compute).
 	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
 	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	closeOtherClosedMatchForHC(t, f.sid, f.teamA, f.teamB)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
 	hc := getHandicapPreviewHC(t, f.srv.URL, f.sid, 1)
@@ -185,7 +234,8 @@ func TestHandicapPreview_AdminHold(t *testing.T) {
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE players SET admin_hold=1 WHERE id=?`, f.playerA)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
 	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
@@ -212,10 +262,13 @@ func TestHandicapPreview_AdminHold(t *testing.T) {
 
 func TestHandicapPreview_NoChange(t *testing.T) {
 	f := weekTestSeed(t)
-	// playerA: current=2.0, 1 match diff=2.0 -> recommended=2.0 -> no_change.
-	db.DB.Exec(`UPDATE players SET handicap=2.0 WHERE id=?`, f.playerA)
-	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,0,2.0)`, f.matchID, f.playerA, f.teamA)
+	// 5 rounds (15 racks, at the default eligibility threshold) of home=10/away=7
+	// against an away-snapshot handicap of 0.0 implies 0.0 + 3/0.85 = 3.53 (rounded).
+	// Setting playerA's current handicap to the same value produces reason=no_change.
+	db.DB.Exec(`UPDATE players SET handicap=3.53 WHERE id=?`, f.playerA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	seedRoundResultsN(t, f.matchID, f.playerA, f.playerB, 5, 10, 7, 0.0, 0.0)
 	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
@@ -239,12 +292,15 @@ func TestHandicapPreview_NoChange(t *testing.T) {
 
 func TestHandicapPreview_MaxIndividualCapApplied(t *testing.T) {
 	f := weekTestSeed(t)
-	// Set max_individual_handicap=3.0; playerA diff=5.0 -> recommended capped to 3.0.
+	// Set max_individual_handicap=3.0. 5 rounds (15 racks) of home=10/away=2 against
+	// an away-snapshot handicap of 5.0 implies 5.0 + 8/0.85 = 14.41, which exceeds the
+	// cap and gets clamped to 3.0.
 	db.DB.Exec(`INSERT OR REPLACE INTO season_rules (season_id, rule_key, rule_label, rule_value) VALUES (?,?,?,?)`,
 		f.sid, "max_individual_handicap", "Max Individual Handicap", "3.0")
 	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
-	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,0,5.0)`, f.matchID, f.playerA, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	seedRoundResultsN(t, f.matchID, f.playerA, f.playerB, 5, 10, 2, 5.0, 5.0)
 	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
@@ -259,7 +315,7 @@ func TestHandicapPreview_MaxIndividualCapApplied(t *testing.T) {
 			}
 			recHC, _ := rec["recommended_handicap"].(float64)
 			if recHC != 3.0 {
-				t.Errorf("want recommended_handicap=3.0 (capped from 5.0), got %v", recHC)
+				t.Errorf("want recommended_handicap=3.0 (capped from 14.41), got %v", recHC)
 			}
 			return
 		}
@@ -288,7 +344,8 @@ func TestCloseWeek_ReturnsHandicapRecommendations(t *testing.T) {
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
 	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
@@ -321,7 +378,8 @@ func TestPreviewAdvance_HandicapRecommendations(t *testing.T) {
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
 	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
@@ -341,10 +399,12 @@ func TestPreviewAdvance_HandicapRecommendations(t *testing.T) {
 func TestHandicapPreview_DBError_Returns500(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	closeWeek1ForHC(t, f.sid, f.matchID)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
-	// Drop season_rosters so the candidate UNION query in computeGameDiffAverageRecs
-	// fails with a real SQL error. This DB is isolated to this test's temp dir.
+	// Drop season_rosters so the roster query in Recommendations fails with a real
+	// SQL error once the closed-week gate is satisfied. This DB is isolated to this
+	// test's temp dir.
 	if _, err := db.DB.Exec(`DROP TABLE season_rosters`); err != nil {
 		t.Fatalf("DROP TABLE season_rosters: %v", err)
 	}
@@ -1222,12 +1282,13 @@ func TestHandicapReview_WeekReopeningSlideWindow(t *testing.T) {
 
 // TestCloseWeek_AdvanceResultHandicapShape verifies that the Close Week response's
 // advance_result.handicap uses PlayerHandicapRec fields (current_handicap,
-// recommended_handicap, matches_played) and not HandicapReviewRec fields.
+// recommended_handicap, included_racks) and not HandicapReviewRec fields.
 func TestCloseWeek_AdvanceResultHandicapShape(t *testing.T) {
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE players SET handicap=1.0 WHERE id=?`, f.playerA)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,0,3.0)`, f.matchID, f.playerA, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
 	setHandicapMethod(t, f.sid, "game_diff_average")
 
 	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
@@ -1249,7 +1310,7 @@ func TestCloseWeek_AdvanceResultHandicapShape(t *testing.T) {
 	}
 	recs, _ := hc["recommendations"].([]any)
 	if len(recs) == 0 {
-		t.Skip("no recommendations available -- cannot verify shape")
+		t.Fatal("want non-empty recommendations to verify shape")
 	}
 	rec, _ := recs[0].(map[string]any)
 
@@ -1260,8 +1321,8 @@ func TestCloseWeek_AdvanceResultHandicapShape(t *testing.T) {
 	if _, ok := rec["recommended_handicap"]; !ok {
 		t.Error("close week advance_result.handicap rec missing recommended_handicap (PlayerHandicapRec field)")
 	}
-	if _, ok := rec["matches_played"]; !ok {
-		t.Error("close week advance_result.handicap rec missing matches_played (PlayerHandicapRec field)")
+	if _, ok := rec["included_racks"]; !ok {
+		t.Error("close week advance_result.handicap rec missing included_racks (PlayerHandicapRec field)")
 	}
 	// Must NOT have HandicapReviewRec-only fields.
 	if _, ok := rec["assigned_hc"]; ok {
@@ -1313,8 +1374,8 @@ func TestHandicapReview_AdvancePreviewShapeUnchanged(t *testing.T) {
 	if _, ok := rec["recommended_handicap"]; !ok {
 		t.Error("advance-preview rec missing recommended_handicap (PlayerHandicapRec field)")
 	}
-	if _, ok := rec["matches_played"]; !ok {
-		t.Error("advance-preview rec missing matches_played (PlayerHandicapRec field)")
+	if _, ok := rec["included_racks"]; !ok {
+		t.Error("advance-preview rec missing included_racks (PlayerHandicapRec field)")
 	}
 	if _, ok := rec["assigned_hc"]; ok {
 		t.Error("advance-preview rec must not contain assigned_hc (HandicapReviewRec field)")

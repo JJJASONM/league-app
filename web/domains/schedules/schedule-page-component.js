@@ -720,7 +720,7 @@ class SchedulePage extends HTMLElement {
             : '';
       }
       const trClass = r.skipped ? ' class="text-muted"' : '';
-      return `<tr${trClass}><td>${esc(r.player_name)}</td><td>${esc(fmtHC(r.current_handicap))}</td><td>${recCell}</td><td>${r.matches_played}</td><td>${noteCell}</td></tr>`;
+      return `<tr${trClass}><td>${esc(r.player_name)}</td><td>${esc(fmtHC(r.current_handicap))}</td><td>${recCell}</td><td>${r.included_racks}</td><td>${noteCell}</td></tr>`;
     }).join('');
     return `<div class="mt-2">
       <p class="small fw-bold text-danger mb-1"><i class="bi bi-exclamation-circle me-1"></i>Recommendations are <strong>not applied automatically</strong> -- review and update manually if needed.</p>
@@ -729,7 +729,7 @@ class SchedulePage extends HTMLElement {
           <th class="text-muted fw-normal small">Player</th>
           <th class="text-muted fw-normal small">Current</th>
           <th class="text-muted fw-normal small">Recommended</th>
-          <th class="text-muted fw-normal small">Matches</th>
+          <th class="text-muted fw-normal small">Racks</th>
           <th class="text-muted fw-normal small">Notes</th>
         </tr></thead>
         <tbody>${rows}</tbody>

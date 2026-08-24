@@ -513,11 +513,32 @@ func TestHandicapPreview_KickerAverage_Unsupported(t *testing.T) {
 	}
 }
 
+// nRackRows builds n identical RackRow entries for player 1 (home) vs player 2
+// (away), each contributing 3 score-eligible game slots with the given
+// opponent handicap and per-game score diff (home score - away score, home
+// always winning 10-x so every slot is score-eligible).
+func nRackRows(n int, oppHC float64, homeScore, awayScore int) []handicaps.RackRow {
+	rows := make([]handicaps.RackRow, n)
+	hc := oppHC
+	for i := range rows {
+		rows[i] = handicaps.RackRow{
+			HomePlayerID: 1, AwayPlayerID: 2,
+			G1H: homeScore, G1A: awayScore,
+			G2H: homeScore, G2A: awayScore,
+			G3H: homeScore, G3A: awayScore,
+			AwayHCUsed: &hc,
+		}
+	}
+	return rows
+}
+
 func TestHandicapPreview_GameDiffAverage_NoRecs_NoChange(t *testing.T) {
 	method := "game_diff_average"
 	store := &stubStore{
+		seasonExists: true,
+		closedWeeks:  1,
 		rules:        handicaps.HandicapRuleRow{UpdateMethod: &method},
-		gameDiffRecs: []handicaps.GameDiffAverageRow{},
+		roster:       []handicaps.RosterEntry{},
 	}
 	svc := handicaps.NewService(store)
 
@@ -533,14 +554,20 @@ func TestHandicapPreview_GameDiffAverage_NoRecs_NoChange(t *testing.T) {
 	}
 }
 
+// TestHandicapPreview_GameDiffAverage_OneChange_MessageSingular seeds enough
+// rack samples (well over the default 15-rack eligibility threshold) to
+// produce one actionable, non-capped recommendation.
 func TestHandicapPreview_GameDiffAverage_OneChange_MessageSingular(t *testing.T) {
 	method := "game_diff_average"
 	maxHC := "4.5"
 	store := &stubStore{
-		rules: handicaps.HandicapRuleRow{UpdateMethod: &method, MaxHC: &maxHC},
-		gameDiffRecs: []handicaps.GameDiffAverageRow{
-			{PlayerID: 1, PlayerName: "Alice A", CurrentHC: 2.0, MatchCount: 3, TotalDiff: 9.0},
+		seasonExists: true,
+		closedWeeks:  1,
+		rules:        handicaps.HandicapRuleRow{UpdateMethod: &method, MaxHC: &maxHC},
+		roster: []handicaps.RosterEntry{
+			{PlayerID: 1, PlayerName: "Alice A", TeamName: "T1", AssignedHC: 0.0},
 		},
+		racks: nRackRows(15, 0.0, 10, 7), // implied ~= 0.0 + (10-7)/0.85 = 3.53
 	}
 	svc := handicaps.NewService(store)
 
@@ -555,21 +582,31 @@ func TestHandicapPreview_GameDiffAverage_OneChange_MessageSingular(t *testing.T)
 		t.Fatalf("want 1 recommendation, got %d", len(hc.Recommendations))
 	}
 	rec := hc.Recommendations[0]
-	if rec.RecommendedHandicap != 3.0 {
-		t.Errorf("want recommended=3.0, got %v", rec.RecommendedHandicap)
+	if rec.Skipped {
+		t.Fatalf("want an actionable (non-skipped) recommendation, got skipped (reason=%q)", rec.Reason)
+	}
+	if rec.RecommendedHandicap != 3.53 {
+		t.Errorf("want recommended=3.53, got %v", rec.RecommendedHandicap)
 	}
 	if rec.Reason == "no_change" {
 		t.Error("expected a change reason, got no_change")
 	}
 }
 
+// TestHandicapPreview_GameDiffAverage_AdminHold_Skipped gives the player a
+// small amount of rack data (nonzero, but under the eligibility threshold) --
+// admin_hold must still take priority over below_threshold, matching
+// buildRecs' documented reason priority (no_data > admin_hold > below_threshold).
 func TestHandicapPreview_GameDiffAverage_AdminHold_Skipped(t *testing.T) {
 	method := "game_diff_average"
 	store := &stubStore{
-		rules: handicaps.HandicapRuleRow{UpdateMethod: &method},
-		gameDiffRecs: []handicaps.GameDiffAverageRow{
-			{PlayerID: 1, PlayerName: "Bob B", CurrentHC: 2.0, AdminHold: true, MatchCount: 5, TotalDiff: 15.0},
+		seasonExists: true,
+		closedWeeks:  1,
+		rules:        handicaps.HandicapRuleRow{UpdateMethod: &method},
+		roster: []handicaps.RosterEntry{
+			{PlayerID: 1, PlayerName: "Bob B", TeamName: "T1", AssignedHC: 2.0, AdminHold: true},
 		},
+		racks: nRackRows(1, 2.0, 10, 7),
 	}
 	svc := handicaps.NewService(store)
 
@@ -589,14 +626,20 @@ func TestHandicapPreview_GameDiffAverage_AdminHold_Skipped(t *testing.T) {
 	}
 }
 
+// TestHandicapPreview_GameDiffAverage_CappedAtMaxHC uses a large implied
+// handicap (opponent HC 5.0, home shutting out every game 10-0) so the
+// window-implied value comfortably exceeds maxHC and gets capped.
 func TestHandicapPreview_GameDiffAverage_CappedAtMaxHC(t *testing.T) {
 	method := "game_diff_average"
 	maxHC := "3.0"
 	store := &stubStore{
-		rules: handicaps.HandicapRuleRow{UpdateMethod: &method, MaxHC: &maxHC},
-		gameDiffRecs: []handicaps.GameDiffAverageRow{
-			{PlayerID: 1, PlayerName: "Carol C", CurrentHC: 1.0, MatchCount: 2, TotalDiff: 10.0},
+		seasonExists: true,
+		closedWeeks:  1,
+		rules:        handicaps.HandicapRuleRow{UpdateMethod: &method, MaxHC: &maxHC},
+		roster: []handicaps.RosterEntry{
+			{PlayerID: 1, PlayerName: "Carol C", TeamName: "T1", AssignedHC: 1.0},
 		},
+		racks: nRackRows(15, 5.0, 10, 0), // implied ~= 5.0 + (10-0)/0.85 = 16.76, way over maxHC
 	}
 	svc := handicaps.NewService(store)
 
@@ -613,6 +656,98 @@ func TestHandicapPreview_GameDiffAverage_CappedAtMaxHC(t *testing.T) {
 	}
 	if rec.Reason != "capped" {
 		t.Errorf("want reason=capped, got %q", rec.Reason)
+	}
+}
+
+// ============================================================================
+// HandicapPreview / Recommendations parity
+//
+// Regression coverage for the staging smoke-pass finding: Week Recap's
+// embedded handicap preview (HandicapPreview) and the dedicated Handicap
+// Recommendations endpoint must agree on eligibility and recommended values
+// for the same season/player data, since HandicapPreview now delegates to
+// Recommendations for method=game_diff_average.
+// ============================================================================
+
+// TestHandicapPreview_Recommendations_ParityBelowThreshold reproduces the
+// exact staging smoke-pass shape: a player with real but sparse rack data
+// (well under the eligibility threshold). Recommendations must report
+// below_threshold, and HandicapPreview must show the same player as skipped
+// with the same reason -- not a concrete actionable recommendation.
+func TestHandicapPreview_Recommendations_ParityBelowThreshold(t *testing.T) {
+	store := &stubStore{
+		seasonExists: true,
+		closedWeeks:  1,
+		rules:        handicaps.HandicapRuleRow{UpdateMethod: ptr("game_diff_average")},
+		roster: []handicaps.RosterEntry{
+			{PlayerID: 1, PlayerName: "Below Threshold", TeamName: "T1", AssignedHC: 0.0},
+		},
+		racks: nRackRows(1, 0.0, 10, 7), // 3 eligible racks, default threshold is 15
+	}
+	svc := handicaps.NewService(store)
+
+	review, err := svc.Recommendations(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Recommendations: %v", err)
+	}
+	if len(review.Recommendations) != 1 || review.Recommendations[0].Reason != handicaps.ReasonBelowThreshold {
+		t.Fatalf("want Recommendations to report below_threshold, got %+v", review.Recommendations)
+	}
+
+	preview, err := svc.HandicapPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("HandicapPreview: %v", err)
+	}
+	if len(preview.Recommendations) != 1 {
+		t.Fatalf("want 1 preview rec, got %d", len(preview.Recommendations))
+	}
+	rec := preview.Recommendations[0]
+	if !rec.Skipped {
+		t.Error("want Skipped=true for a below-threshold player -- this is the exact staging smoke-pass parity bug: " +
+			"Week Recap must not show an actionable recommendation when the Handicap tab reports below_threshold")
+	}
+	if rec.Reason != handicaps.ReasonBelowThreshold {
+		t.Errorf("want reason=below_threshold, got %q", rec.Reason)
+	}
+}
+
+// TestHandicapPreview_Recommendations_ParityEligible confirms the positive
+// case: for an eligible player, HandicapPreview's recommended value matches
+// Recommendations' value exactly, not just the eligibility decision.
+func TestHandicapPreview_Recommendations_ParityEligible(t *testing.T) {
+	store := &stubStore{
+		seasonExists: true,
+		closedWeeks:  1,
+		rules:        handicaps.HandicapRuleRow{UpdateMethod: ptr("game_diff_average")},
+		roster: []handicaps.RosterEntry{
+			{PlayerID: 1, PlayerName: "Eligible Player", TeamName: "T1", AssignedHC: 0.0},
+		},
+		racks: nRackRows(15, 0.0, 10, 7),
+	}
+	svc := handicaps.NewService(store)
+
+	review, err := svc.Recommendations(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Recommendations: %v", err)
+	}
+	if len(review.Recommendations) != 1 || review.Recommendations[0].RecommendedHC == nil {
+		t.Fatalf("want an actionable recommendation, got %+v", review.Recommendations)
+	}
+	wantHC := *review.Recommendations[0].RecommendedHC
+
+	preview, err := svc.HandicapPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("HandicapPreview: %v", err)
+	}
+	if len(preview.Recommendations) != 1 {
+		t.Fatalf("want 1 preview rec, got %d", len(preview.Recommendations))
+	}
+	rec := preview.Recommendations[0]
+	if rec.Skipped {
+		t.Errorf("want an eligible player NOT skipped in preview, got skipped (reason=%q)", rec.Reason)
+	}
+	if rec.RecommendedHandicap != wantHC {
+		t.Errorf("want preview recommended handicap to match Recommendations exactly (%v), got %v", wantHC, rec.RecommendedHandicap)
 	}
 }
 
