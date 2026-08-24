@@ -260,6 +260,99 @@ func TestRoundStore_GetPlayerStats_SeasonScope_WeekClosedGate(t *testing.T) {
 	}
 }
 
+// TestRoundStore_GetPlayerStats_RosterOnlyPlayer_NullTeamID is a regression
+// test for the staging smoke-pass finding: a player assigned to a season
+// only via season_rosters (players.team_id left NULL, the target model)
+// must still appear in season-scoped player stats, with their team name
+// resolved through the roster rather than dropped by the players.team_id JOIN.
+func TestRoundStore_GetPlayerStats_RosterOnlyPlayer_NullTeamID(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+
+	res, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('Casey','Roster',0)`)
+	if err != nil {
+		t.Fatalf("insert roster-only player: %v", err)
+	}
+	rosterPlayerID, _ := res.LastInsertId()
+
+	if _, err := db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Home Team')`,
+		seasonID, homeTeamID); err != nil {
+		t.Fatalf("insert season_teams: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+		seasonID, homeTeamID, rosterPlayerID); err != nil {
+		t.Fatalf("insert season_rosters: %v", err)
+	}
+
+	db.DB.Exec(`UPDATE matches SET completed=1, week_closed=1 WHERE id=?`, matchID)
+	if _, err := db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,1,2)`,
+		matchID, rosterPlayerID, homeTeamID); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	stats, err := s.GetPlayerStats(context.Background(), matches.PlayerStatsRequest{SeasonID: seasonID})
+	if err != nil {
+		t.Fatalf("GetPlayerStats: %v", err)
+	}
+	var found *models.PlayerStat
+	for i := range stats {
+		if stats[i].PlayerID == rosterPlayerID {
+			found = &stats[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("roster-only player (NULL players.team_id) not found in stats -- regression of the staging smoke-pass finding")
+	}
+	if found.TeamName != "Home Team" {
+		t.Errorf("want team name resolved via season_rosters = %q, got %q", "Home Team", found.TeamName)
+	}
+	if found.GamesWon != 3 || found.GamesLost != 1 {
+		t.Errorf("want games_won=3 games_lost=1, got %d/%d", found.GamesWon, found.GamesLost)
+	}
+}
+
+// TestRoundStore_GetPlayerStats_SeasonRosterTeamOverridesStaleTeamID confirms
+// that when a player's current players.team_id disagrees with this season's
+// season_rosters entry (e.g. a mid-season team change), the season roster
+// wins for team-name resolution, not the stale players.team_id.
+func TestRoundStore_GetPlayerStats_SeasonRosterTeamOverridesStaleTeamID(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, homePlayerID, _, seasonID, homeTeamID, awayTeamID := seedRoundTestData(t)
+
+	if _, err := db.DB.Exec(`UPDATE players SET team_id=? WHERE id=?`, awayTeamID, homePlayerID); err != nil {
+		t.Fatalf("update player team_id: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Home Team')`,
+		seasonID, homeTeamID); err != nil {
+		t.Fatalf("insert season_teams: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+		seasonID, homeTeamID, homePlayerID); err != nil {
+		t.Fatalf("insert season_rosters: %v", err)
+	}
+
+	db.DB.Exec(`UPDATE matches SET completed=1, week_closed=1 WHERE id=?`, matchID)
+	if _, err := db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,2,0,2)`,
+		matchID, homePlayerID, homeTeamID); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	stats, err := s.GetPlayerStats(context.Background(), matches.PlayerStatsRequest{SeasonID: seasonID})
+	if err != nil {
+		t.Fatalf("GetPlayerStats: %v", err)
+	}
+	for _, st := range stats {
+		if st.PlayerID == homePlayerID {
+			if st.TeamName != "Home Team" {
+				t.Errorf("want season-roster team name %q (not the stale players.team_id team), got %q",
+					"Home Team", st.TeamName)
+			}
+			return
+		}
+	}
+	t.Fatal("player not found in stats")
+}
+
 // ─── SubmitMatchResults ───────────────────────────────────────────────────────
 
 func TestRoundStore_SubmitMatchResults_ReplacesAndCompletes(t *testing.T) {

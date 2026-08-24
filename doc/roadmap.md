@@ -57,9 +57,14 @@ These items should stay small enough to review and ship independently.
     regardless of the Admin Key) plus several smaller product findings.
     The critical one is fixed and verified on staging as of 2026-08-23
     (`api-client-bodyless-post-fix`) -- all five affected routes now reach
-    the Go app instead of IIS 411ing. See Completed / Largely Completed
-    below for both entries and `doc/testing/product-smoke-test-checklist.md`
-    for full detail on every other finding, which remain open.
+    the Go app instead of IIS 411ing. The `GET /api/player-stats`
+    roster-only-player gap is also fixed as of 2026-08-23
+    (`player-stats-roster-join-fix`), verified via new SQLite store tests
+    (not yet re-verified against staging). See Completed / Largely
+    Completed below for all entries and
+    `doc/testing/product-smoke-test-checklist.md` for full detail on the
+    remaining open findings (handicap-preview parity, the generated-
+    schedule undo gap, and two low-severity rough edges).
 
 - Domain and data-access restructuring.
   - Major domains (matches, handicaps, seasons, leagues, players, teams) have
@@ -534,6 +539,26 @@ follow-up.
   instead of IIS 411 -- confirming the request now reaches the app. Does
   not, on its own, re-verify the broader browser click-flow for these
   buttons, only that the IIS-level rejection is gone.
+- Player stats season-roster join fix (2026-08-23). Fixes the staging
+  smoke-pass finding that `GET /api/player-stats` silently dropped players
+  assigned to a season only via `season_rosters`/`lineup_plans` (the
+  documented target model) rather than the legacy `players.team_id`.
+  `GetPlayerStats`'s season-scoped query
+  (`backend/storage/sqlite/round_store.go`) now resolves each player's team
+  by preferring their `season_rosters` entry for the requested season, and
+  only falls back to `players.team_id` when they have no roster row for
+  that season -- so a stale or missing `players.team_id` no longer excludes
+  or misattributes a player. The league-scoped variant of `GetPlayerStats`
+  is unchanged; `season_rosters` has no league-only concept to fall back
+  to there. Verified with two new SQLite store tests: one reproducing the
+  exact reported shape (a `players.team_id IS NULL` player present only in
+  `season_rosters`, now correctly included with the right team name and
+  stats) and one confirming the season roster wins when it disagrees with
+  a player's current `players.team_id` (e.g. a mid-season team change).
+  Full `go test ./...` passes, including the pre-existing `GetPlayerStats`
+  test that predates this fix. Result shape (`models.PlayerStat`)
+  unchanged. Not yet re-verified against the actual staging environment --
+  that would need a deploy.
 
 ## Open Questions To Resolve
 

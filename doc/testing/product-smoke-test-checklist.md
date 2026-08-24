@@ -587,6 +587,20 @@ sequence -- but worth a friendlier error message.
         gap that only bites season-roster-only player assignment, not
         today's seed/fixture data. See Known Gaps below.
 
+  **Fix status (2026-08-23, `player-stats-roster-join-fix`):** `GetPlayerStats`'s
+  season-scoped query now resolves team via a `season_rosters` lookup for
+  the requested season first, falling back to `players.team_id` only when
+  the player has no roster row for that season -- so roster-only players
+  are no longer dropped, and existing `players.team_id`-only players are
+  unaffected. Verified with two new SQLite-backed store tests: one seeding
+  a `players.team_id IS NULL` player who is only in `season_rosters` (the
+  exact shape this gap found) confirms they now appear with correct stats
+  and team name, and one confirming the season roster's team wins over a
+  stale/differing `players.team_id` when both exist. Full `go test ./...`
+  passes, including the original `GetPlayerStats` test written before this
+  gap was found. Not re-verified against the actual staging environment
+  this run -- that would need a deploy.
+
 ### 13. Handicap Review / Apply
 
 - Browser: Handicap nav.
@@ -681,7 +695,7 @@ sequence -- but worth a friendlier error message.
 | 4 | Player safe-merge has no admin UI (already tracked as deferred in `doc/roadmap.md`) | Low (known/tracked) | `doc/roadmap.md` "Player record maintenance" | Open |
 | 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` | Open |
 | 6 | Bodyless `POST` calls (Backup, Season Activate/Close/Reopen, Reopen Week) return IIS 411 on staging, independent of the Admin Key -- discovered 2026-08-23 | ~~Critical~~ | `web/lib/api-client.js` (doesn't send a body when none is passed) | **Resolved 2026-08-23** by `api-client-bodyless-post-fix`, verified on staging -- all five routes now reach the Go app instead of 411ing; see the Critical Blocker section above for evidence |
-| 7 | `GET /api/player-stats` silently returns empty for players assigned only via `season_rosters`/`lineup_plans` without a direct `players.team_id` -- discovered 2026-08-23 | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | Open -- does not affect current seed/fixture data (which always sets `team_id`), but is a landmine for season-roster-only workflows |
+| 7 | `GET /api/player-stats` silently returns empty for players assigned only via `season_rosters`/`lineup_plans` without a direct `players.team_id` -- discovered 2026-08-23 | ~~Medium~~ | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | **Fixed 2026-08-23** by `player-stats-roster-join-fix`, verified via new SQLite store tests -- staging (browser/API) re-verification not yet done |
 | 8 | Week Recap's embedded handicap preview and the dedicated Handicap Recommendations endpoint disagree on eligibility for the same season/players -- discovered 2026-08-23 | Medium | `backend/domains/handicaps/service.go` `HandicapPreview` vs `Recommendations` | Open |
 | 9 | No way to cleanly undo a generated schedule (`Generate Schedule` has no matching `DELETE`) short of deleting the whole season/league -- discovered 2026-08-23 | Low | `handlers/api_match_routes.go` (no `DELETE /api/matches/{id}`) | Open |
 | 10 | `POST /api/seasons/{id}/teams` with `name` returns a raw 500 with a leaked SQL message instead of a friendly 409 when a same-named standalone team already exists in the league -- discovered 2026-08-23 | Low | `backend/domains/seasons` `AddTeam` | Open |
@@ -689,29 +703,22 @@ sequence -- but worth a friendlier error message.
 
 ## Recommended Next Branches
 
-`api-client-bodyless-post-fix` is done and verified on staging (see the
-Critical Blocker section above and Known Gaps row #6) -- no longer listed
-here as a pending branch. Remaining, in priority order:
+`api-client-bodyless-post-fix` and `player-stats-roster-join-fix` are both
+done (see the Critical Blocker section above and Known Gaps rows #6/#7) --
+no longer listed here as pending branches. Remaining, in priority order:
 
-1. **`player-stats-roster-join-fix`** -- change `GetPlayerStats`'s SQL to
-   resolve team via `season_rosters` (or a `LEFT JOIN` that doesn't drop
-   roster-only players) instead of an INNER JOIN on the legacy
-   `players.team_id`. Medium priority: doesn't affect today's seed/fixture
-   data, but silently breaks for any season built the "target" way
-   (season-roster-first player assignment), which is the direction
-   `doc/domains/players/README.md` says the app is heading.
-2. **`handicap-preview-parity`** -- reconcile Week Recap's embedded
+1. **`handicap-preview-parity`** -- reconcile Week Recap's embedded
    handicap preview with the dedicated Handicap Recommendations engine's
    eligibility-threshold logic (or explicitly document why they're allowed
    to differ, if that's intentional). Medium priority: confusing but not
    destructive -- an admin could be told conflicting things by two screens
    about the same season.
-3. Lower priority, all discovered this pass: a friendlier error for the
+2. Lower priority, all discovered this pass: a friendlier error for the
    season-teams name-collision 500 (#10), fixing the rules-update response
    echo (#11), and deciding whether "Generate Schedule" needs an undo path
    (#9) -- likely only worth it if a real workflow (not just this smoke
    test) hits it.
-4. Everything already known before this pass (dashboard gate demo data,
+3. Everything already known before this pass (dashboard gate demo data,
    staging health-check endpoint choice, merge UI, the `.codex/skills/`
    script drift) remains backlog-level, unchanged by this run.
 

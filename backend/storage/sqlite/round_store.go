@@ -275,18 +275,32 @@ func (s *RoundStore) GetStandingsData(ctx context.Context, seasonID int64) (matc
 
 // GetPlayerStats returns aggregated match_results for the given season or league scope.
 // Returns nil when neither SeasonID nor LeagueID is set (caller normalises to empty slice).
+// SeasonID scope includes players present in that season's season_rosters even when
+// players.team_id is NULL; LeagueID scope is unchanged and still resolves team only via
+// the current players.team_id (season_rosters has no league-only concept to fall back to).
 func (s *RoundStore) GetPlayerStats(ctx context.Context, req matches.PlayerStatsRequest) ([]models.PlayerStat, error) {
 	var query string
 	var args []any
 	switch {
 	case req.SeasonID != 0:
+		// Team resolution prefers this season's season_rosters entry (the
+		// target model, where team assignment can differ per season and
+		// players.team_id may be NULL) and falls back to the player's
+		// direct players.team_id when they have no season_rosters row for
+		// this specific season. This keeps existing team_id-only players
+		// working unchanged while including roster-only players that the
+		// old players.team_id-only JOIN silently dropped.
 		query = `
+			WITH season_team AS (
+			    SELECT player_id, team_id FROM season_rosters WHERE season_id = ?
+			)
 			SELECT p.id, COALESCE(p.player_number,''), p.first_name || ' ' || p.last_name,
 			       COALESCE(t.name,''), p.handicap,
 			       COALESCE(SUM(mr.sets_won),0), COALESCE(SUM(mr.sets_lost),0),
 			       COALESCE(SUM(mr.games_won),0), COALESCE(SUM(mr.games_lost),0)
 			FROM players p
-			JOIN teams t ON t.id = p.team_id
+			LEFT JOIN season_team st ON st.player_id = p.id
+			JOIN teams t ON t.id = COALESCE(st.team_id, p.team_id)
 			JOIN seasons se ON se.league_id = t.league_id AND se.id = ?
 			LEFT JOIN match_results mr ON mr.player_id = p.id
 			    AND mr.match_id IN (
@@ -294,7 +308,7 @@ func (s *RoundStore) GetPlayerStats(ctx context.Context, req matches.PlayerStats
 			        WHERE season_id=? AND completed=1 AND week_closed=1
 			    )
 			GROUP BY p.id ORDER BY SUM(mr.sets_won) DESC, SUM(mr.games_won) DESC`
-		args = []any{req.SeasonID, req.SeasonID}
+		args = []any{req.SeasonID, req.SeasonID, req.SeasonID}
 	case req.LeagueID != 0:
 		query = `
 			SELECT p.id, COALESCE(p.player_number,''), p.first_name || ' ' || p.last_name,
