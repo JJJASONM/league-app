@@ -37,7 +37,7 @@ to test player-stats against real team-assigned players). Confirmed
 restored to baseline afterward: match counts per season, fixture week
 statuses (all open), and season-2 rule value all matched the pre-run state.
 
-### Critical blocker found 2026-08-23, fixed (locally verified; staging re-verification pending): bodyless POST fails on staging (IIS), independent of the Admin Key
+### Critical blocker found and fixed 2026-08-23, verified on staging: bodyless POST fails on staging (IIS), independent of the Admin Key
 
 Five real sidebar/screen buttons call the shared `api()` client with **no
 body argument**: Backup DB (`POST /backup`), Season Activate
@@ -78,12 +78,42 @@ affected. **Locally verified**: loaded the actual shipped
 `web/lib/api-client.js` into a sandboxed Node context with a `fetch` spy
 and confirmed `api('POST', '/backup')` (and `PUT`/`PATCH` with no body) now
 send `opts.body === '{}'`, while `GET`/`DELETE` still send no body and an
-explicit body still passes through unchanged -- 6/6 cases passed. **Not yet
-re-verified against real staging behind IIS** -- that needs a deploy, which
-this branch did not perform (scope was implementation + local verification
-only). Until that re-verification happens, treat this as fixed-in-code and
-locally proven, not yet confirmed to have actually resolved the IIS 411 in
-the environment where it was originally observed.
+explicit body still passes through unchanged -- 6/6 cases passed.
+
+**Verified on staging, 2026-08-23** (commit `b795e33`, deployed): confirmed
+`/lib/api-client.js` served by staging contains the fix
+(`BODY_REQUIRED_METHODS`), then sent the exact request shape the fixed
+frontend now produces -- a real `Admin Key` plus an explicit `'{}'` body --
+to all five previously-411ing routes. All five now reach the Go app instead
+of being rejected by IIS:
+
+```
+POST /api/backup                          -> 200 (real backup file written)
+POST /api/seasons/999999/activate         -> 404 "season not found"
+POST /api/seasons/999999/close            -> 404 "season not found"
+POST /api/seasons/999999/reopen           -> 404 "season not found"
+POST /api/seasons/999999/weeks/1/reopen   -> 500 "reopen week: season-closed
+                                              check: ... sql: no rows in
+                                              result set"
+```
+
+The nonexistent-season IDs were deliberate, so 404/500 here are correct
+Go-app responses (not another 411) -- exactly what proves the request got
+past IIS this time. I independently reproduced this myself (not just
+relaying a report) using a real personal-key admin user against real
+staging; a separate staging verification pass (a different session,
+username `bodyless-post-verify-2026-08-23`) reached the same conclusion
+first. **Aside, out of scope for this fix**: the Reopen Week 500 for a
+nonexistent season is arguably a minor Go-side gap on its own (an unhandled
+`sql.ErrNoRows` surfacing as 500 instead of 404) -- unrelated to the
+bodyless-POST issue this branch fixed, not tracked as a new gap number here
+since it wasn't part of what this pass set out to verify.
+
+This confirms the fix resolves the original finding. **This does not, on
+its own, re-verify the broader browser click-flow for these five
+buttons** -- only that the IIS-level bodyless-POST rejection is gone. A
+real click-through would still be worth doing before calling the browser
+admin-write path fully proven end to end.
 
 ---
 
@@ -650,7 +680,7 @@ sequence -- but worth a friendlier error message.
 | 3 | No seed/fixture data demonstrates the Dashboard readiness gate's "disabled" state | Low | seed data only; documented workaround above | Open |
 | 4 | Player safe-merge has no admin UI (already tracked as deferred in `doc/roadmap.md`) | Low (known/tracked) | `doc/roadmap.md` "Player record maintenance" | Open |
 | 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` | Open |
-| 6 | Bodyless `POST` calls (Backup, Season Activate/Close/Reopen, Reopen Week) return IIS 411 on staging, independent of the Admin Key -- discovered 2026-08-23 | ~~Critical~~ | `web/lib/api-client.js` (doesn't send a body when none is passed) | **Fixed in code 2026-08-23** by `api-client-bodyless-post-fix`, locally verified -- staging re-verification still pending a deploy, not yet fully closed |
+| 6 | Bodyless `POST` calls (Backup, Season Activate/Close/Reopen, Reopen Week) return IIS 411 on staging, independent of the Admin Key -- discovered 2026-08-23 | ~~Critical~~ | `web/lib/api-client.js` (doesn't send a body when none is passed) | **Resolved 2026-08-23** by `api-client-bodyless-post-fix`, verified on staging -- all five routes now reach the Go app instead of 411ing; see the Critical Blocker section above for evidence |
 | 7 | `GET /api/player-stats` silently returns empty for players assigned only via `season_rosters`/`lineup_plans` without a direct `players.team_id` -- discovered 2026-08-23 | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | Open -- does not affect current seed/fixture data (which always sets `team_id`), but is a landmine for season-roster-only workflows |
 | 8 | Week Recap's embedded handicap preview and the dedicated Handicap Recommendations endpoint disagree on eligibility for the same season/players -- discovered 2026-08-23 | Medium | `backend/domains/handicaps/service.go` `HandicapPreview` vs `Recommendations` | Open |
 | 9 | No way to cleanly undo a generated schedule (`Generate Schedule` has no matching `DELETE`) short of deleting the whole season/league -- discovered 2026-08-23 | Low | `handlers/api_match_routes.go` (no `DELETE /api/matches/{id}`) | Open |
@@ -659,35 +689,29 @@ sequence -- but worth a friendlier error message.
 
 ## Recommended Next Branches
 
-1. **`api-client-bodyless-post-fix`** -- **implemented and locally verified
-   2026-08-23**, staging re-verification still pending. `api()` now always
-   sends a real body (`'{}'`) for `POST`/`PUT`/`PATCH` when the caller
-   passes none, instead of omitting the body entirely; `GET`/`DELETE`
-   unchanged. This should unblock Backup DB, Season Activate, Season Close,
-   Season Reopen, and Reopen Week on staging, but that has not been
-   confirmed against the actual IIS environment yet -- the next step is a
-   PM-approved deploy followed by re-testing those five actions on real
-   staging (repeat the relevant curl checks in sections 6/15/16 above, or
-   click the buttons directly) before this is fully closed out.
-2. **`player-stats-roster-join-fix`** -- change `GetPlayerStats`'s SQL to
+`api-client-bodyless-post-fix` is done and verified on staging (see the
+Critical Blocker section above and Known Gaps row #6) -- no longer listed
+here as a pending branch. Remaining, in priority order:
+
+1. **`player-stats-roster-join-fix`** -- change `GetPlayerStats`'s SQL to
    resolve team via `season_rosters` (or a `LEFT JOIN` that doesn't drop
    roster-only players) instead of an INNER JOIN on the legacy
    `players.team_id`. Medium priority: doesn't affect today's seed/fixture
    data, but silently breaks for any season built the "target" way
    (season-roster-first player assignment), which is the direction
    `doc/domains/players/README.md` says the app is heading.
-3. **`handicap-preview-parity`** -- reconcile Week Recap's embedded
+2. **`handicap-preview-parity`** -- reconcile Week Recap's embedded
    handicap preview with the dedicated Handicap Recommendations engine's
    eligibility-threshold logic (or explicitly document why they're allowed
    to differ, if that's intentional). Medium priority: confusing but not
    destructive -- an admin could be told conflicting things by two screens
    about the same season.
-4. Lower priority, all discovered this pass: a friendlier error for the
+3. Lower priority, all discovered this pass: a friendlier error for the
    season-teams name-collision 500 (#10), fixing the rules-update response
    echo (#11), and deciding whether "Generate Schedule" needs an undo path
    (#9) -- likely only worth it if a real workflow (not just this smoke
    test) hits it.
-5. Everything already known before this pass (dashboard gate demo data,
+4. Everything already known before this pass (dashboard gate demo data,
    staging health-check endpoint choice, merge UI, the `.codex/skills/`
    script drift) remains backlog-level, unchanged by this run.
 

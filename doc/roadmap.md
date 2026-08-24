@@ -55,12 +55,11 @@ These items should stay small enough to review and ship independently.
     critical, staging-only blocker (bodyless `POST` calls -- Backup,
     Season Activate/Close/Reopen, Reopen Week -- rejected with IIS 411
     regardless of the Admin Key) plus several smaller product findings.
-    The critical one is fixed in code and locally verified as of
-    2026-08-23 (`api-client-bodyless-post-fix`); staging re-verification
-    after a deploy is the one remaining step before this readiness pass is
-    fully closed out. See Completed / Largely Completed below for both
-    entries and `doc/testing/product-smoke-test-checklist.md` for full
-    detail on every other finding.
+    The critical one is fixed and verified on staging as of 2026-08-23
+    (`api-client-bodyless-post-fix`) -- all five affected routes now reach
+    the Go app instead of IIS 411ing. See Completed / Largely Completed
+    below for both entries and `doc/testing/product-smoke-test-checklist.md`
+    for full detail on every other finding, which remain open.
 
 - Domain and data-access restructuring.
   - Major domains (matches, handicaps, seasons, leagues, players, teams) have
@@ -518,20 +517,23 @@ follow-up.
   rather than real seeded data, and confirmed staging was fully restored to
   its pre-run baseline afterward. Did not fix any of the bugs found (out of
   scope for that branch).
-- API client bodyless POST fix (2026-08-23, implemented and locally
-  verified; staging re-verification pending). `web/lib/api-client.js`'s
-  `api()` now sends a real `'{}'` body for `POST`/`PUT`/`PATCH` calls when
-  the caller passes none, instead of omitting the body entirely --
-  `GET`/`DELETE` unchanged, since the smoke pass confirmed bodyless
-  `DELETE` was never affected. Fixes the critical finding from the staging
-  smoke pass: IIS in front of staging rejects a bodyless `POST` with 411
-  before it reaches the Go app, breaking Backup DB, Season
-  Activate/Close/Reopen, and Reopen Week regardless of the Admin Key.
-  Verified locally by loading the actual shipped source into a sandboxed
-  Node context with a `fetch` spy and confirming `POST`/`PUT`/`PATCH` now
-  send `'{}'`, `GET`/`DELETE` still send nothing, and an explicit body still
-  passes through unchanged. Not yet re-verified against the real staging
-  IIS environment -- that needs a deploy, which is the next step.
+- API client bodyless POST fix (2026-08-23, implemented and verified on
+  staging). `web/lib/api-client.js`'s `api()` now sends a real `'{}'` body
+  for `POST`/`PUT`/`PATCH` calls when the caller passes none, instead of
+  omitting the body entirely -- `GET`/`DELETE` unchanged, since the smoke
+  pass confirmed bodyless `DELETE` was never affected. Fixes the critical
+  finding from the staging smoke pass: IIS in front of staging rejects a
+  bodyless `POST` with 411 before it reaches the Go app, breaking Backup
+  DB, Season Activate/Close/Reopen, and Reopen Week regardless of the
+  Admin Key. Verified locally first (sandboxed Node context with a `fetch`
+  spy against the real shipped source), then verified on real staging
+  after deploy: with the same request shape the fixed frontend now sends
+  (Admin Key + explicit `'{}'` body), Backup DB returned 200 with a real
+  backup file, and Season Activate/Close/Reopen and Reopen Week against a
+  deliberately nonexistent season returned 404/500 Go-app responses
+  instead of IIS 411 -- confirming the request now reaches the app. Does
+  not, on its own, re-verify the broader browser click-flow for these
+  buttons, only that the IIS-level rejection is gone.
 
 ## Open Questions To Resolve
 
