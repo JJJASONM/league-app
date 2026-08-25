@@ -79,6 +79,12 @@ type RoundManager interface {
 	GetPlayerStats(ctx context.Context, req matches.PlayerStatsRequest) ([]models.PlayerStat, error)
 	SubmitResults(ctx context.Context, matchID int64, results []models.MatchResult) error
 	ClearResults(ctx context.Context, matchID int64) error
+
+	// Weekly Score Processing Phase 1A: match-level approval/processing.
+	ApproveMatch(ctx context.Context, matchID int64, approvedByUserID *int64, note string) error
+	ProcessMatch(ctx context.Context, matchID int64, processedByUserID *int64) error
+	UnapproveMatch(ctx context.Context, matchID int64) error
+	UnprocessMatch(ctx context.Context, matchID int64) error
 }
 
 // MatchManager handles match listing, detail retrieval, and team assignment.

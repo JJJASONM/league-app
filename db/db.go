@@ -368,6 +368,16 @@ CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash);
 		// Season-end clearance Phase 1: close season lifecycle columns.
 		`ALTER TABLE seasons ADD COLUMN closed_at DATETIME`,
 		`ALTER TABLE seasons ADD COLUMN final_standings_snapshot TEXT`,
+		// Weekly Score Processing Phase 1A: match-level approval/processing state.
+		// NULL means not-yet-approved / not-yet-processed. approved_by_user_id and
+		// processed_by_user_id are nullable since admin-attested approval in this
+		// phase does not require a personal-key user (mirrors handicap_history's
+		// applied_by_user_id nullability for the same reason).
+		`ALTER TABLE matches ADD COLUMN approved_at          DATETIME`,
+		`ALTER TABLE matches ADD COLUMN approved_by_user_id  INTEGER`,
+		`ALTER TABLE matches ADD COLUMN approval_note        TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE matches ADD COLUMN processed_at         DATETIME`,
+		`ALTER TABLE matches ADD COLUMN processed_by_user_id INTEGER`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs

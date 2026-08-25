@@ -92,6 +92,24 @@ func seedRound(t *testing.T, matchID, homePID, awayPID int64, g1h, g1a, g2h, g2a
 
 func fp(v float64) *float64 { return &v }
 
+// markMatchProcessed sets matches.processed_at (Weekly Score Processing
+// Phase 1A) directly, independent of week_closed, for eligibility tests.
+func markMatchProcessed(t *testing.T, matchID int64) {
+	t.Helper()
+	if _, err := db.DB.Exec(`UPDATE matches SET processed_at=CURRENT_TIMESTAMP WHERE id=?`, matchID); err != nil {
+		t.Fatalf("mark match processed: %v", err)
+	}
+}
+
+// markMatchApproved sets matches.approved_at only (no processed_at), used to
+// prove approval alone does not grant handicap eligibility.
+func markMatchApproved(t *testing.T, matchID int64) {
+	t.Helper()
+	if _, err := db.DB.Exec(`UPDATE matches SET approved_at=CURRENT_TIMESTAMP WHERE id=?`, matchID); err != nil {
+		t.Fatalf("mark match approved: %v", err)
+	}
+}
+
 // ============================================================================
 // SeasonExists
 // ============================================================================
@@ -171,6 +189,46 @@ func TestClosedWeekCount_TwoMatchesSameWeek_ReturnsOne(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("want 1 distinct week, got %d", n)
+	}
+}
+
+// Weekly Score Processing Phase 1A compatibility: a processed-but-open-week
+// match counts toward ClosedWeekCount even though week_closed=0.
+func TestClosedWeekCount_ProcessedButOpenWeek_ReturnsOne(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamID := seedTeam(t, leagueID, "A")
+	matchID := seedMatch(t, seasonID, teamID, teamID, "2026-01-07", 1, 1, 0) // week_closed=0
+	markMatchProcessed(t, matchID)
+
+	store := sqlite.NewHandicapStore(db.DB)
+	n, err := store.ClosedWeekCount(context.Background(), seasonID)
+	if err != nil {
+		t.Fatalf("ClosedWeekCount: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("want 1 (processed match counts before week close), got %d", n)
+	}
+}
+
+// Weekly Score Processing Phase 1A compatibility: a legacy closed-week match
+// with processed_at still NULL (closed before this phase existed) still
+// counts -- closing a week must not stop counting toward eligibility.
+func TestClosedWeekCount_ClosedWeekNullProcessedAt_StillCounts(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamID := seedTeam(t, leagueID, "A")
+	seedMatch(t, seasonID, teamID, teamID, "2026-01-07", 1, 1, 1) // week_closed=1, processed_at NULL
+
+	store := sqlite.NewHandicapStore(db.DB)
+	n, err := store.ClosedWeekCount(context.Background(), seasonID)
+	if err != nil {
+		t.Fatalf("ClosedWeekCount: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("want 1 (legacy closed week still counts), got %d", n)
 	}
 }
 
@@ -415,6 +473,100 @@ func TestEligibleRacks_NonEightBall_Excluded(t *testing.T) {
 	}
 	if len(racks) != 0 {
 		t.Errorf("want 0 racks for non-8ball, got %d", len(racks))
+	}
+}
+
+// Weekly Score Processing Phase 1A compatibility: a processed-but-open-week
+// match (week_closed=0) is included -- processing counts before the full
+// week closes.
+func TestEligibleRacks_ProcessedButOpenWeek_Included(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamID := seedTeam(t, leagueID, "T")
+	homePID := seedPlayer(t, teamID, "H", "P", 1.5)
+	awayPID := seedPlayer(t, teamID, "A", "P", 2.0)
+	matchID := seedMatch(t, seasonID, teamID, teamID, "2026-01-07", 1, 1, 0) // completed=1, week_closed=0
+	seedRound(t, matchID, homePID, awayPID, 10, 7, 10, 5, 10, 3, fp(1.5), fp(2.0))
+	markMatchProcessed(t, matchID)
+
+	store := sqlite.NewHandicapStore(db.DB)
+	racks, err := store.EligibleRacks(context.Background(), []int64{homePID})
+	if err != nil {
+		t.Fatalf("EligibleRacks: %v", err)
+	}
+	if len(racks) != 1 {
+		t.Errorf("want 1 rack for processed-but-open match, got %d", len(racks))
+	}
+}
+
+// Weekly Score Processing Phase 1A compatibility: a legacy closed-week match
+// with processed_at still NULL is still included -- closing a week before
+// this phase existed (or before Phase 1B wires Close Week to processing)
+// must not stop it from counting.
+func TestEligibleRacks_ClosedWeekNullProcessedAt_StillIncluded(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamID := seedTeam(t, leagueID, "T")
+	homePID := seedPlayer(t, teamID, "H", "P", 1.5)
+	awayPID := seedPlayer(t, teamID, "A", "P", 2.0)
+	matchID := seedMatch(t, seasonID, teamID, teamID, "2026-01-07", 1, 1, 1) // week_closed=1, processed_at NULL
+	seedRound(t, matchID, homePID, awayPID, 10, 7, 10, 5, 10, 3, fp(1.5), fp(2.0))
+
+	store := sqlite.NewHandicapStore(db.DB)
+	racks, err := store.EligibleRacks(context.Background(), []int64{homePID})
+	if err != nil {
+		t.Fatalf("EligibleRacks: %v", err)
+	}
+	if len(racks) != 1 {
+		t.Errorf("want 1 rack for legacy closed-week match, got %d", len(racks))
+	}
+}
+
+// An approved-but-not-processed match in an open week is excluded --
+// approval alone (without processing or week close) does not grant
+// eligibility.
+func TestEligibleRacks_ApprovedNotProcessed_ExcludedUnlessWeekClosed(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamID := seedTeam(t, leagueID, "T")
+	homePID := seedPlayer(t, teamID, "H", "P", 1.5)
+	awayPID := seedPlayer(t, teamID, "A", "P", 2.0)
+	matchID := seedMatch(t, seasonID, teamID, teamID, "2026-01-07", 1, 1, 0) // week_closed=0
+	seedRound(t, matchID, homePID, awayPID, 10, 7, 10, 5, 10, 3, fp(1.5), fp(2.0))
+	markMatchApproved(t, matchID)
+
+	store := sqlite.NewHandicapStore(db.DB)
+	racks, err := store.EligibleRacks(context.Background(), []int64{homePID})
+	if err != nil {
+		t.Fatalf("EligibleRacks: %v", err)
+	}
+	if len(racks) != 0 {
+		t.Errorf("want 0 racks for approved-but-unprocessed match, got %d", len(racks))
+	}
+}
+
+// An unprocessed, open-week match (never approved, never processed, never
+// closed) is excluded -- the ordinary in-progress case.
+func TestEligibleRacks_UnprocessedOpenMatch_Excluded(t *testing.T) {
+	initDB(t)
+	leagueID := seedLeague(t, "8ball")
+	seasonID := seedSeason(t, leagueID)
+	teamID := seedTeam(t, leagueID, "T")
+	homePID := seedPlayer(t, teamID, "H", "P", 1.5)
+	awayPID := seedPlayer(t, teamID, "A", "P", 2.0)
+	matchID := seedMatch(t, seasonID, teamID, teamID, "2026-01-07", 1, 1, 0) // week_closed=0
+	seedRound(t, matchID, homePID, awayPID, 10, 7, 10, 5, 10, 3, fp(1.5), fp(2.0))
+
+	store := sqlite.NewHandicapStore(db.DB)
+	racks, err := store.EligibleRacks(context.Background(), []int64{homePID})
+	if err != nil {
+		t.Fatalf("EligibleRacks: %v", err)
+	}
+	if len(racks) != 0 {
+		t.Errorf("want 0 racks for unprocessed open match, got %d", len(racks))
 	}
 }
 

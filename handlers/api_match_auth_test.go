@@ -6,13 +6,20 @@
 //   DELETE /api/matches/{id}/results
 //   POST  /api/matches/{id}/rounds
 //
+// Weekly Score Processing Phase 1A adds four more, same clearanceAuth chain:
+//   POST /api/matches/{id}/approve
+//   POST /api/matches/{id}/process
+//   POST /api/matches/{id}/unapprove
+//   POST /api/matches/{id}/unprocess
+//
 // Unprotected reads (no changes):
 //   GET /api/matches, GET /api/matches/{id}, GET /api/matches/{id}/rounds,
 //   GET /api/standings, GET /api/player-stats
 //
-// Auth rejection cases are demonstrated on PATCH /api/matches/{id}/assign as
-// the representative route -- the clearanceAuth chain is identical for all four.
-// Success cases cover all three allowed roles distributed across the four routes.
+// Auth rejection cases are demonstrated on PATCH /api/matches/{id}/assign and
+// (for the Phase 1A routes) POST /api/matches/{id}/approve as representative
+// routes -- the clearanceAuth chain is identical for all eight.
+// Success cases cover all three allowed roles distributed across the routes.
 package handlers
 
 import (
@@ -267,5 +274,133 @@ func TestMatchRoute_SaveRounds_SystemAdmin_ReachesHandler(t *testing.T) {
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("want 200 (system_admin reaches save-rounds handler), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- Weekly Score Processing Phase 1A auth rejection cases (representative route: approve) ---
+
+func TestMatchRoute_Approve_NoHeader_Returns401(t *testing.T) {
+	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: &models.User{ID: 1, Role: "league_admin"}}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), matchMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/approve", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", w.Code)
+	}
+	if w.Header().Get("WWW-Authenticate") == "" {
+		t.Error("want WWW-Authenticate header on 401")
+	}
+}
+
+func TestMatchRoute_Approve_InvalidToken_Returns403(t *testing.T) {
+	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: &models.User{ID: 1, Role: "league_admin"}}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), matchMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/approve", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", w.Code)
+	}
+}
+
+func TestMatchRoute_Approve_StaticAdminToken_Returns403(t *testing.T) {
+	auth := &stubApplyAuth{resolveKey: "valid-user-key", resolveUser: &models.User{ID: 1, Role: "league_admin"}}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), matchMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/approve", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("want 403 (static admin token must not authorize approve), got %d", w.Code)
+	}
+}
+
+func TestMatchRoute_Approve_ScoreKeeperRole_Returns403(t *testing.T) {
+	scorer := &models.User{ID: 2, Role: "score_keeper", Active: true}
+	auth := &stubApplyAuth{resolveKey: "scorer-key", resolveUser: scorer}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), matchMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/approve", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer scorer-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("want 403 for score_keeper role, got %d", w.Code)
+	}
+}
+
+// --- Weekly Score Processing Phase 1A success paths ---
+
+func TestMatchRoute_Approve_LeagueAdmin_ReachesHandler(t *testing.T) {
+	user := &models.User{ID: 1, Role: "league_admin", Active: true}
+	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: user}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), matchMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/approve", strings.NewReader(`{"note":"ok"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer my-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200 (league_admin reaches approve handler), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMatchRoute_Process_AdminCompat_ReachesHandler(t *testing.T) {
+	user := &models.User{ID: 1, Role: "admin", Active: true}
+	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: user}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), matchMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/process", nil)
+	req.Header.Set("Authorization", "Bearer my-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200 (role=admin compat for process), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMatchRoute_Unapprove_SystemAdmin_ReachesHandler(t *testing.T) {
+	user := &models.User{ID: 1, Role: "system_admin", Active: true}
+	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: user}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), matchMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/unapprove", nil)
+	req.Header.Set("Authorization", "Bearer my-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200 (system_admin reaches unapprove handler), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMatchRoute_Unprocess_LeagueAdmin_ReachesHandler(t *testing.T) {
+	user := &models.User{ID: 1, Role: "league_admin", Active: true}
+	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: user}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), matchMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/unprocess", nil)
+	req.Header.Set("Authorization", "Bearer my-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200 (league_admin reaches unprocess handler), got %d: %s", w.Code, w.Body.String())
 	}
 }

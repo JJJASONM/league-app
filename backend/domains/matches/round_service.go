@@ -57,6 +57,9 @@ func (s *RoundService) SaveRounds(ctx context.Context, input SaveRoundsInput) er
 		return domainerr.New("WEEK_CLOSED", domainerr.Conflict,
 			"week is closed; reopen before editing scores")
 	}
+	if err := checkMatchEditable(ctx, s.store, input.MatchID); err != nil {
+		return err
+	}
 
 	return s.store.RunTx(ctx, func(tx RoundStore) error {
 		mc, err := tx.LoadMatchContext(ctx, input.MatchID)
@@ -348,6 +351,9 @@ func (s *RoundService) SubmitResults(ctx context.Context, matchID int64, results
 		return domainerr.New("WEEK_CLOSED", domainerr.Conflict,
 			"week is closed; reopen before editing scores")
 	}
+	if err := checkMatchEditable(ctx, s.store, matchID); err != nil {
+		return err
+	}
 	return s.store.SubmitMatchResults(ctx, matchID, results)
 }
 
@@ -367,6 +373,9 @@ func (s *RoundService) ClearResults(ctx context.Context, matchID int64) error {
 	if closed {
 		return domainerr.New("WEEK_CLOSED", domainerr.Conflict,
 			"week is closed; reopen before editing scores")
+	}
+	if err := checkMatchEditable(ctx, s.store, matchID); err != nil {
+		return err
 	}
 	return s.store.ClearMatchResults(ctx, matchID)
 }

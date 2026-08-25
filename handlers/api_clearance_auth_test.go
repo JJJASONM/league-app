@@ -71,6 +71,12 @@ func (n *noopRoundMgr) SubmitResults(_ context.Context, _ int64, _ []models.Matc
 	return nil
 }
 func (n *noopRoundMgr) ClearResults(_ context.Context, _ int64) error { return nil }
+func (n *noopRoundMgr) ApproveMatch(_ context.Context, _ int64, _ *int64, _ string) error {
+	return nil
+}
+func (n *noopRoundMgr) ProcessMatch(_ context.Context, _ int64, _ *int64) error { return nil }
+func (n *noopRoundMgr) UnapproveMatch(_ context.Context, _ int64) error         { return nil }
+func (n *noopRoundMgr) UnprocessMatch(_ context.Context, _ int64) error        { return nil }
 
 // clearanceDeps returns Dependencies with personal-key auth wired and all required
 // managers set to noops. The four clearance routes are mounted with auth because

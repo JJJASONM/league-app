@@ -4,8 +4,8 @@
 
 **Owner:** `handicaps`
 **Status:** `draft`
-**Current version:** `0.3`
-**Last reviewed:** `2026-07-21`
+**Current version:** `0.4`
+**Last reviewed:** `2026-08-25`
 
 The Handicaps domain owns the opponent-normalized rack formula, the read-only
 Handicap Review endpoint, the pure-Go calculation package, and the backend-only
@@ -126,7 +126,26 @@ the display team name (season snapshot, not the permanent `teams.name`).
 Historical rack data is cross-league and cross-season by `players.id`. A player
 who moved teams or appeared in a prior season contributes those racks to their
 lifetime calculation. Only 8-ball (`leagues.game_format = '8ball'`) matches with
-`completed = 1 AND week_closed = 1` are included.
+`completed = 1 AND (processed_at IS NOT NULL OR week_closed = 1)` are included.
+
+**Weekly Score Processing Phase 1A (2026-08-25):** the eligibility gate
+used to be `completed = 1 AND week_closed = 1` alone. It now also admits a
+match the instant it is individually **processed**
+(`POST /api/matches/{id}/process`, `backend/domains/matches`), before its
+week ever closes. The `OR week_closed = 1` half is preserved unconditionally
+so every match closed before this phase existed -- and every match closed
+by today's still-unchanged Close Week, which does not yet set
+`processed_at` on the matches it closes -- keeps counting exactly as
+before. `ClosedWeekCount` (the "any data yet?" gate that short-circuits to
+`no_data` when zero) uses the identical `processed_at IS NOT NULL OR
+week_closed = 1` condition and kept its name despite no longer checking
+`week_closed` alone, to avoid a broad rename across its interface method,
+stub, and doc references for a naming-only concern. See
+`doc/domains/matches/README.md`'s "Weekly Score Processing Phase 1A"
+section for the full match-level lifecycle (approve/process/unapprove/
+unprocess) this eligibility change serves. Close Week itself does not yet
+require or auto-set `processed_at` -- that alignment is Phase 1B; until
+then this OR is load-bearing.
 
 ## Pure-Go Package (`backend/domains/handicaps`)
 
@@ -468,6 +487,31 @@ directly without nesting.
 | adapter (integration) | `handicap_store_test.go` | real SQLite via `db.Init(tempDir)` |
 | handler (stub-based) | `handlers/api_test.go` | 404/500/200 error-mapping via `stubHandicapSvc` |
 | handler (integration) | `handlers/api_test.go` | existing `TestHandicapRecs_*` and `TestHandicapReview_*` tests now run through the real service+adapter |
+
+### 2026-08-25 - Eligibility gate admits processed-but-open matches (Weekly Score Processing Phase 1A)
+
+**Status:** `accepted`
+
+`EligibleRacks` and `ClosedWeekCount` (`backend/storage/sqlite/handicap_store.go`)
+now gate on `completed = 1 AND (processed_at IS NOT NULL OR week_closed =
+1)` instead of `completed = 1 AND week_closed = 1`. This lets a match count
+toward handicap recommendations the moment an admin processes it
+(`backend/domains/matches`'s new match-level approve/process states),
+without waiting for its entire week to close. The `OR week_closed = 1`
+clause is unconditional and permanent for now, not a temporary shim: it is
+what keeps every match closed by today's Close Week -- which does not yet
+set `processed_at` on anything -- counting exactly as it always has.
+`ClosedWeekCount` kept its name rather than becoming e.g.
+`ProcessedWeekCount`, to avoid a rename touching its interface method,
+test stub, and doc references for a naming-only concern; the tradeoff is
+that its name no longer fully describes its condition, which this note and
+its Go doc comment both call out explicitly. See
+`doc/domains/matches/README.md`'s "Weekly Score Processing Phase 1A"
+section for the full feature this serves, and MATCHES-Q001 (resolved) for
+the lifecycle design. No change to `Recommendations`, `HandicapPreview`,
+or Apply's own logic -- all three already recompute live from whatever
+`EligibleRacks` returns, so they picked up processed-match eligibility for
+free.
 
 ### 2026-08-24 - HandicapPreview unified with Recommendations; matches_played renamed to included_racks
 

@@ -375,3 +375,74 @@ func (s *RoundStore) ClearMatchResults(ctx context.Context, matchID int64) error
 	}
 	return nil
 }
+
+// GetMatchApprovalState returns the match's completed/approved/processed
+// state. Exists is false when no match row matches matchID.
+func (s *RoundStore) GetMatchApprovalState(ctx context.Context, matchID int64) (matches.MatchApprovalState, error) {
+	var completed int
+	var approvedAt, processedAt sql.NullString
+	err := s.q.QueryRowContext(ctx,
+		`SELECT completed, approved_at, processed_at FROM matches WHERE id=?`, matchID).
+		Scan(&completed, &approvedAt, &processedAt)
+	if err == sql.ErrNoRows {
+		return matches.MatchApprovalState{}, nil
+	}
+	if err != nil {
+		return matches.MatchApprovalState{}, fmt.Errorf("match %d: approval state: %w", matchID, err)
+	}
+	state := matches.MatchApprovalState{Exists: true, Completed: completed == 1}
+	if approvedAt.Valid && approvedAt.String != "" {
+		state.ApprovedAt = &approvedAt.String
+	}
+	if processedAt.Valid && processedAt.String != "" {
+		state.ProcessedAt = &processedAt.String
+	}
+	return state, nil
+}
+
+// ApproveMatch sets approved_at to the current time and stores the approver
+// and note. approvedByUserID may be nil.
+func (s *RoundStore) ApproveMatch(ctx context.Context, matchID int64, approvedByUserID *int64, note string) error {
+	_, err := s.q.ExecContext(ctx,
+		`UPDATE matches SET approved_at=CURRENT_TIMESTAMP, approved_by_user_id=?, approval_note=? WHERE id=?`,
+		approvedByUserID, note, matchID)
+	if err != nil {
+		return fmt.Errorf("approve match: %w", err)
+	}
+	return nil
+}
+
+// ProcessMatch sets processed_at to the current time and stores the processor.
+// processedByUserID may be nil.
+func (s *RoundStore) ProcessMatch(ctx context.Context, matchID int64, processedByUserID *int64) error {
+	_, err := s.q.ExecContext(ctx,
+		`UPDATE matches SET processed_at=CURRENT_TIMESTAMP, processed_by_user_id=? WHERE id=?`,
+		processedByUserID, matchID)
+	if err != nil {
+		return fmt.Errorf("process match: %w", err)
+	}
+	return nil
+}
+
+// UnapproveMatch clears approved_at, approved_by_user_id, and approval_note.
+func (s *RoundStore) UnapproveMatch(ctx context.Context, matchID int64) error {
+	_, err := s.q.ExecContext(ctx,
+		`UPDATE matches SET approved_at=NULL, approved_by_user_id=NULL, approval_note='' WHERE id=?`,
+		matchID)
+	if err != nil {
+		return fmt.Errorf("unapprove match: %w", err)
+	}
+	return nil
+}
+
+// UnprocessMatch clears processed_at and processed_by_user_id. Approval
+// fields are left untouched.
+func (s *RoundStore) UnprocessMatch(ctx context.Context, matchID int64) error {
+	_, err := s.q.ExecContext(ctx,
+		`UPDATE matches SET processed_at=NULL, processed_by_user_id=NULL WHERE id=?`,
+		matchID)
+	if err != nil {
+		return fmt.Errorf("unprocess match: %w", err)
+	}
+	return nil
+}

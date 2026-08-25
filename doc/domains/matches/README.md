@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.5`
-**Last reviewed:** `2026-07-18`
+**Current version:** `0.6`
+**Last reviewed:** `2026-08-25`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -128,12 +128,17 @@ has 2 determined pairing wins in that round. Currently informational only.
 ## Score Entry And Workflow
 
 Scores may be entered and saved before the league week closes. Entering scores
-does not make their calculations official. The exact match status transition
-after score entry remains open (see MATCHES-Q001).
+does not make their calculations official. The match status transition after
+score entry is `approved` -> `processed`, added in Weekly Score Processing
+Phase 1A (see MATCHES-Q001, resolved, and the Phase 1A section below).
 
-Official handicap adjustments, match outcomes, standings, and player
-statistics are applied when the admin successfully closes the week. Results
-that have not passed week close do not contribute to official totals.
+Official match outcomes, standings, and player statistics are still applied
+only when the admin successfully closes the week -- Close Week itself is
+unchanged by Phase 1A. Handicap recommendation *eligibility* is the one
+exception: a processed match counts toward it immediately, before its week
+closes (see "Handicap eligibility: Phase 1A compatibility behavior" below).
+Results that have not passed week close still do not contribute to official
+standings/player-stats totals.
 
 ## Close Week -- Phase 1 (implemented 2026-06-21)
 
@@ -193,7 +198,7 @@ In Phase 1, warnings are surfaced in the UI but do not block close.
 - Duplicate player participation check (`WEEK_PLAYER_DUPLICATE`)
 - `SCORESHEET_PAIRING_UNDETERMINED` and `SCORESHEET_ROUND_INCOMPLETE` codes
 - `sets_won` / `sets_lost` population
-- Match-level status codes (MATCHES-Q001)
+- Match-level status codes (MATCHES-Q001) (**admin-attested approved/processed states implemented in Weekly Score Processing Phase 1A; real captain/player-side approval remains deferred**)
 - Audit log table
 
 ### UI Placement
@@ -997,16 +1002,23 @@ the shared audit log.
 
 ### MATCHES-Q001 - Status after score entry
 
-**Status:** `open`
+**Status:** `resolved`
 **Opened:** `2026-06-08`
-**Resolved:** `pending`
-**Related commit:** `pending`
+**Resolved:** `2026-08-25`
+**Related commit:** `weekly-score-processing-phase-1a-backend-foundation`
 
 **Context:** Scores are entered before week close, but additional calculations
 and validation still need to occur.
 
-**Resolution:** Decide whether completed score entry creates a review status,
-remains draft, or uses another controlled status.
+**Resolution:** Completed score entry does not become a review status by
+itself. Two new, independent, admin-attested match-level states were added
+underneath Close Week: `approved` (admin records that the team/captain
+approved the scores; blocks further score edits until unapproved) and
+`processed` (admin records that an approved match's results are official
+enough to count toward handicap recommendation eligibility, even before
+its week closes). See "Weekly Score Processing Phase 1A" above for full
+detail. Real captain/player login approval was explicitly deferred, not
+folded into this resolution.
 
 ### MATCHES-Q002 - Online score entry
 
@@ -1991,7 +2003,181 @@ rows; the section is hidden when `handicap_changes` is empty.
 - Print/export of the recap panel
 - Persisted recap snapshots
 
+## Weekly Score Processing Phase 1A -- Match-Level Approval/Processing (implemented 2026-08-25)
+
+### Goal
+
+Replace the physical signed-scoresheet process with an admin-attested,
+match-level approval and processing state that sits *underneath* Close
+Week, so a match's results can start counting toward handicap
+recommendation eligibility before every match in its week is complete.
+This is backend-only: no frontend buttons or status badges yet, and Close
+Week's own behavior is unchanged (see "What Phase 1A deliberately does not
+change" below). This closes MATCHES-Q001 at the design level for the
+score-entry-to-processed lifecycle; team-side (real captain/player login)
+approval remains a separate, deferred question.
+
+### Lifecycle
+
+    scheduled -> scores entered -> approved -> processed -> week closed
+
+`scheduled` and `scores entered` are the existing `completed` field.
+`approved` and `processed` are two new, independent match-level states.
+`week closed` is the existing `week_closed` field, unchanged in Phase 1A.
+
+### Schema (additive, matches `matches`)
+
+    approved_at          DATETIME   -- NULL = not approved
+    approved_by_user_id  INTEGER    -- nullable; admin-attested approval does not require a personal-key user
+    approval_note        TEXT NOT NULL DEFAULT ''
+    processed_at         DATETIME   -- NULL = not processed
+    processed_by_user_id INTEGER    -- nullable, same reason
+
+Non-null `*_at` is the single source of truth for each state (no separate
+boolean flag), matching how `seasons.activated_at` already works. Exposed
+on `models.Match` (`approved_at`, `approved_by_user_id`, `approval_note`,
+`processed_at`, `processed_by_user_id`, all `omitempty`) so a later
+frontend phase can render status without a new endpoint.
+
+### New endpoints
+
+    POST /api/matches/{id}/approve     body: {"note": "optional string"}
+    POST /api/matches/{id}/process     bodyless
+    POST /api/matches/{id}/unapprove   bodyless
+    POST /api/matches/{id}/unprocess   bodyless
+
+All four use the same `clearanceAuth` chain as `/results` and `/rounds`
+(personal-key Bearer auth; `league_admin`, `admin`, `system_admin` allowed;
+`score_keeper` rejected).
+
+### Validation
+
+**Approve:** match must exist (404) -> season not closed (409) -> week not
+closed (409) -> match completed (422 `MATCH_NOT_SCORED`) -> not already
+processed (409 `MATCH_ALREADY_PROCESSED`). Re-approving an
+approved-but-unprocessed match is idempotent (updates note/timestamp).
+
+**Process:** match must exist (404) -> season not closed (409) -> week not
+closed (409) -> `approved_at IS NOT NULL` (422 `MATCH_NOT_APPROVED`). Sets
+`processed_at`/`processed_by_user_id` only -- does **not** write
+`handicap_history` and does not itself change any player's handicap.
+Handicap Apply remains the only writer of `handicap_history`; Process only
+changes what counts as eligible input data for it (see below).
+
+**Unapprove:** match must exist (404) -> season not closed (409) -> week
+not closed (409) -> not already processed (409
+`MATCH_ALREADY_PROCESSED` -- unprocess first). Clears `approved_at`,
+`approved_by_user_id`, `approval_note`.
+
+**Unprocess:** match must exist (404) -> season not closed (409) -> week
+not closed (409). Clears `processed_at`/`processed_by_user_id` only --
+approval is deliberately left intact; the admin can separately unapprove
+afterward if the correction requires editing scores.
+
+### Score edits blocked after approval/processing
+
+`SaveRounds`, `SubmitResults`, and `ClearResults` now reject with 409 when
+the match is approved (`MATCH_APPROVED`) or processed (`MATCH_PROCESSED`),
+checked via a shared `checkMatchEditable` helper
+(`backend/domains/matches/approval_service.go`). There is no separate
+team/admin credential in Phase 1A -- the same personal key that entered
+scores also approves them -- so this is a workflow guard against
+accidental post-signoff edits, not a non-repudiation guarantee. The
+correction path is explicit: unprocess (if processed) -> unapprove (if
+approved) -> edit scores -> approve again -> process again.
+
+### Handicap eligibility: Phase 1A compatibility behavior
+
+`backend/storage/sqlite/handicap_store.go`'s `EligibleRacks` and
+`ClosedWeekCount` now gate on:
+
+    m.completed = 1 AND (m.processed_at IS NOT NULL OR m.week_closed = 1)
+
+A processed-but-open-week match counts immediately. A legacy closed-week
+match with `processed_at` still NULL (every match closed before this phase
+existed, and every match closed by today's unchanged Close Week) continues
+to count exactly as before -- this OR is what makes Phase 1A additive
+rather than a breaking change to existing recommendations. `ClosedWeekCount`
+keeps its name despite no longer checking `week_closed` alone, to avoid
+renaming its interface method, stub, and every doc reference across two
+files for a naming-only concern; see
+`doc/domains/handicaps/README.md` for the mirrored explanation there.
+`GameDiffAverageRecs` (dead code since the `handicap-preview-parity` phase
+removed its only caller) was not touched.
+
+### What Phase 1A deliberately does not change
+
+- Close Week's own validation, warning-acknowledgment, and error behavior
+  are completely unchanged. Close Week does not yet require matches to be
+  approved/processed, and does not auto-process approved matches. That
+  alignment is **Phase 1B**.
+- No frontend buttons or status badges. `models.Match` exposes the new
+  fields so Phase 1C can render them, but nothing in `web/` reads them yet.
+- No real captain/player login approval -- "approved" means
+  admin-attested in Phase 1A, full stop.
+- Handicap Apply's own mechanism, auth, and tests are untouched.
+
+### Files changed
+
+- `db/db.go` -- five additive columns on `matches`
+- `models/models.go` -- five new `Match` fields
+- `backend/domains/matches/round_store.go` -- `MatchApprovalState`,
+  `GetMatchApprovalState`/`ApproveMatch`/`ProcessMatch`/`UnapproveMatch`/
+  `UnprocessMatch` added to the `RoundStore` interface
+- `backend/domains/matches/approval_service.go` (new) --
+  `RoundService.ApproveMatch`/`ProcessMatch`/`UnapproveMatch`/
+  `UnprocessMatch`, `checkMatchEditable`, and the six new error codes
+- `backend/domains/matches/round_service.go` -- `checkMatchEditable` wired
+  into `SaveRounds`/`SubmitResults`/`ClearResults`
+- `backend/storage/sqlite/round_store.go` -- SQL implementations of the
+  five new `RoundStore` methods
+- `backend/storage/sqlite/match_store.go` -- `matchSelect` and its two scan
+  sites (`ListMatches`, `GetMatch`) extended with the five new columns
+- `backend/storage/sqlite/handicap_store.go` -- `EligibleRacks`/
+  `ClosedWeekCount` compatibility gate
+- `handlers/deps.go` -- four new `RoundManager` methods
+- `handlers/api_match_results_routes.go` -- four new routes
+- `handlers/api_match_results_handlers.go` -- four new handlers,
+  `approvingUserID`, `writeMatchApprovalErr`
+
+### Tests
+
+Service-layer (`backend/domains/matches/approval_service_test.go`): every
+validation branch for all four actions plus the score-edit-blocked
+regressions and a proof that an ordinary, never-approved match is
+unaffected. Store-layer
+(`backend/storage/sqlite/round_store_test.go`,
+`backend/storage/sqlite/handicap_store_test.go`): field persistence,
+approval-preserved-after-unprocess, and the eligibility compatibility
+matrix (processed-but-open included, legacy-closed-with-null-processed-at
+still included, approved-but-unprocessed excluded, plain open excluded).
+Handler-level (`handlers/api_match_approval_test.go`,
+`handlers/api_match_auth_test.go`): full HTTP round trip for all four
+endpoints, the score-edit conflicts, auth gating matching the existing
+match-mutation routes, and an end-to-end proof that
+`GET /handicap-recommendations` reflects a processed-but-open-week match's
+data (`TestHandicapRecommendations_IncludeProcessedButOpenMatch`).
+
+### Deferred (Phase 1B and later)
+
+- Close Week requiring all matches processed, or auto-processing remaining
+  approved matches at close time
+- Frontend: Match Entry approve/process buttons, Schedule week-card status
+  badges, any Week Recap UI change
+- Real captain/player login approval (Player Portal)
+- Bulk unapprove/unprocess across multiple matches
+
 ## Decision History
+
+### 2026-08-25 - Weekly Score Processing Phase 1A: match-level approval/processing
+
+**Status:** `accepted`
+
+See the full section above. Summary: added admin-attested `approved_at`/
+`processed_at` state on `matches`, four new endpoints, score-edit blocking
+after approval/processing, and a compatibility-preserving handicap
+eligibility gate (`processed_at IS NOT NULL OR week_closed = 1`). Close
+Week itself is unchanged; wiring it to the new states is Phase 1B.
 
 ### 2026-07-18 - Week-end clearance uses Close Week plus recap
 
@@ -2002,6 +2188,13 @@ move operations forward even when some matches have no result, as long as those
 matches are recorded in the recap and excluded from standings/player stats until
 resolved. Handicap Apply remains an explicit admin step in the recap flow and
 should happen before next-week scoresheets are used.
+
+**Update 2026-08-25:** the *week*-level model (`open`/`closed`) is
+unchanged, but individual *matches* now also carry independent
+`approved`/`processed` state underneath it -- see "Weekly Score Processing
+Phase 1A" above. A match can be processed (and count toward handicap
+eligibility) before its week closes; Close Week itself still works exactly
+as described here until Phase 1B.
 
 ### 2026-07-14 - Next-week readiness is informational, not a close blocker
 

@@ -150,6 +150,16 @@ type Match struct {
 	TableNumbers string    `json:"table_numbers,omitempty"`
 	Completed    bool      `json:"completed"`
 	CreatedAt    time.Time `json:"created_at"`
+
+	// Weekly Score Processing Phase 1A: admin-attested approval/processing
+	// state. Non-nil *At fields mean the corresponding action has happened.
+	// UserID fields are nullable (admin-attested approval does not require
+	// a personal-key user in this phase; see doc/domains/matches/README.md).
+	ApprovedAt        *string `json:"approved_at,omitempty"`
+	ApprovedByUserID  *int64  `json:"approved_by_user_id,omitempty"`
+	ApprovalNote      string  `json:"approval_note,omitempty"`
+	ProcessedAt       *string `json:"processed_at,omitempty"`
+	ProcessedByUserID *int64  `json:"processed_by_user_id,omitempty"`
 }
 
 // MatchResult is a single player's performance within a match.

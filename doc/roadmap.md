@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-23
+**Last reviewed:** 2026-08-25
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -98,6 +98,16 @@ These items should stay small enough to review and ship independently.
 - Keep staging and GitHub current after accepted work.
   - PM owns pushing committed work to origin.
   - Deploy staging after work that needs browser or user verification.
+
+- Weekly Score Processing / Approved Scores workflow.
+  - Replaces the physical signed-scoresheet process with admin-attested,
+    match-level approval and processing, sitting underneath Close Week so
+    a match's results can count toward handicap recommendation
+    eligibility before its whole week closes.
+  - **Phase 1A (backend foundation) complete 2026-08-25** -- see Completed
+    / Largely Completed below. Resolves MATCHES-Q001.
+  - Phase 1B (Close Week requires/auto-processes matches) and Phase 1C
+    (frontend buttons/badges) remain -- not yet scoped.
 
 ## Next
 
@@ -594,6 +604,33 @@ follow-up.
   threshold or season-roster requirement). Full `go test ./...` and
   `go build ./...` pass. Not yet re-verified against the actual staging
   environment -- that would need a deploy.
+- Weekly Score Processing Phase 1A: match-level approval/processing
+  backend foundation (2026-08-25). Resolves MATCHES-Q001. Adds two new,
+  independent, admin-attested states on `matches` --
+  `approved_at`/`approved_by_user_id`/`approval_note` and
+  `processed_at`/`processed_by_user_id` -- sitting underneath the
+  unchanged Close Week, plus four endpoints
+  (`POST /api/matches/{id}/approve|process|unapprove|unprocess`) gated by
+  the same `clearanceAuth` chain as other match mutations. Approving
+  requires the match be scored; processing requires it be approved;
+  `SaveRounds`/`SubmitResults`/`ClearResults` now reject with 409 once a
+  match is approved or processed, with unapprove/unprocess as the explicit
+  admin correction path (processed matches must be unprocessed before they
+  can be unapproved). Processing does not write `handicap_history` and does
+  not itself change any handicap -- Handicap Apply remains the only writer
+  of that table. The one cross-cutting change: handicap recommendation
+  eligibility (`EligibleRacks`/`ClosedWeekCount` in
+  `backend/storage/sqlite/handicap_store.go`) now admits a match once it is
+  processed, even before its week closes, while an explicit
+  `OR week_closed = 1` preserves every existing closed-week match's
+  eligibility unchanged -- `Recommendations`, `HandicapPreview`, and Apply
+  all picked this up for free since they already recompute live from
+  `EligibleRacks`. Backend-only: no frontend buttons, no Close Week
+  behavior change (Phase 1B), no real captain/player login approval.
+  Verified with new service, SQLite store, and handler integration tests
+  (including an end-to-end proof that a processed-but-open-week match
+  appears in `GET /handicap-recommendations`); full `go test ./...` and
+  `go build ./...` pass. Not yet re-verified against staging.
 
 ## Open Questions To Resolve
 
@@ -607,6 +644,7 @@ follow-up.
 | ID | Area | Resolution |
 | --- | --- | --- |
 | `USERS-Q001` | Users | Resolved 2026-07-27 - Admin-provisioned accounts; two-role model (system_admin, league_admin); personal API keys continue; player link deferred; route auth wires incrementally per phase. |
+| `MATCHES-Q001` | Matches | Resolved 2026-08-25 - Two new admin-attested match-level states (`approved`, `processed`) added underneath Close Week, not a single review status; processed matches count toward handicap eligibility before week close; real captain/player login approval deferred. See Weekly Score Processing Phase 1A. |
 | `PLAYERS-Q001` | Players | Resolved 2026-07-14 - Phase 1 quick-add uses at least one name, diff rating default 0, and optional team; duplicate detection and INCOMPLETE status deferred. |
 | `CODES-Q001` | Codes | Resolved 2026-07-14 - behavior-driving codes remain developer-owned constants; DB-backed code tables deferred. |
 | `SCHEDULES-Q001` | Schedules | Resolved 2026-07-13 - preview policy and enforcement complete. |

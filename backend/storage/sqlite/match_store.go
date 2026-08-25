@@ -14,10 +14,32 @@ const matchSelect = `
 	SELECT m.id, m.season_id,
 	       COALESCE(m.home_team_id,0), COALESCE(ht.name,'(unassigned)'),
 	       COALESCE(m.away_team_id,0), COALESCE(at.name,'(unassigned)'),
-	       m.match_date, m.week_number, m.completed, m.created_at
+	       m.match_date, m.week_number, m.completed, m.created_at,
+	       m.approved_at, m.approved_by_user_id, m.approval_note,
+	       m.processed_at, m.processed_by_user_id
 	FROM matches m
 	LEFT JOIN teams ht ON ht.id = m.home_team_id
 	LEFT JOIN teams at ON at.id = m.away_team_id`
+
+// scanMatchTail scans the five Weekly Score Processing Phase 1A columns
+// appended to matchSelect (approved_at, approved_by_user_id, approval_note,
+// processed_at, processed_by_user_id) into m. Shared by ListMatches and GetMatch.
+func scanMatchTail(m *models.Match, approvedAt, processedAt sql.NullString, approvedBy, processedBy sql.NullInt64) {
+	if approvedAt.Valid && approvedAt.String != "" {
+		m.ApprovedAt = &approvedAt.String
+	}
+	if approvedBy.Valid {
+		v := approvedBy.Int64
+		m.ApprovedByUserID = &v
+	}
+	if processedAt.Valid && processedAt.String != "" {
+		m.ProcessedAt = &processedAt.String
+	}
+	if processedBy.Valid {
+		v := processedBy.Int64
+		m.ProcessedByUserID = &v
+	}
+}
 
 // MatchStore is the SQLite implementation of matches.MatchStore.
 type MatchStore struct {
@@ -56,12 +78,16 @@ func (s *MatchStore) ListMatches(ctx context.Context, req matches.ListMatchesReq
 	for rows.Next() {
 		var m models.Match
 		var completed int
+		var approvedAt, processedAt sql.NullString
+		var approvedBy, processedBy sql.NullInt64
 		if err := rows.Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
-			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt); err != nil {
+			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt,
+			&approvedAt, &approvedBy, &m.ApprovalNote, &processedAt, &processedBy); err != nil {
 			return nil, err
 		}
 		m.Completed = completed == 1
 		m.MatchDate = normMatchDatePtr(m.MatchDate)
+		scanMatchTail(&m, approvedAt, processedAt, approvedBy, processedBy)
 		ms = append(ms, m)
 	}
 	return ms, rows.Err()
@@ -72,9 +98,12 @@ func (s *MatchStore) ListMatches(ctx context.Context, req matches.ListMatchesReq
 func (s *MatchStore) GetMatch(ctx context.Context, id int64) (models.MatchDetail, error) {
 	var m models.Match
 	var completed int
+	var approvedAt, processedAt sql.NullString
+	var approvedBy, processedBy sql.NullInt64
 	err := s.db.QueryRowContext(ctx, matchSelect+` WHERE m.id=?`, id).
 		Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
-			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt)
+			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt,
+			&approvedAt, &approvedBy, &m.ApprovalNote, &processedAt, &processedBy)
 	if err == sql.ErrNoRows {
 		return models.MatchDetail{}, matches.ErrMatchNotFound
 	}
@@ -83,6 +112,7 @@ func (s *MatchStore) GetMatch(ctx context.Context, id int64) (models.MatchDetail
 	}
 	m.Completed = completed == 1
 	m.MatchDate = normMatchDatePtr(m.MatchDate)
+	scanMatchTail(&m, approvedAt, processedAt, approvedBy, processedBy)
 
 	resRows, err := s.db.QueryContext(ctx, `
 		SELECT mr.id, mr.match_id, mr.player_id,

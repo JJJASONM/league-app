@@ -39,4 +39,26 @@ func registerMatchResultsRoutes(mux *http.ServeMux, roundMgr RoundManager, seaso
 	mux.HandleFunc("GET /api/player-stats", func(w http.ResponseWriter, r *http.Request) {
 		getPlayerStats(w, r, roundMgr)
 	})
+
+	// Weekly Score Processing Phase 1A: match-level approval/processing.
+	mux.HandleFunc("POST /api/matches/{id}/approve",
+		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+			approveMatch(w, r, roundMgr)
+		}),
+	)
+	mux.HandleFunc("POST /api/matches/{id}/process",
+		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+			processMatch(w, r, roundMgr)
+		}),
+	)
+	mux.HandleFunc("POST /api/matches/{id}/unapprove",
+		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+			unapproveMatch(w, r, roundMgr)
+		}),
+	)
+	mux.HandleFunc("POST /api/matches/{id}/unprocess",
+		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+			unprocessMatch(w, r, roundMgr)
+		}),
+	)
 }

@@ -84,12 +84,23 @@ func (s *HandicapStore) IsSeasonClosed(ctx context.Context, seasonID int64) (boo
 	return closed == 1, nil
 }
 
-// ClosedWeekCount returns the number of distinct week_numbers that have at least
-// one match with week_closed=1 in the given season.
+// ClosedWeekCount returns the number of distinct week_numbers that have at
+// least one eligible match in the given season -- gating whether
+// Recommendations/HandicapPreview have any data to compute from at all.
+//
+// Weekly Score Processing Phase 1A: kept its name to avoid broad rename
+// churn (interface method, stub, and doc references), but its condition now
+// matches EligibleRacks' compatibility gate: a match counts when it is
+// processed_at IS NOT NULL (new, match-level, counts before the full week
+// closes) OR week_closed=1 (legacy, preserves every closed week's existing
+// behavior). Without this, a season with only processed-but-open matches and
+// no closed week would incorrectly report "no data yet" even though
+// EligibleRacks would find real rack data once past this gate.
 func (s *HandicapStore) ClosedWeekCount(ctx context.Context, seasonID int64) (int, error) {
 	var count int
 	err := s.q.QueryRowContext(ctx,
-		`SELECT COUNT(DISTINCT week_number) FROM matches WHERE season_id=? AND week_closed=1`,
+		`SELECT COUNT(DISTINCT week_number) FROM matches
+		 WHERE season_id=? AND (processed_at IS NOT NULL OR week_closed=1)`,
 		seasonID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("season %d: closed week count: %w", seasonID, err)
@@ -175,9 +186,17 @@ func (s *HandicapStore) SeasonRoster(ctx context.Context, seasonID int64) ([]han
 }
 
 // EligibleRacks returns round_results rows where any player in playerIDs appears
-// as home or away, the match has completed=1 AND week_closed=1, and the league
-// game_format is '8ball'. Ordered most-recent-first (match_date DESC, match.id DESC,
+// as home or away, the match has completed=1, and the league game_format is
+// '8ball'. Ordered most-recent-first (match_date DESC, match.id DESC,
 // round_number DESC). Returns nil when playerIDs is empty.
+//
+// Weekly Score Processing Phase 1A compatibility: a match is eligible when it
+// is either processed (processed_at IS NOT NULL) -- the new, match-level gate
+// that counts before the full week closes -- OR week_closed=1, preserving
+// every closed week's existing eligibility exactly as before this phase,
+// including weeks closed before processed_at existed (NULL on those rows).
+// Close Week does not yet guarantee every match it closes is also processed;
+// that alignment is Phase 1B. Until then this OR keeps both paths correct.
 func (s *HandicapStore) EligibleRacks(ctx context.Context, playerIDs []int64) ([]handicaps.RackRow, error) {
 	if len(playerIDs) == 0 {
 		return nil, nil
@@ -205,7 +224,7 @@ func (s *HandicapStore) EligibleRacks(ctx context.Context, playerIDs []int64) ([
 		JOIN leagues  l ON l.id  = s.league_id
 		WHERE (rr.home_player_id IN (%s) OR rr.away_player_id IN (%s))
 		  AND m.completed   = 1
-		  AND m.week_closed = 1
+		  AND (m.processed_at IS NOT NULL OR m.week_closed = 1)
 		  AND l.game_format = '8ball'
 		ORDER BY m.match_date DESC, m.id DESC, rr.round_number DESC`,
 		ph, ph), args...)

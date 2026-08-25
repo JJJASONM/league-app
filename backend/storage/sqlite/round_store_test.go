@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -423,5 +424,162 @@ func TestRoundStore_LoadPriorSnapshots_ReturnsSnapshotValues(t *testing.T) {
 	}
 	if !snaps[0].HomeHandicapUsed.Valid || snaps[0].HomeHandicapUsed.Float64 != 3.5 {
 		t.Errorf("want home_handicap_used=3.5, got %v", snaps[0].HomeHandicapUsed)
+	}
+}
+
+// --- Weekly Score Processing Phase 1A: approval/processing state ---
+
+func TestRoundStore_GetMatchApprovalState_AbsentMatch_NotExists(t *testing.T) {
+	s := newRoundStore(t)
+	seedRoundTestData(t)
+	state, err := s.GetMatchApprovalState(context.Background(), 999999)
+	if err != nil {
+		t.Fatalf("GetMatchApprovalState: %v", err)
+	}
+	if state.Exists {
+		t.Error("want Exists=false for a nonexistent match")
+	}
+}
+
+func TestRoundStore_GetMatchApprovalState_FreshMatch_NotApprovedNotProcessed(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, _, _, _ := seedRoundTestData(t)
+	state, err := s.GetMatchApprovalState(context.Background(), matchID)
+	if err != nil {
+		t.Fatalf("GetMatchApprovalState: %v", err)
+	}
+	if !state.Exists {
+		t.Fatal("want Exists=true")
+	}
+	if state.Completed {
+		t.Error("want Completed=false for a fresh match")
+	}
+	if state.ApprovedAt != nil {
+		t.Errorf("want ApprovedAt=nil, got %v", *state.ApprovedAt)
+	}
+	if state.ProcessedAt != nil {
+		t.Errorf("want ProcessedAt=nil, got %v", *state.ProcessedAt)
+	}
+}
+
+func TestRoundStore_ApproveMatch_SetsFields(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, _, _, _ := seedRoundTestData(t)
+	uid := int64(5)
+	if err := s.ApproveMatch(context.Background(), matchID, &uid, "captain confirmed"); err != nil {
+		t.Fatalf("ApproveMatch: %v", err)
+	}
+	state, err := s.GetMatchApprovalState(context.Background(), matchID)
+	if err != nil {
+		t.Fatalf("GetMatchApprovalState: %v", err)
+	}
+	if state.ApprovedAt == nil {
+		t.Fatal("want ApprovedAt set after ApproveMatch")
+	}
+	var byUser sql.NullInt64
+	var note string
+	if err := db.DB.QueryRow(`SELECT approved_by_user_id, approval_note FROM matches WHERE id=?`, matchID).
+		Scan(&byUser, &note); err != nil {
+		t.Fatalf("query approved_by_user_id/approval_note: %v", err)
+	}
+	if !byUser.Valid || byUser.Int64 != 5 {
+		t.Errorf("want approved_by_user_id=5, got %v", byUser)
+	}
+	if note != "captain confirmed" {
+		t.Errorf("want approval_note=%q, got %q", "captain confirmed", note)
+	}
+}
+
+func TestRoundStore_ApproveMatch_NilUserID_StoresNull(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, _, _, _ := seedRoundTestData(t)
+	if err := s.ApproveMatch(context.Background(), matchID, nil, ""); err != nil {
+		t.Fatalf("ApproveMatch: %v", err)
+	}
+	var byUser sql.NullInt64
+	if err := db.DB.QueryRow(`SELECT approved_by_user_id FROM matches WHERE id=?`, matchID).Scan(&byUser); err != nil {
+		t.Fatalf("query approved_by_user_id: %v", err)
+	}
+	if byUser.Valid {
+		t.Errorf("want NULL approved_by_user_id, got %v", byUser.Int64)
+	}
+}
+
+func TestRoundStore_ProcessMatch_SetsFields(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, _, _, _ := seedRoundTestData(t)
+	uid := int64(9)
+	if err := s.ProcessMatch(context.Background(), matchID, &uid); err != nil {
+		t.Fatalf("ProcessMatch: %v", err)
+	}
+	state, err := s.GetMatchApprovalState(context.Background(), matchID)
+	if err != nil {
+		t.Fatalf("GetMatchApprovalState: %v", err)
+	}
+	if state.ProcessedAt == nil {
+		t.Fatal("want ProcessedAt set after ProcessMatch")
+	}
+	var byUser sql.NullInt64
+	if err := db.DB.QueryRow(`SELECT processed_by_user_id FROM matches WHERE id=?`, matchID).Scan(&byUser); err != nil {
+		t.Fatalf("query processed_by_user_id: %v", err)
+	}
+	if !byUser.Valid || byUser.Int64 != 9 {
+		t.Errorf("want processed_by_user_id=9, got %v", byUser)
+	}
+}
+
+func TestRoundStore_UnapproveMatch_ClearsApprovalFields(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, _, _, _ := seedRoundTestData(t)
+	uid := int64(5)
+	if err := s.ApproveMatch(context.Background(), matchID, &uid, "note"); err != nil {
+		t.Fatalf("ApproveMatch: %v", err)
+	}
+	if err := s.UnapproveMatch(context.Background(), matchID); err != nil {
+		t.Fatalf("UnapproveMatch: %v", err)
+	}
+	state, err := s.GetMatchApprovalState(context.Background(), matchID)
+	if err != nil {
+		t.Fatalf("GetMatchApprovalState: %v", err)
+	}
+	if state.ApprovedAt != nil {
+		t.Errorf("want ApprovedAt=nil after unapprove, got %v", *state.ApprovedAt)
+	}
+	var byUser sql.NullInt64
+	var note string
+	if err := db.DB.QueryRow(`SELECT approved_by_user_id, approval_note FROM matches WHERE id=?`, matchID).
+		Scan(&byUser, &note); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if byUser.Valid {
+		t.Errorf("want NULL approved_by_user_id after unapprove, got %v", byUser.Int64)
+	}
+	if note != "" {
+		t.Errorf("want empty approval_note after unapprove, got %q", note)
+	}
+}
+
+func TestRoundStore_UnprocessMatch_ClearsProcessingPreservesApproval(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, _, _, _ := seedRoundTestData(t)
+	uidApprove, uidProcess := int64(5), int64(9)
+	if err := s.ApproveMatch(context.Background(), matchID, &uidApprove, "note"); err != nil {
+		t.Fatalf("ApproveMatch: %v", err)
+	}
+	if err := s.ProcessMatch(context.Background(), matchID, &uidProcess); err != nil {
+		t.Fatalf("ProcessMatch: %v", err)
+	}
+	if err := s.UnprocessMatch(context.Background(), matchID); err != nil {
+		t.Fatalf("UnprocessMatch: %v", err)
+	}
+	state, err := s.GetMatchApprovalState(context.Background(), matchID)
+	if err != nil {
+		t.Fatalf("GetMatchApprovalState: %v", err)
+	}
+	if state.ProcessedAt != nil {
+		t.Errorf("want ProcessedAt=nil after unprocess, got %v", *state.ProcessedAt)
+	}
+	if state.ApprovedAt == nil {
+		t.Error("want ApprovedAt to remain set after unprocess (approval is preserved)")
 	}
 }

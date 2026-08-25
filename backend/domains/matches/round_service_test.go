@@ -50,6 +50,20 @@ type stubRoundStore struct {
 	// capture what was passed to InsertRoundResult / InsertMatchResult
 	insertedRoundRows  []matches.RoundResultRow
 	insertedMatchRows  []matches.MatchResultRow
+
+	approvalState    matches.MatchApprovalState
+	approvalStateErr error
+	approveErr       error
+	processErr       error
+	unapproveErr     error
+	unprocessErr     error
+
+	// capture what was passed to Approve/Process
+	approvedByUserID  *int64
+	approvedNote      string
+	processedByUserID *int64
+	unapproveCalled   bool
+	unprocessCalled   bool
 }
 
 func (s *stubRoundStore) IsWeekClosed(_ context.Context, _ int64) (bool, error) {
@@ -113,6 +127,38 @@ func (s *stubRoundStore) SubmitMatchResults(_ context.Context, _ int64, _ []mode
 }
 func (s *stubRoundStore) ClearMatchResults(_ context.Context, _ int64) error {
 	return s.clearMatchResultsErr
+}
+func (s *stubRoundStore) GetMatchApprovalState(_ context.Context, _ int64) (matches.MatchApprovalState, error) {
+	return s.approvalState, s.approvalStateErr
+}
+func (s *stubRoundStore) ApproveMatch(_ context.Context, _ int64, approvedByUserID *int64, note string) error {
+	if s.approveErr != nil {
+		return s.approveErr
+	}
+	s.approvedByUserID = approvedByUserID
+	s.approvedNote = note
+	return nil
+}
+func (s *stubRoundStore) ProcessMatch(_ context.Context, _ int64, processedByUserID *int64) error {
+	if s.processErr != nil {
+		return s.processErr
+	}
+	s.processedByUserID = processedByUserID
+	return nil
+}
+func (s *stubRoundStore) UnapproveMatch(_ context.Context, _ int64) error {
+	if s.unapproveErr != nil {
+		return s.unapproveErr
+	}
+	s.unapproveCalled = true
+	return nil
+}
+func (s *stubRoundStore) UnprocessMatch(_ context.Context, _ int64) error {
+	if s.unprocessErr != nil {
+		return s.unprocessErr
+	}
+	s.unprocessCalled = true
+	return nil
 }
 
 // ─── helper ──────────────────────────────────────────────────────────────────

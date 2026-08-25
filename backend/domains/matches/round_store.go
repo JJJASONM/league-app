@@ -68,6 +68,36 @@ type RoundStore interface {
 
 	// ClearMatchResults deletes match_results for a match and marks it incomplete.
 	ClearMatchResults(ctx context.Context, matchID int64) error
+
+	// GetMatchApprovalState returns the match's completed/approved/processed
+	// state for Weekly Score Processing Phase 1A. Exists is false when no
+	// match row matches matchID.
+	GetMatchApprovalState(ctx context.Context, matchID int64) (MatchApprovalState, error)
+
+	// ApproveMatch sets approved_at (now), approved_by_user_id, and
+	// approval_note for the match. approvedByUserID may be nil (admin-attested
+	// approval does not require a personal-key user in Phase 1A).
+	ApproveMatch(ctx context.Context, matchID int64, approvedByUserID *int64, note string) error
+
+	// ProcessMatch sets processed_at (now) and processed_by_user_id for the
+	// match. processedByUserID may be nil, same as ApproveMatch.
+	ProcessMatch(ctx context.Context, matchID int64, processedByUserID *int64) error
+
+	// UnapproveMatch clears approved_at, approved_by_user_id, and approval_note.
+	UnapproveMatch(ctx context.Context, matchID int64) error
+
+	// UnprocessMatch clears processed_at and processed_by_user_id. Approval
+	// fields are left untouched.
+	UnprocessMatch(ctx context.Context, matchID int64) error
+}
+
+// MatchApprovalState holds one match's Weekly Score Processing Phase 1A
+// state, used to validate Approve/Process/Unapprove/Unprocess transitions.
+type MatchApprovalState struct {
+	Exists      bool
+	Completed   bool
+	ApprovedAt  *string
+	ProcessedAt *string
 }
 
 // MatchContext holds the season and team IDs for a match.
