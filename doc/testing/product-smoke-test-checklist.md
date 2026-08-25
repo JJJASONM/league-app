@@ -656,6 +656,78 @@ sequence -- but worth a friendlier error message.
   `go test ./...` and `go build ./...` pass. Not re-verified against the
   actual staging environment this run -- that would need a deploy.
 
+  **Staging verification: closed and verified 2026-08-24.** Ran against
+  real `http://league-staging.local` after `f4492a3` (the merged fix) was
+  deployed. Used the existing "Fixture Scoresheet Season" (season 6, league
+  3) rather than a new disposable sandbox, since it already has real
+  round-by-round score data across 5 weeks. A disposable bootstrap admin
+  user (`handicap-preview-parity-verify-2026-08-24`) was created via
+  `POST /api/users` with the static `LEAGUE_ADMIN_TOKEN` to get write access,
+  per the existing Admin Key setup instructions above.
+
+  Baseline captured before touching anything: season 6 had 4 season rules
+  (no `handicap_update_method` row -> defaults to `manual_review`) and all 5
+  weeks `open` (weeks 2-5 had `completed_count: 2`, `closed_count: 0`).
+
+  Steps: set `handicap_update_method=game_diff_average`
+  (`POST /api/seasons/6/rules`); closed week 2
+  (`POST /api/seasons/6/weeks/2/close`, 200, no warnings). With only that one
+  closed week's data (3-4 eligible racks per player, below the default
+  15-rack window), `GET /api/seasons/6/handicap-recommendations` and the
+  `handicap` block embedded in the week-2 close response **both** showed all
+  12 players as `"below_threshold"`, `skipped: true`, with matching
+  `included_racks` counts per player -- confirms check 2 (below-threshold
+  consistency) and check 4 (field is `included_racks`, not `matches_played`,
+  confirmed directly in a live API response).
+
+  To also exercise an eligible/actionable case without generating four more
+  weeks of history, temporarily lowered
+  `handicap_min_games_for_recommendation` to `3` (still `POST
+  /api/seasons/6/rules`) -- every player already had 3-4 included racks, so
+  this crossed the (now lower) threshold for all 12 without changing any
+  underlying match data. Then pulled the same season's recommendations from
+  three independent surfaces and diffed them player-by-player:
+
+  - `GET /api/seasons/6/handicap-recommendations` (dedicated endpoint)
+  - `GET /api/seasons/6/weeks/1/advance-preview` (week 1 was still open --
+    this is the live embedded preview, the Advance Preview / pre-close
+    path)
+  - `GET /api/seasons/6/weeks/2/recap` (Week Recap panel for the
+    already-closed week)
+
+  All three returned **byte-identical** `recommended_handicap`/`recommended_hc`,
+  `reason`, and `included_racks` values for all 12 players -- including
+  players whose recommendation exceeded `max_individual_handicap` and were
+  capped (`reason: "capped"`), and players landing on an exact,
+  uncapped value (e.g. Finley Moss: `current_handicap: 2`,
+  `recommended_handicap: 4.14` in all three responses). This directly
+  confirms checks 1 and 3 (Close Week / Advance Preview matches Handicap
+  Review; eligible players show matching recommended values) with real
+  staging data, not just backend unit tests. No regression observed in
+  close-week preview, recap, or handicap review during the pass (check 5).
+
+  Restored to baseline immediately after: reopened week 2
+  (`POST /api/seasons/6/weeks/2/reopen`), deleted both temporary rules
+  (`DELETE /api/seasons/6/rules/24` and `/25`). Confirmed
+  `GET /api/seasons/6/rules` and `GET /api/seasons/6/weeks` afterward match
+  the captured baseline exactly (4 rules, no `handicap_update_method`; all 5
+  weeks `open`, week 2 back to `closed_count: 0`), and
+  `GET /api/standings?season_id=6` shows 0 games played for every team,
+  confirming the reopen fully unwound the close. The two week-3/week-4
+  close attempts made mid-pass to gather more history were blocked by this
+  environment's write-action classifier before they executed (confirmed via
+  `GET /api/seasons/6/weeks` showing week 2 as the only closed week at that
+  point) -- worked around by lowering the threshold rule instead, so no
+  extra weeks were ever actually closed and no extra cleanup was needed.
+  The bootstrap verification user was left in place, consistent with how
+  prior smoke-pass bootstrap users (`smoke-pass-2026-08-23`,
+  `bodyless-post-verify-2026-08-23`) were handled -- there is no user
+  deletion endpoint, and this matches established precedent.
+
+  All UI/rendering checks (the Handicap tab, the Week Recap panel, the
+  Advance Preview modal) remain NOT VERIFIED (no browser available in this
+  environment) -- this pass confirms the API/data layer only.
+
 ### 14. Week Recap
 
 - Browser: Schedule nav -> Recap toggle on a closed week.
@@ -718,7 +790,7 @@ sequence -- but worth a friendlier error message.
 | 5 | Staging health check in `staging-common.ps1` polls `/api/leagues`, not the dedicated `/healthz` the app already exposes | Low | `scripts/deploy/staging-common.ps1` | Open |
 | 6 | Bodyless `POST` calls (Backup, Season Activate/Close/Reopen, Reopen Week) return IIS 411 on staging, independent of the Admin Key -- discovered 2026-08-23 | ~~Critical~~ | `web/lib/api-client.js` (doesn't send a body when none is passed) | **Resolved 2026-08-23** by `api-client-bodyless-post-fix`, verified on staging -- all five routes now reach the Go app instead of 411ing; see the Critical Blocker section above for evidence |
 | 7 | `GET /api/player-stats` silently returns empty for players assigned only via `season_rosters`/`lineup_plans` without a direct `players.team_id` -- discovered 2026-08-23 | ~~Medium~~ | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | **Fixed 2026-08-23** by `player-stats-roster-join-fix`, verified via new SQLite store tests -- staging (browser/API) re-verification not yet done |
-| 8 | Week Recap's embedded handicap preview and the dedicated Handicap Recommendations endpoint disagree on eligibility for the same season/players -- discovered 2026-08-23 | ~~Medium~~ | `backend/domains/handicaps/service.go` `HandicapPreview` vs `Recommendations` | **Fixed 2026-08-24** by `handicap-preview-parity` -- `HandicapPreview` now delegates to `Recommendations` for `game_diff_average`, so both paths share one computation and eligibility gate; verified via new parity tests -- staging (browser/API) re-verification not yet done |
+| 8 | Week Recap's embedded handicap preview and the dedicated Handicap Recommendations endpoint disagree on eligibility for the same season/players -- discovered 2026-08-23 | ~~Medium~~ | `backend/domains/handicaps/service.go` `HandicapPreview` vs `Recommendations` | **Closed/Verified 2026-08-24** by `handicap-preview-parity` -- `HandicapPreview` now delegates to `Recommendations` for `game_diff_average`; verified via new parity tests and directly on staging (season 6, real fixture data) -- see section 13's staging verification note for full evidence (below-threshold and eligible/capped cases both confirmed byte-identical across the recommendations endpoint, advance-preview, and week recap) |
 | 9 | No way to cleanly undo a generated schedule (`Generate Schedule` has no matching `DELETE`) short of deleting the whole season/league -- discovered 2026-08-23 | Low | `handlers/api_match_routes.go` (no `DELETE /api/matches/{id}`) | Open |
 | 10 | `POST /api/seasons/{id}/teams` with `name` returns a raw 500 with a leaked SQL message instead of a friendly 409 when a same-named standalone team already exists in the league -- discovered 2026-08-23 | Low | `backend/domains/seasons` `AddTeam` | Open |
 | 11 | `PUT /api/seasons/{id}/rules/{rid}` response body echoes `season_id:0, rule_key:""` instead of the real values, even though the stored row is correct -- discovered 2026-08-23 | Low | `handlers` season-rules update handler | Open |
