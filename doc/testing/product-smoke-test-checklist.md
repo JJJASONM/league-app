@@ -747,6 +747,154 @@ nothing to verify in the browser for this feature.
   All UI/rendering checks remain out of scope -- Phase 1B is backend-only
   by design, and Phase 1C (frontend buttons/badges) has not shipped.
 
+  **Weekly Score Processing Phase 1C -- API/data-level verification on
+  staging 2026-08-26.** Ran on branch
+  `staging-weekly-score-processing-phase-1c-verification` against real
+  `http://league-staging.local` after commit `7fbd57a` was merged, pushed,
+  and deployed. As with every prior pass, this environment has no browser
+  automation available, so this is the same "closest practical substitute"
+  used for Phase 1A/1B/1C-local: exercising the exact API routes and
+  response fields the new UI code reads, not clicking through the actual
+  rendered page. **Actual button rendering, badge appearance, and click
+  behavior in a real browser remain NOT VERIFIED (no browser)** -- see the
+  Deferred note at the end of this entry. Used the existing "Fixture
+  Scoresheet Season" (season 6, league 3): match 33 (week 2, already
+  scored, open week) for goals 1-4, and week 4's matches 37/38 for goals 5
+  and 6. A disposable bootstrap admin user
+  (`weekly-score-processing-1c-verify-2026-08-26`, id 7) was created via
+  `POST /api/users` with the static `LEAGUE_ADMIN_TOKEN`, same pattern as
+  every prior staging pass.
+
+  All 7 verification goals from the PM's request confirmed at the API/data
+  level:
+
+  1. **Approve appears valid on a completed, unapproved, open-week
+     match**: `GET /api/matches/33` before any action showed
+     `completed:true`, `week_closed:false`, no `approved_at` -- exactly
+     the state `match-entry-page-component.js`'s `approveBtn` condition
+     (`!locked && m.completed && !isApproved`) requires to render the
+     button.
+  2. **After Approve**: `POST /api/matches/33/approve` -> 200
+     `{"status":"approved"}`. `GET /api/matches/33` then showed
+     `approved_at:"2026-08-26T16:44:56Z"`, `approved_by_user_id:7` --
+     drives `isApproved=true`, which renders the "Approved" badge, hides
+     Save/Clear (`canEditScores` becomes `false`), and selects the
+     "Scores are approved and locked. Unapprove to edit scores again."
+     hint. Confirmed the guard itself, not just the flag: `POST
+     /api/matches/33/rounds` while approved returned 409 `"match scores
+     are approved; unapprove before editing"` -- the exact condition the
+     UI hint describes.
+  3. **After Process**: `POST /api/matches/33/process` -> 200
+     `{"status":"processed"}`. `GET /api/matches/33` then showed
+     `processed_at` set alongside `approved_at` still present -- drives
+     `isProcessed=true`, renders the "Processed" badge, shows the
+     Unprocess button, and selects the "Unprocess, then unapprove, to
+     edit scores again." hint. Confirmed the guard: the same `rounds`
+     POST while processed returned a distinct 409 `"match scores are
+     processed; unprocess before editing"`, proving the two states are
+     independently detected exactly as the two different hint strings
+     claim.
+  4. **Correction path**: `POST /api/matches/33/unprocess` -> 200, then
+     `POST /api/matches/33/unapprove` -> 200. `GET /api/matches/33`
+     afterward showed neither `approved_at` nor `processed_at` present --
+     back to the exact shape that renders Save/Clear and hides all four
+     action buttons. Re-saved the original six rounds via `POST
+     /api/matches/33/rounds` -> 200 `{"saved":6}`, confirming score
+     editing genuinely works again post-correction, not just that the
+     fields cleared. `GET /api/matches/33/rounds` afterward matched the
+     pre-test scores exactly (same players, same game scores; only the
+     round-result row IDs differ, which is inherent to how `SaveRounds`
+     replaces rows).
+  5. **Closed-week suppression**: closed week 4 (`POST
+     /api/seasons/6/weeks/4/close` -> 200) to produce a real
+     `week_closed:true` match (37) with the season still open. `GET
+     /api/matches/37` confirmed `week_closed:true`. All four guarded
+     actions returned the same 409 `"week is closed; reopen before
+     editing scores"` -- `approve`, `process`, `unprocess`, and
+     `unapprove` -- as did a `rounds` save attempt. This is exactly the
+     condition `locked = seasonClosed || weekClosed` was added to catch,
+     and the message matches the new `weekClosedHint` text ("Reopen the
+     week on the Schedule page first..."). Reopened the week (`POST
+     .../weeks/4/reopen` -> 200) and confirmed `week_closed` cleared back
+     to `false` on both matches -- the state that makes the normal
+     unprocess/unapprove/edit path reappear.
+  6. **Schedule page data**: before closing week 4 a second time,
+     approved match 37 only (`POST /api/matches/37/approve` -> 200) and
+     confirmed `GET /api/matches?season_id=6` showed match 37 with
+     `approved_at` set and `processed_at` absent while match 38 showed
+     neither -- exactly the one-approved-one-not shape
+     `#reviewCloseWeek`'s client-side count would render as "1 approved
+     match will be auto-processed." Closed the week: response included
+     `"processed_count":1`, and `GET /api/matches/37` afterward showed
+     `processed_at` populated while match 38 remained fully untouched --
+     the data source for the post-close "Auto-processed: 1" row and the
+     per-row Approved/Processed badges Schedule renders.
+  7. **No regression**: Close Week and Reopen Week were each exercised
+     twice this pass (once with no approved matches, once with one) and
+     both behaved identically to the Phase 1A/1B staging passes --
+     correct `processed_count` (`0` then `1`), correct
+     `advance_result`/`closed_week` shape, no unexpected errors. Admin Key
+     bearer auth worked for every one of the 15+ mutating calls in this
+     pass with no auth failures. The plain score re-save in check 4
+     confirms normal Match Entry save/clear behavior is unaffected once a
+     match is unlocked.
+
+  Restored to baseline immediately after each step, not just at the end:
+  unprocessed+unapproved match 33 (check 4) before closing week 4 at all;
+  reopened week 4 immediately after the closed-week guard checks (check
+  5) before re-approving anything; reopened week 4 again and
+  unprocessed+unapproved match 37 after the `processed_count`-driven close
+  (check 6). Final state confirmed via `GET /api/matches?season_id=6`
+  (all 10 fixture matches show `week_closed:false` and no `approved_at`/
+  `processed_at`, identical to the pre-verification baseline captured at
+  the start of this pass) and `GET /api/seasons/6/weeks` (all 5 weeks
+  `"open"`, `closed_count:0`, matching the pre-verification baseline
+  exactly). `GET /api/standings?season_id=6` shows 0 games played for
+  every team, confirming no week was left closed. The bootstrap
+  verification user (id 7) was left in place, consistent with every prior
+  staging pass (no user deletion endpoint exists).
+
+  **Result: Phase 1C is API/data-verified on staging.** Everything the UI
+  code reads (`week_closed`, `approved_at`, `processed_at`,
+  `processed_count`) and every guard it depends on (the four 409
+  messages, the closed-week rejection) are confirmed correct against real
+  staging data and the deployed commit. This developer's Claude Code
+  tool session has no browser automation tool available, so this pass
+  could not itself click through the rendered page -- that is a
+  limitation of this developer's own tool session, not a claim that
+  browser automation is unavailable to the project or to PM's
+  environment. A PM-side browser pass against staging is the outstanding
+  step before the UI itself (as opposed to the data/guards behind it) is
+  treated as fully verified -- the checklist items above (section 10 and
+  this section) remain unchecked for that reason.
+
+  **Correction (2026-08-26): Review & Close modal bug found during this
+  pass and fixed.** PM's browser-side review of the Review & Close modal
+  found that the "N approved matches will be auto-processed when this
+  week closes" note disappeared whenever the week had no validation
+  errors or warnings. Root cause in
+  `web/domains/schedules/schedule-page-component.js`'s `#reviewCloseWeek`:
+  the no-errors/no-warnings branch did `body = '<p>...All checks
+  passed...</p>'` (assignment), overwriting the `body` string instead of
+  appending to it -- silently discarding the auto-process note (and the
+  prior-acknowledgments note, when present) that had already been added
+  earlier in the same function. Fix: changed `body =` to `body +=` on
+  that one line, so the "All checks passed" paragraph is appended after
+  the existing notes rather than replacing them. Verified two ways:
+  (1) a standalone Node harness reproducing the exact body-building logic
+  line-for-line showed the pre-fix version dropping the auto-process
+  note and the post-fix version keeping both; (2) re-ran the real
+  staging scenario -- approved match 37 in week 4, confirmed `GET
+  /api/seasons/6/weeks/4/validate` returned `{"messages":null}` (the
+  exact no-errors/no-warnings condition that triggers the bug), then
+  closed the week and got `processed_count:1` with match 37 processed
+  and match 38 untouched, same as before. `node --check` on the changed
+  file passes. Restored to baseline the same way as every other check in
+  this pass (reopened week 4, unprocessed and unapproved match 37).
+  Actual on-screen confirmation that the modal now shows both lines of
+  text together is PM's browser pass to make, per the tool limitation
+  noted above.
+
 ### 12. Standings and Player Stats
 
 - Browser: Standings nav / Player Stats nav, on a season with at least one

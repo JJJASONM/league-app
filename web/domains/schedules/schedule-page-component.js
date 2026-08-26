@@ -923,7 +923,7 @@ class SchedulePage extends HTMLElement {
     }
 
     if (!errors.length && !warnings.length) {
-      body = '<p class="text-success mb-2"><i class="bi bi-check-circle me-1"></i>All checks passed. Ready to close.</p>';
+      body += '<p class="text-success mb-2"><i class="bi bi-check-circle me-1"></i>All checks passed. Ready to close.</p>';
     }
     if (!errors.length) {
       body += '<div class="alert alert-info py-2 mb-0 small"><i class="bi bi-info-circle me-1"></i>Closing makes this week\'s results official. Standings and player stats will update immediately and will reflect this week\'s outcomes.</div>';
