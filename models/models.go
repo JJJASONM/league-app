@@ -151,6 +151,14 @@ type Match struct {
 	Completed    bool      `json:"completed"`
 	CreatedAt    time.Time `json:"created_at"`
 
+	// WeekClosed mirrors matches.week_closed, an existing column that was
+	// not previously serialized on this model. Weekly Score Processing
+	// Phase 1C exposes it (API-shape addition only -- no new column, no
+	// migration) so the frontend can tell a closed-week match apart from
+	// an open one without a second request, since the backend's own
+	// approve/process/unprocess/unapprove guards all reject a closed week.
+	WeekClosed bool `json:"week_closed"`
+
 	// Weekly Score Processing Phase 1A: admin-attested approval/processing
 	// state. Non-nil *At fields mean the corresponding action has happened.
 	// UserID fields are nullable (admin-attested approval does not require

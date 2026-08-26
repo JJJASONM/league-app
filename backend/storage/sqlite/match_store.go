@@ -14,7 +14,7 @@ const matchSelect = `
 	SELECT m.id, m.season_id,
 	       COALESCE(m.home_team_id,0), COALESCE(ht.name,'(unassigned)'),
 	       COALESCE(m.away_team_id,0), COALESCE(at.name,'(unassigned)'),
-	       m.match_date, m.week_number, m.completed, m.created_at,
+	       m.match_date, m.week_number, m.completed, m.created_at, m.week_closed,
 	       m.approved_at, m.approved_by_user_id, m.approval_note,
 	       m.processed_at, m.processed_by_user_id
 	FROM matches m
@@ -77,15 +77,16 @@ func (s *MatchStore) ListMatches(ctx context.Context, req matches.ListMatchesReq
 	var ms []models.Match
 	for rows.Next() {
 		var m models.Match
-		var completed int
+		var completed, weekClosed int
 		var approvedAt, processedAt sql.NullString
 		var approvedBy, processedBy sql.NullInt64
 		if err := rows.Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
-			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt,
+			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt, &weekClosed,
 			&approvedAt, &approvedBy, &m.ApprovalNote, &processedAt, &processedBy); err != nil {
 			return nil, err
 		}
 		m.Completed = completed == 1
+		m.WeekClosed = weekClosed == 1
 		m.MatchDate = normMatchDatePtr(m.MatchDate)
 		scanMatchTail(&m, approvedAt, processedAt, approvedBy, processedBy)
 		ms = append(ms, m)
@@ -97,12 +98,12 @@ func (s *MatchStore) ListMatches(ctx context.Context, req matches.ListMatchesReq
 // Returns matches.ErrMatchNotFound when no match with that ID exists.
 func (s *MatchStore) GetMatch(ctx context.Context, id int64) (models.MatchDetail, error) {
 	var m models.Match
-	var completed int
+	var completed, weekClosed int
 	var approvedAt, processedAt sql.NullString
 	var approvedBy, processedBy sql.NullInt64
 	err := s.db.QueryRowContext(ctx, matchSelect+` WHERE m.id=?`, id).
 		Scan(&m.ID, &m.SeasonID, &m.HomeTeamID, &m.HomeTeamName,
-			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt,
+			&m.AwayTeamID, &m.AwayTeamName, &m.MatchDate, &m.WeekNumber, &completed, &m.CreatedAt, &weekClosed,
 			&approvedAt, &approvedBy, &m.ApprovalNote, &processedAt, &processedBy)
 	if err == sql.ErrNoRows {
 		return models.MatchDetail{}, matches.ErrMatchNotFound
@@ -111,6 +112,7 @@ func (s *MatchStore) GetMatch(ctx context.Context, id int64) (models.MatchDetail
 		return models.MatchDetail{}, err
 	}
 	m.Completed = completed == 1
+	m.WeekClosed = weekClosed == 1
 	m.MatchDate = normMatchDatePtr(m.MatchDate)
 	scanMatchTail(&m, approvedAt, processedAt, approvedBy, processedBy)
 

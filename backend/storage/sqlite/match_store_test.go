@@ -189,6 +189,72 @@ func TestMatchStore_GetMatch_Found(t *testing.T) {
 	}
 }
 
+// Weekly Score Processing Phase 1C: week_closed exposed on the Match model
+// so the frontend can gate approve/process/unprocess/unapprove buttons
+// without a second request (the backend rejects all four when the week is
+// closed).
+
+func TestMatchStore_GetMatch_WeekClosedFalseByDefault(t *testing.T) {
+	store := newMatchStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	mid := msseedMatchID(t, sid, tid, tid, 1)
+
+	detail, err := store.GetMatch(ctx, mid)
+	if err != nil {
+		t.Fatalf("GetMatch: %v", err)
+	}
+	if detail.Match.WeekClosed {
+		t.Error("want WeekClosed=false for a fresh match")
+	}
+}
+
+func TestMatchStore_GetMatch_WeekClosedTrueAfterSet(t *testing.T) {
+	store := newMatchStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	mid := msseedMatchID(t, sid, tid, tid, 1)
+	db.DB.Exec(`UPDATE matches SET week_closed=1 WHERE id=?`, mid)
+
+	detail, err := store.GetMatch(ctx, mid)
+	if err != nil {
+		t.Fatalf("GetMatch: %v", err)
+	}
+	if !detail.Match.WeekClosed {
+		t.Error("want WeekClosed=true after week_closed=1")
+	}
+}
+
+func TestMatchStore_ListMatches_WeekClosedReflectsColumn(t *testing.T) {
+	store := newMatchStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	openID := msseedMatchID(t, sid, tid, tid, 1)
+	closedID := msseedMatchID(t, sid, tid, tid, 2)
+	db.DB.Exec(`UPDATE matches SET week_closed=1 WHERE id=?`, closedID)
+
+	ms, err := store.ListMatches(ctx, matches.ListMatchesRequest{SeasonID: sid})
+	if err != nil {
+		t.Fatalf("ListMatches: %v", err)
+	}
+	byID := map[int64]bool{}
+	for _, m := range ms {
+		byID[m.ID] = m.WeekClosed
+	}
+	if byID[openID] {
+		t.Error("want WeekClosed=false for the open-week match")
+	}
+	if !byID[closedID] {
+		t.Error("want WeekClosed=true for the closed-week match")
+	}
+}
+
 func TestMatchStore_GetMatch_EmptyResults(t *testing.T) {
 	store := newMatchStore(t)
 	ctx := context.Background()

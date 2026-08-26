@@ -27,3 +27,21 @@ export async function saveRounds(matchId, rounds) {
 export async function clearMatchResults(matchId) {
   return api('DELETE', `/matches/${matchId}/results`);
 }
+
+// Weekly Score Processing Phase 1A/1B admin actions. note is optional and
+// only meaningful for approveMatch (admin-attested team/captain approval).
+export async function approveMatch(matchId, note) {
+  return api('POST', `/matches/${matchId}/approve`, note ? { note } : undefined);
+}
+
+export async function processMatch(matchId) {
+  return api('POST', `/matches/${matchId}/process`);
+}
+
+export async function unprocessMatch(matchId) {
+  return api('POST', `/matches/${matchId}/unprocess`);
+}
+
+export async function unapproveMatch(matchId) {
+  return api('POST', `/matches/${matchId}/unapprove`);
+}

@@ -109,7 +109,13 @@ These items should stay small enough to review and ship independently.
   - **Phase 1B (Close Week auto-processes approved matches) complete
     2026-08-25** -- see Completed / Largely Completed below. Close Week's
     own requirements are unchanged; it does not require approval to close.
-  - Phase 1C (frontend buttons/badges) remains -- not yet scoped.
+  - **Phase 1C (frontend approval/processing UI) complete 2026-08-26** --
+    see Completed / Largely Completed below. UI-only per PM's constraints
+    (no business-rule, route, auth, or schema behavior changes); one small
+    API-shape addition (`week_closed` now serialized on `models.Match`)
+    was needed for a closed-week button-gating correction.
+  - Real captain/player-side approval (Player Portal) remains deferred --
+    every action through this UI is still admin-attested.
 
 ## Next
 
@@ -659,7 +665,45 @@ follow-up.
   service-level pass-through test, and 4 handler integration tests,
   plus confirmation every pre-existing Close Week/Reopen/standings test
   still passes unchanged. Full `go test ./...` and `go build ./...` pass.
-  Not yet re-verified against staging.
+  **Staging-verified 2026-08-26** -- see the Phase 1C entry below for the
+  same staging-verification note pattern; Phase 1B's own pass confirmed
+  auto-processing, the skip-unapproved case, `processed_count` accuracy,
+  both eligibility paths isolated via a reopen, and reopen/correction
+  behavior, all against real fixture data with full restoration afterward.
+- Weekly Score Processing Phase 1C: frontend approval/processing UI
+  (2026-08-26). Match Entry's scoresheet toolbar now shows an Approved/
+  Processed status badge and admin action buttons (Approve/Process/
+  Unprocess/Unapprove), each shown only when valid for the current state,
+  mirroring the backend's own guards. Save/Clear are hidden once a match
+  is approved or processed, replaced by an inline hint naming the exact
+  correction path. Schedule shows the same status badge per match row,
+  a pre-close "N approved matches will auto-process" note in the Review &
+  Close modal (computed client-side from the season's already-fetched
+  match list -- no new endpoint), and a new "Auto-processed" row in the
+  post-close success panel using the existing `processed_count` field from
+  Phase 1B. Four new API wrappers
+  (`approveMatch`/`processMatch`/`unprocessMatch`/`unapproveMatch`) added
+  to `match-entry-api-service.js` only, not duplicated into the schedules
+  domain, since Schedule only reads fields already present on data it
+  fetches for other reasons. No backend, schema, route, or auth changes;
+  no real captain/player-side approval. Verified with `node --check` on
+  all three changed files, `go build ./...` (unaffected, but confirmed
+  clean), and a full approve -> process -> blocked-edit -> unprocess ->
+  unapprove cycle exercised via curl against local dev data through a
+  fresh local server build (found and cleared an unrelated stale
+  `league_app.exe` process from a much earlier session that was holding
+  port 8080 and silently serving pre-Phase-1C code). Actual browser
+  rendering and click behavior remain **NOT VERIFIED (no browser)**.
+  **Corrected 2026-08-26** after PM review: the toolbar had gated all four
+  action buttons (and Save/Clear) on `seasonClosed` only, but the backend
+  also rejects them when the match's own week is closed. `models.Match`
+  now serializes `week_closed` (existing column, not previously exposed --
+  API-shape addition, not a business-rule change) via three new SQLite
+  store tests, and the toolbar now gates on `seasonClosed || weekClosed`
+  with a distinct "reopen the week first" hint. Also fixed inaccurate
+  "Backend-only" wording in `doc/domains/matches/README.md`'s Phase 1C
+  section to "UI-only." See that doc's "Phase 1C correction" subsection
+  for full detail.
 
 ## Open Questions To Resolve
 

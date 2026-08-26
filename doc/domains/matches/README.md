@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.7`
-**Last reviewed:** `2026-08-25`
+**Current version:** `0.8`
+**Last reviewed:** `2026-08-26`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -2268,11 +2268,162 @@ literal no-op diff.
 
 - Close Week requiring approval before it can close (considered, reverted
   -- see "Design decision" above)
-- Any UI surfacing of `processed_count` or an "N matches will be
-  auto-processed" preview (Phase 1C)
-- Frontend approve/process buttons and status badges (Phase 1C)
+- ~~Any UI surfacing of `processed_count` or an "N matches will be
+  auto-processed" preview~~ (implemented in Phase 1C below)
+- ~~Frontend approve/process buttons and status badges~~ (implemented in
+  Phase 1C below)
+
+## Weekly Score Processing Phase 1C -- Frontend Approval/Processing UI (implemented 2026-08-26)
+
+### Goal
+
+Make the Phase 1A/1B approve/process/unprocess/unapprove workflow visible
+and usable in the browser, on top of the existing Admin Key auth path.
+UI-only per PM's constraints: no business-rule, route, auth, or schema
+behavior changes. (One small API-shape addition was needed for the
+closed-week correction below -- `week_closed` is now serialized on
+`models.Match`; this is an existing column exposed for the first time,
+not a new column, migration, or behavior change.)
+
+### Match Entry page
+
+`web/domains/matches/match-entry-page-component.js`'s scoresheet toolbar
+(the same header row that already showed the Completed/Pending and Season
+Closed badges) now also shows:
+
+- A status badge: "Approved" (`bg-info`) when `approved_at` is set and
+  `processed_at` is not; "Processed" (`bg-primary`) when `processed_at` is
+  set. Both read directly from the match fields already returned by
+  `GET /api/matches/{id}` since Phase 1A -- no new endpoint needed.
+- Action buttons, shown only when valid for the current state (mirroring
+  the backend's own guards so an admin is never shown a button that would
+  just 409/422): Approve (completed, not yet approved), Process (approved,
+  not yet processed), Unprocess (processed), Unapprove (approved, not yet
+  processed). All four are additionally hidden when the match's own week
+  is closed, not just when the season is closed -- see "Phase 1C
+  correction" below.
+- Save/Clear are hidden once a match is approved or processed, once its
+  week is closed, or once its season is closed
+  (`canEditScores = !locked && !isApproved && !isProcessed`, where
+  `locked = seasonClosed || weekClosed`), replaced by an inline hint naming
+  the exact correction path ("Unprocess, then unapprove, to edit scores
+  again" / "Unapprove to edit scores again" / "Reopen the week first, then
+  ...") -- this is the "make score-edit blocking understandable"
+  requirement. The backend's own 409 conflict message is still the fallback
+  for anyone who reaches the API directly.
+- No note-entry UI for Approve in this phase -- approve is called with an
+  empty note. The backend's `approval_note` field exists and is exercised
+  by Phase 1A/1B's own tests; adding a note-entry modal was judged
+  unnecessary scope for the first UI pass and was not requested.
+- No real captain/player-side approval -- every action is still
+  admin-attested, unchanged from Phase 1A.
+
+### Schedule page
+
+`web/domains/schedules/schedule-page-component.js`:
+
+- Each match row in a week card now shows the same Approved/Processed
+  badge (reusing the `approved_at`/`processed_at` fields already present
+  on the match list response) next to the existing Done/Pending badge.
+- The Close Week review modal now shows an `alert-info` note ("N approved
+  matches will be auto-processed when this week closes") computed
+  client-side from the season's already-fetched match list, filtered to
+  the target week -- one additional `fetchSeasonMatches` call added to the
+  existing `Promise.all` in `#reviewCloseWeek`, no new backend endpoint.
+- The post-close success panel now shows a new "Auto-processed" row using
+  the close response's existing `processed_count` field (added in Phase 1B).
+
+### API service layer
+
+Four new functions added to `web/domains/matches/match-entry-api-service.js`
+only (`approveMatch`, `processMatch`, `unprocessMatch`, `unapproveMatch`) --
+not duplicated into `schedule-api-service.js`, since the Schedule page only
+needs to *read* fields already present on data it fetches for other reasons
+(the match list, the close response) and does not perform any of these
+actions itself. Per PM's constraint against adding shared abstractions
+before two real consumers exist with matching behavior, this stayed a
+single-domain addition. All four use the shared `api()` client, which
+already attaches the Admin Key the same way every other domain's mutations
+do -- no new auth wiring.
+
+### Phase 1C correction (2026-08-26): closed-week button gating + wording
+
+PM review found that Match Entry's toolbar gated Approve / Process /
+Unprocess / Unapprove (and Save/Clear) on `seasonClosed` only, but the
+backend's approval service and `SaveRounds`/`SubmitResults`/`ClearResults`
+all independently reject those actions when the match's own **week** is
+closed (`IsWeekClosed`), which is a real, common state distinct from the
+season being closed. The UI could show a button that would 409.
+
+Fix:
+
+- `models.Match` gained `WeekClosed bool` (`json:"week_closed"`), mirroring
+  the existing `matches.week_closed` column that was not previously
+  serialized. `backend/storage/sqlite/match_store.go`'s `matchSelect`,
+  `ListMatches`, and `GetMatch` now select and scan it. No new column, no
+  migration, no route or auth change -- an existing value made visible on
+  a response that already exists.
+- Three focused tests added in `match_store_test.go`:
+  `TestMatchStore_GetMatch_WeekClosedFalseByDefault`,
+  `TestMatchStore_GetMatch_WeekClosedTrueAfterSet`,
+  `TestMatchStore_ListMatches_WeekClosedReflectsColumn`.
+- `match-entry-page-component.js`'s toolbar now computes
+  `locked = seasonClosed || weekClosed` and uses `locked` everywhere
+  `seasonClosed` alone was previously used to gate `canEditScores`,
+  `approveBtn`, `processBtn`, `unprocessBtn`, and `unapproveBtn`.
+- A new `alert-warning` hint (`weekClosedHint`) is shown whenever the week
+  is closed but the season is not, telling the admin to reopen the week on
+  the Schedule page first, before the existing unprocess/unapprove/edit
+  correction path applies. A "Week Closed" badge was added next to the
+  existing "Season Closed" badge (suppressed when the season badge is
+  already showing, since season-closed is the stronger condition).
+- Also corrected this section's own wording: it previously said
+  "Backend-only per PM's constraints," which was wrong for a frontend UI
+  phase. Now reads "UI-only per PM's constraints: no business-rule, route,
+  auth, or schema behavior changes," with the `week_closed` exposure
+  called out explicitly as a small API-shape addition, not a business-rule
+  change.
+
+The Schedule page needed no change for this correction -- it only reads
+`approved_at`/`processed_at` for read-only badges and never renders the
+approve/process/unprocess/unapprove buttons that trigger the 409.
+
+### Verification
+
+`node --check` on all changed JS files (clean). Go files changed this
+round (`models/models.go`, `backend/storage/sqlite/match_store.go`, and
+its test file), so `go test ./...` and `go build ./...` were both re-run
+and pass, including the three new `WeekClosed` tests. Manually
+smoke-tested the full approve -> process -> (blocked edit) -> unprocess ->
+unapprove cycle against local dev data via curl (bootstrapping a local
+personal-key user the same way staging passes do), confirming the exact
+JSON shapes the new UI code reads are actually returned by the running
+server -- not a browser test, since none is available in this environment,
+but the closest practical substitute. Actual button rendering and click
+behavior in a real browser remain **NOT VERIFIED (no browser)**.
+
+### Deferred
+
+- Note-entry UI for Approve
+- Bulk approve/process across multiple matches from the Schedule page
+- Any change to Week Recap UI (not touched, per PM's Phase 1B/1C scoping)
+- Real captain/player-side approval (Player Portal)
 
 ## Decision History
+
+### 2026-08-26 - Weekly Score Processing Phase 1C: frontend approval/processing UI
+
+**Status:** `accepted`
+
+Match Entry now shows approval/processing status and admin action buttons
+(approve/process/unprocess/unapprove) gated the same way the backend gates
+them, including the closed-week case (see the "Phase 1C correction"
+subsection above); Schedule shows the same status per match row plus
+`processed_count` after a close and a pre-close "N will auto-process"
+note. No business-rule, route, or auth changes -- everything reads fields
+already returned by existing endpoints since Phase 1A/1B, plus one small
+API-shape addition (`week_closed` now serialized on `models.Match`). See
+"Weekly Score Processing Phase 1C" above for full detail.
 
 ### 2026-08-25 - Weekly Score Processing Phase 1B: Close Week auto-processes approved matches
 

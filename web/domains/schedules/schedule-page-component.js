@@ -456,7 +456,11 @@ class SchedulePage extends HTMLElement {
       <td class="text-truncate">${m.away_team_name || '<span class="text-muted fst-italic">(unassigned)</span>'}</td>
       <td>${m.completed
         ? '<span class="badge bg-success">Done</span>'
-        : '<span class="badge bg-secondary">Pending</span>'}</td>
+        : '<span class="badge bg-secondary">Pending</span>'}${m.processed_at
+          ? ' <span class="badge bg-primary" title="Counts toward handicap eligibility"><i class="bi bi-gear-fill"></i> Processed</span>'
+          : m.approved_at
+            ? ' <span class="badge bg-info text-dark" title="Will auto-process when this week closes"><i class="bi bi-check2-circle"></i> Approved</span>'
+            : ''}</td>
       <td class="text-end">${seasonClosed
         ? ''
         : isUnassigned(m)
@@ -782,10 +786,17 @@ class SchedulePage extends HTMLElement {
     const nextNum  = ar.next_week_number;
     const hc       = ar.handicap || {};
     const ackCount = closeData.acknowledgment_count || 0;
+    const processedCount = closeData.processed_count || 0;
 
     let rows = `<tr>
       <td class="text-muted pe-3 text-nowrap">Week ${esc(String(weekNum))}</td>
       <td>${esc(String(cw.completed_count || 0))}/${esc(String(cw.match_count || 0))} scored &nbsp;<span class="badge bg-success">Closed</span></td>
+    </tr>`;
+    rows += `<tr>
+      <td class="text-muted pe-3 text-nowrap">Auto-processed</td>
+      <td>${processedCount > 0
+        ? `<i class="bi bi-gear-fill me-1"></i>${processedCount} approved match${processedCount !== 1 ? 'es' : ''}`
+        : '<span class="fst-italic text-muted">None were approved before closing</span>'}</td>
     </tr>`;
     if (nw) {
       const assignNote = nw.unassigned_count > 0
@@ -824,11 +835,12 @@ class SchedulePage extends HTMLElement {
   }
 
   async #reviewCloseWeek(seasonId, weekNum, ackCount = 0) {
-    let result, preview;
+    let result, preview, seasonMatches;
     try {
-      [result, preview] = await Promise.all([
+      [result, preview, seasonMatches] = await Promise.all([
         fetchWeekValidation(seasonId, weekNum),
         fetchAdvancePreview(seasonId, weekNum).catch(() => null),
+        fetchSeasonMatches(seasonId).catch(() => []),
       ]);
     } catch (e) {
       toast('Failed to load week data: ' + e.message, 'danger');
@@ -839,7 +851,21 @@ class SchedulePage extends HTMLElement {
     const errors   = msgs.filter(m => m.level === 'error');
     const warnings = msgs.filter(m => m.level === 'warning');
 
+    // Weekly Score Processing Phase 1B: Close Week auto-processes any match
+    // in this week that is already approved but not yet processed. Computed
+    // client-side from the already-fetched season match list -- no new
+    // backend endpoint needed for this preview note.
+    const willAutoProcess = (seasonMatches || [])
+      .filter(m => m.week_number == weekNum && m.approved_at && !m.processed_at).length;
+
     let body = '';
+
+    if (willAutoProcess > 0) {
+      body += `<div class="alert alert-info py-2 mb-3 small">
+        <i class="bi bi-gear me-1"></i>${willAutoProcess} approved match${willAutoProcess !== 1 ? 'es' : ''}
+        will be auto-processed when this week closes.
+      </div>`;
+    }
 
     if (ackCount > 0) {
       const label = ackCount === 1 ? '1 prior acknowledgment' : esc(String(ackCount)) + ' prior acknowledgments';

@@ -15,6 +15,10 @@ import {
   fetchLineupPlans,
   saveRounds,
   clearMatchResults as apiClearResults,
+  approveMatch as apiApproveMatch,
+  processMatch as apiProcessMatch,
+  unprocessMatch as apiUnprocessMatch,
+  unapproveMatch as apiUnapproveMatch,
 } from './match-entry-api-service.js';
 import { fmtDate } from '../../components/date-display.js';
 import { GAME_FORMAT_8BALL } from '../leagues/game-format-codes.js';
@@ -64,7 +68,15 @@ class MatchEntryPage extends HTMLElement {
       if (e.target.closest('[data-action="change-lineup"]'))    { this.#loadMatchEntry(); return; }
       if (e.target.closest('[data-action="go-lineup"]'))        { e.preventDefault(); navTo('lineup'); return; }
       const clearBtn = e.target.closest('[data-action="clear-results"]');
-      if (clearBtn) { this.#clearResults(parseInt(clearBtn.dataset.matchId)); }
+      if (clearBtn) { this.#clearResults(parseInt(clearBtn.dataset.matchId)); return; }
+      const approveBtn = e.target.closest('[data-action="approve-match"]');
+      if (approveBtn) { this.#approveMatch(parseInt(approveBtn.dataset.matchId)); return; }
+      const processBtn = e.target.closest('[data-action="process-match"]');
+      if (processBtn) { this.#processMatch(parseInt(processBtn.dataset.matchId)); return; }
+      const unprocessBtn = e.target.closest('[data-action="unprocess-match"]');
+      if (unprocessBtn) { this.#unprocessMatch(parseInt(unprocessBtn.dataset.matchId)); return; }
+      const unapproveBtn = e.target.closest('[data-action="unapprove-match"]');
+      if (unapproveBtn) { this.#unapproveMatch(parseInt(unapproveBtn.dataset.matchId)); }
     });
     this.addEventListener('input', e => {
       if (e.target.matches('.ss-score-inp')) this.#ssInpChange(e.target);
@@ -329,6 +341,54 @@ class MatchEntryPage extends HTMLElement {
 
     const leagueName   = this.#activeLeague?.name || 'League';
     const seasonClosed = !!(this.#allSeasons.find(s => s.id == m.season_id)?.closed_at);
+    const weekClosed   = !!m.week_closed;
+
+    // Weekly Score Processing Phase 1A/1B: admin-attested approval/processing
+    // state. processed implies approved in every real flow, but both are
+    // checked independently to mirror the backend's own guard. Phase 1C
+    // correction: the backend's approve/process/unprocess/unapprove guards
+    // (and SaveRounds/SubmitResults/ClearResults) also reject a closed week
+    // independent of the season -- locked mirrors that so the UI never shows
+    // a button the backend would 409.
+    const locked       = seasonClosed || weekClosed;
+    const isApproved  = !!m.approved_at;
+    const isProcessed = !!m.processed_at;
+    const canEditScores = !locked && !isApproved && !isProcessed;
+
+    const statusBadge = isProcessed
+      ? '<span class="badge bg-primary ms-1"><i class="bi bi-gear-fill me-1"></i>Processed</span>'
+      : isApproved
+        ? '<span class="badge bg-info text-dark ms-1"><i class="bi bi-check2-circle me-1"></i>Approved</span>'
+        : '';
+
+    const approveBtn = (!locked && m.completed && !isApproved)
+      ? `<button class="btn btn-sm btn-outline-primary" data-action="approve-match" data-match-id="${m.id}">
+          <i class="bi bi-check2-circle"></i> Approve</button>` : '';
+    const processBtn = (!locked && isApproved && !isProcessed)
+      ? `<button class="btn btn-sm btn-outline-primary" data-action="process-match" data-match-id="${m.id}">
+          <i class="bi bi-gear"></i> Process</button>` : '';
+    const unprocessBtn = (!locked && isProcessed)
+      ? `<button class="btn btn-sm btn-outline-secondary" data-action="unprocess-match" data-match-id="${m.id}">
+          <i class="bi bi-arrow-counterclockwise"></i> Unprocess</button>` : '';
+    const unapproveBtn = (!locked && isApproved && !isProcessed)
+      ? `<button class="btn btn-sm btn-outline-secondary" data-action="unapprove-match" data-match-id="${m.id}">
+          <i class="bi bi-x-circle"></i> Unapprove</button>` : '';
+
+    // Closed-week correction path takes priority over the approved/processed
+    // hint: reopening the week (Schedule page) is the first required step
+    // before unprocess/unapprove/edit apply, regardless of approval state.
+    const weekClosedHint = (weekClosed && !seasonClosed)
+      ? `<div class="alert alert-warning py-1 px-2 small mb-2 no-print">
+          <i class="bi bi-lock me-1"></i>This match's week is closed. Reopen the week on the
+          Schedule page first${(isApproved || isProcessed) ? ', then unprocess/unapprove to edit scores again' : ' to edit scores again'}.
+        </div>` : '';
+
+    const lockedHint = (!locked && (isApproved || isProcessed))
+      ? `<div class="alert alert-info py-1 px-2 small mb-2 no-print">
+          <i class="bi bi-lock me-1"></i>${isProcessed
+            ? 'Scores are processed and locked. Unprocess, then unapprove, to edit scores again.'
+            : 'Scores are approved and locked. Unapprove to edit scores again.'}
+        </div>` : '';
 
     let html = `<div class="no-print d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
       <div class="d-flex align-items-center gap-2">
@@ -336,19 +396,23 @@ class MatchEntryPage extends HTMLElement {
         ${m.completed
           ? '<span class="badge bg-success">Completed</span>'
           : '<span class="badge bg-secondary">Pending</span>'}
+        ${statusBadge}
         ${seasonClosed ? '<span class="badge bg-secondary ms-1"><i class="bi bi-lock me-1"></i>Season Closed</span>' : ''}
+        ${weekClosed && !seasonClosed ? '<span class="badge bg-secondary ms-1"><i class="bi bi-lock me-1"></i>Week Closed</span>' : ''}
       </div>
       <div class="d-flex gap-2">
         <button class="btn btn-sm btn-outline-secondary" data-action="change-lineup">
           <i class="bi bi-arrow-left"></i> Change Lineup</button>
         <button class="btn btn-sm btn-outline-secondary" data-action="print-scoresheet">
           <i class="bi bi-printer"></i> Print</button>
-        ${!seasonClosed ? `<button class="btn btn-sm btn-success" data-action="save-scoresheet">
+        ${canEditScores ? `<button class="btn btn-sm btn-success" data-action="save-scoresheet">
           <i class="bi bi-check-lg"></i> Save</button>` : ''}
-        ${m.completed && !seasonClosed ? `<button class="btn btn-sm btn-outline-danger" data-action="clear-results" data-match-id="${m.id}">
+        ${m.completed && canEditScores ? `<button class="btn btn-sm btn-outline-danger" data-action="clear-results" data-match-id="${m.id}">
           <i class="bi bi-x-lg"></i> Clear</button>` : ''}
+        ${approveBtn}${processBtn}${unprocessBtn}${unapproveBtn}
       </div>
-    </div>`;
+    </div>
+    ${weekClosedHint}${lockedHint}`;
 
     html += `<div id="ss-print-area"><div class="ss-sheet">`;
 
@@ -783,6 +847,44 @@ class MatchEntryPage extends HTMLElement {
     try {
       await apiClearResults(matchId);
       toast('Results cleared');
+      await this.#loadMatchEntry();
+    } catch (e) { toast(e.message, 'danger'); }
+  }
+
+  // --- Weekly Score Processing Phase 1A/1B admin actions ---
+  // No note-entry UI in Phase 1C -- approve is admin-attested with an empty
+  // note by default, matching "keep shell changes minimal." Each action
+  // reloads the match so the status badges and button set reflect the new
+  // state immediately.
+
+  async #approveMatch(matchId) {
+    try {
+      await apiApproveMatch(matchId);
+      toast('Match approved');
+      await this.#loadMatchEntry();
+    } catch (e) { toast(e.message, 'danger'); }
+  }
+
+  async #processMatch(matchId) {
+    try {
+      await apiProcessMatch(matchId);
+      toast('Match processed');
+      await this.#loadMatchEntry();
+    } catch (e) { toast(e.message, 'danger'); }
+  }
+
+  async #unprocessMatch(matchId) {
+    try {
+      await apiUnprocessMatch(matchId);
+      toast('Match unprocessed');
+      await this.#loadMatchEntry();
+    } catch (e) { toast(e.message, 'danger'); }
+  }
+
+  async #unapproveMatch(matchId) {
+    try {
+      await apiUnapproveMatch(matchId);
+      toast('Match unapproved');
       await this.#loadMatchEntry();
     } catch (e) { toast(e.message, 'danger'); }
   }

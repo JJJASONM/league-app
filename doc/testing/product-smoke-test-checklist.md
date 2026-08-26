@@ -534,6 +534,33 @@ sequence -- but worth a friendlier error message.
         VERIFIED for rendering (no browser); confirmed via
         `GET /api/matches?season_id=6` that week 3 matches carry
         `completed:true` with round data intact.
+  - [ ] **Weekly Score Processing Phase 1C (2026-08-26), NOT VERIFIED (no
+        browser):** on a completed, un-approved match, click **Approve**
+        -- an "Approved" badge should appear next to Completed/Pending, the
+        Save/Clear buttons should disappear, and an inline hint should
+        explain that Unapprove is needed to edit again. Click **Process**
+        -- badge changes to "Processed", and the hint should now mention
+        Unprocess first. Click **Unprocess** then **Unapprove** -- badges
+        and Save/Clear should return to normal, and editing scores should
+        work again. All four underlying API calls and the resulting field
+        values were confirmed via curl against local dev data (see Phase
+        1C's roadmap/matches-README entries) -- only the actual button
+        rendering, badge appearance, and click behavior in a real browser
+        remain unverified.
+  - [ ] **Weekly Score Processing Phase 1C correction (2026-08-26), NOT
+        VERIFIED (no browser):** on a match whose week is closed (but
+        whose season is not), Approve/Process/Unprocess/Unapprove and
+        Save/Clear should all be hidden, a "Week Closed" badge should
+        appear next to Completed/Pending, and a warning hint should tell
+        the admin to reopen the week on the Schedule page first. After
+        reopening the week (with the match still approved/processed from
+        before), the normal unprocess/unapprove/edit correction path
+        should reappear. Confirmed via `GET /api/matches/{id}` that
+        `week_closed` is now present and boolean in the response, and via
+        the new `TestMatchStore_GetMatch_WeekClosedFalseByDefault`/
+        `WeekClosedTrueAfterSet`/`ListMatches_WeekClosedReflectsColumn`
+        tests -- only the actual button suppression and hint rendering in
+        a real browser remain unverified.
 
 **Weekly Score Processing Phase 1A -- backend/API foundation verified on
 staging 2026-08-25.** Ran against real `http://league-staging.local` after
@@ -615,6 +642,17 @@ nothing to verify in the browser for this feature.
 ### 11. Close / Reopen Week
 
 - Browser: Schedule nav -> Review & Close on a week with all matches scored.
+  - [ ] **Weekly Score Processing Phase 1C (2026-08-26), NOT VERIFIED (no
+        browser):** each match row in a week card should show an Approved/
+        Processed badge next to Done/Pending when applicable. Opening
+        Review & Close on a week with at least one approved-but-unprocessed
+        match should show an info note ("N approved matches will be
+        auto-processed..."). After a successful close, the success panel
+        should show a new "Auto-processed" row with the count from
+        `processed_count`. The underlying data (badge fields, the
+        client-side count computation, and the response field) were
+        confirmed via curl against local dev data; only rendering and the
+        modal note in a real browser remain unverified.
   - [x] Validation preview renders (warnings, missing-score detection).
         **API-verified**: `GET /api/seasons/8/weeks/2/validate` returned
         `{"messages":null}` (no issues) once the sandbox week was fully
