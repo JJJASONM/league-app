@@ -535,6 +535,83 @@ sequence -- but worth a friendlier error message.
         `GET /api/matches?season_id=6` that week 3 matches carry
         `completed:true` with round data intact.
 
+**Weekly Score Processing Phase 1A -- backend/API foundation verified on
+staging 2026-08-25.** Ran against real `http://league-staging.local` after
+commit `40e8ece` was merged, pushed, and deployed. Used the existing
+"Fixture Scoresheet Season" (season 6, league 3), match 33 (week 2,
+already scored) for the write-path checks and match 31 (week 1, unscored)
+for the rejection check. A disposable bootstrap admin user
+(`weekly-score-processing-1a-verify-2026-08-25`) was created via
+`POST /api/users` with the static `LEAGUE_ADMIN_TOKEN`, same as prior
+staging passes.
+
+All 10 checks from the verification request passed:
+
+  1. **Schema columns present**: `GET /api/matches/33` after approving it
+     returned `approved_at`, `approved_by_user_id`, and `approval_note`
+     populated with real values -- confirms all five Phase 1A columns
+     exist on the deployed database (the omitted `processed_at`/
+     `processed_by_user_id` were confirmed the same way one step later).
+  2. **All four endpoints work**: `POST /api/matches/33/approve` (200),
+     `POST /api/matches/33/process` (200), `POST /api/matches/33/unprocess`
+     (200), `POST /api/matches/33/unapprove` (200) -- full cycle exercised
+     in order.
+  3. **Approve requires a scored match**: `POST /api/matches/31/approve`
+     (week 1, `completed:false`) returned 422 `"match has no saved scores;
+     enter scores before approving"`.
+  4. **Score edits blocked after approval**: `POST /api/matches/33/results`
+     while approved returned 409 `"match scores are approved; unapprove
+     before editing"`.
+  5. **Score edits blocked after processing**: `DELETE
+     /api/matches/33/results` while processed returned 409 `"match scores
+     are processed; unprocess before editing"` -- a distinct message from
+     the approved case, confirming the two states are independently
+     detected.
+  6. **Unprocess preserves approval**: after `POST
+     /api/matches/33/unprocess`, `GET /api/matches/33` showed
+     `approved_at` still `2026-08-26T01:13:57Z` while `processed_at` was
+     absent (cleared).
+  7. **Unapprove clears approval after unprocess**: after `POST
+     /api/matches/33/unapprove`, `GET /api/matches/33` showed neither
+     field present -- match 33 was byte-for-byte back to the same shape as
+     never-touched match 34.
+  8. **Processed-but-open match contributes to handicap recommendations**:
+     with `handicap_update_method=game_diff_average` set temporarily and
+     zero weeks ever closed, `GET /api/seasons/6/handicap-recommendations`
+     showed `weeks_closed:1` (from `ClosedWeekCount`'s new compatibility
+     condition) and real `included_racks`/`lifetime_hc`/`window_hc` values
+     for match 33's six players (`below_threshold`, but real data, not
+     `no_data`) -- while match 34's six players, untouched, correctly
+     stayed `no_data`. This is a clean per-match proof, not just a
+     season-wide one.
+  9. **Legacy closed-week match still counts**: closed week 2 for real
+     (`POST /api/seasons/6/weeks/2/close`, no approve/process involved at
+     all) and confirmed `GET /handicap-recommendations` then showed real
+     `included_racks` for match 34's previously-`no_data` players too --
+     the `OR week_closed = 1` compatibility clause works on real data, not
+     just in unit tests.
+  10. **Close Week behavior unchanged**: `GET
+      /seasons/6/weeks/2/advance-preview` returned identical `can_close`/
+      `validation_messages` before match 33 was touched, after it was
+      approved+processed, and after a real week close -- Close Week does
+      not check or care about approval/processing state in Phase 1A, exactly
+      as scoped. `GET /seasons/6/weeks/1/advance-preview` (unscored week)
+      still returned the same `WEEK_MATCH_NO_SCORES` errors as before this
+      phase.
+
+Restored to baseline immediately after: reopened week 2, deleted the
+temporary `handicap_update_method` rule. Confirmed `GET
+/api/seasons/6/rules`, `GET /api/seasons/6/weeks`, `GET /api/matches/33`,
+and `GET /api/matches/34` all match the pre-verification baseline exactly,
+and `GET /api/standings?season_id=6` shows 0 games played for every team.
+The bootstrap verification user was left in place, consistent with every
+prior staging pass (no user deletion endpoint exists).
+
+All UI/rendering checks (Match Entry approve/process buttons, Schedule
+week-card status badges) remain out of scope for this pass -- Phase 1A is
+backend-only by design, and Phase 1C has not shipped yet, so there is
+nothing to verify in the browser for this feature.
+
 ### 11. Close / Reopen Week
 
 - Browser: Schedule nav -> Review & Close on a week with all matches scored.
