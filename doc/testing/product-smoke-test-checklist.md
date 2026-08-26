@@ -636,6 +636,20 @@ nothing to verify in the browser for this feature.
         the bodyless-POST 411 on the first reopen attempt (see Critical
         blocker above); succeeded once retried with an explicit `{}` body.
 
+  **Not yet re-verified on staging (2026-08-25): Weekly Score Processing
+  Phase 1B.** Close Week now also auto-processes any match that was
+  individually approved (`POST /api/matches/{id}/approve`) but not yet
+  processed, and the close response includes a new `processed_count`
+  field. Close Week's own success/failure requirements are unchanged --
+  this only adds a side effect on success, so the checks above should
+  still hold, but that has not been confirmed against real staging data.
+  A dedicated staging pass (mirroring the Phase 1A one in section 13)
+  would additionally confirm: `processed_count` reflects the number of
+  approved matches actually processed at close time; an unapproved match
+  in the closed week is skipped (not silently processed) and still counts
+  toward handicap eligibility via the existing `week_closed=1` path; and
+  reopening afterward preserves approval/processing state.
+
 ### 12. Standings and Player Stats
 
 - Browser: Standings nav / Player Stats nav, on a season with at least one

@@ -15,11 +15,19 @@ type CloseWeekRequest struct {
 	SeasonID        int64
 	WeekNumber      int64
 	Acknowledgments []AckEntry
+
+	// ProcessedByUserID (Phase 1B) attributes the matches CloseWeek
+	// auto-processes as part of closing. May be nil.
+	ProcessedByUserID *int64
 }
 
 // CloseWeekResult carries the result of a successful CloseWeek call.
 type CloseWeekResult struct {
 	AckCount int
+
+	// ProcessedCount (Phase 1B) is the number of approved-but-unprocessed
+	// matches CloseWeek auto-processed as part of this close.
+	ProcessedCount int
 }
 
 // WeekCloseErr is returned when CloseWeek is blocked by validation errors or
@@ -145,10 +153,11 @@ func (s *WeekService) CloseWeek(ctx context.Context, req CloseWeekRequest) (Clos
 		})
 	}
 
-	if err := s.store.CloseWeek(ctx, req.SeasonID, req.WeekNumber, acksToWrite); err != nil {
+	processedCount, err := s.store.CloseWeek(ctx, req.SeasonID, req.WeekNumber, acksToWrite, req.ProcessedByUserID)
+	if err != nil {
 		return CloseWeekResult{}, fmt.Errorf("close week: %w", err)
 	}
-	return CloseWeekResult{AckCount: len(result.Warnings())}, nil
+	return CloseWeekResult{AckCount: len(result.Warnings()), ProcessedCount: processedCount}, nil
 }
 
 // ReopenWeek sets the week back to open. Returns domainerr.NotFound (404) when no

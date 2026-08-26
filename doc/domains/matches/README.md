@@ -4,7 +4,7 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.6`
+**Current version:** `0.7`
 **Last reviewed:** `2026-08-25`
 
 The Matches domain owns match participation, result entry, official week-close
@@ -2160,14 +2160,133 @@ data (`TestHandicapRecommendations_IncludeProcessedButOpenMatch`).
 
 ### Deferred (Phase 1B and later)
 
-- Close Week requiring all matches processed, or auto-processing remaining
-  approved matches at close time
+- ~~Close Week requiring all matches processed, or auto-processing remaining
+  approved matches at close time~~ (auto-processing implemented in Phase
+  1B below; Close Week requiring approval was considered and explicitly
+  not implemented -- see that section)
 - Frontend: Match Entry approve/process buttons, Schedule week-card status
   badges, any Week Recap UI change
 - Real captain/player login approval (Player Portal)
 - Bulk unapprove/unprocess across multiple matches
 
+## Weekly Score Processing Phase 1B -- Close Week Auto-Processing (implemented 2026-08-25)
+
+### Goal
+
+Make Close Week auto-process every match that is approved but not yet
+individually processed, so an admin who approved matches throughout the
+week doesn't have to click Process on each one separately before closing.
+Close Week's own requirements (every match must have a saved game winner)
+are otherwise completely unchanged.
+
+### Design decision: no new approval requirement on Close Week
+
+The Phase 1A discovery memo had proposed that Close Week also *require*
+every scored match to be approved first (a new `WEEK_MATCH_NOT_APPROVED`
+hard error), on top of auto-processing. That combination was implemented
+first, then deliberately reverted after it broke roughly 25 existing
+Close Week tests whose purpose has nothing to do with approval -- they
+exist to test warning acknowledgment, reopen, standings-after-close, and
+similar behavior, and all of them seed a scored-but-never-approved match
+by design. Requiring approval to close would have been a real, disruptive
+behavior change to every admin's existing Close Week workflow for a
+requirement PM's actual Phase 1B scope did not clearly ask for (re-reading
+the request: "incomplete or unapproved matches should not silently count
+as processed" is satisfied by *skipping* them in the auto-process step,
+not by blocking the close). Close Week's validation
+(`validateWeekData`/`CodeWeekMatchNoScores`) is therefore **unchanged** in
+Phase 1B -- confirmed by the fact that `closeweek.go` has no net diff in
+this phase's commit.
+
+### Behavior
+
+`WeekStore.CloseWeek` gained a `processedByUserID *int64` parameter and
+now returns `(processedCount int, err error)`. Inside the same transaction
+that upserts `league_weeks` and sets `matches.week_closed=1`, it also runs:
+
+    UPDATE matches SET processed_at=CURRENT_TIMESTAMP, processed_by_user_id=?
+    WHERE season_id=? AND week_number=? AND completed=1
+      AND approved_at IS NOT NULL AND processed_at IS NULL
+
+  - A match that is approved but not yet processed gets processed as part
+    of the close, atomically with the rest of the close transaction.
+  - A match that was never approved (even if scored) is **skipped** --
+    it is not silently processed. The week still closes around it; the
+    match's handicap eligibility is unaffected because it now qualifies
+    through the pre-existing `week_closed = 1` compatibility path from
+    Phase 1A instead of the `processed_at` path.
+  - A match that is already processed is left untouched (`processed_at`
+    is not overwritten with a new timestamp).
+  - The `completed=1` clause is defensive -- `approved_at` can only be set
+    on a completed match by `ApproveMatch` -- so this statement can never
+    process an incomplete match even if that invariant were ever violated
+    elsewhere.
+
+`CloseWeekRequest` gained `ProcessedByUserID *int64`; `CloseWeekResult`
+gained `ProcessedCount int`. The close-week HTTP handler resolves the
+acting personal-key user the same way Phase 1A's approve/process handlers
+do (`approvingUserID(r)`) and surfaces `processed_count` in the close
+response JSON alongside the existing `acknowledgment_count`.
+
+### Reopen and correction (requirements 5/6)
+
+`ReopenWeek` is completely unchanged -- it only clears `week_closed` and
+`league_weeks.status`. Approval and processing state (including anything
+Phase 1B auto-processed) survive a reopen untouched. The existing
+Phase 1A correction path (unprocess, then unapprove, then edit scores,
+then re-approve, then re-process) works exactly the same after a reopen
+that followed an auto-process, confirmed by a dedicated regression test.
+
+### Files changed
+
+- `backend/domains/matches/store.go` -- `WeekStore.CloseWeek` signature
+- `backend/domains/matches/service.go` -- `CloseWeekRequest.ProcessedByUserID`,
+  `CloseWeekResult.ProcessedCount`, pass-through in `WeekService.CloseWeek`
+- `backend/domains/matches/service_test.go` -- `stubWeekStore` extended;
+  new pass-through test
+- `backend/storage/sqlite/week_store.go` -- the auto-process `UPDATE`
+  inside `CloseWeek`'s existing transaction
+- `backend/storage/sqlite/week_store_test.go` -- three new store tests
+  (auto-processes approved, skips unapproved, does not reprocess already-processed)
+  plus signature fixes for existing `CloseWeek` call sites
+- `handlers/api_week_handlers.go` -- `ProcessedByUserID` wired into the
+  request, `processed_count` added to the response
+- `handlers/api_match_approval_test.go` -- four new integration tests
+  covering the close-time auto-process, the skip-unapproved case, the
+  legacy-eligibility-path composition, and the reopen/correction path
+
+### Tests
+
+13 new tests total: 3 SQLite store-level (auto-process, skip-unapproved,
+no-reprocess), 1 service-level (actor pass-through and count propagation),
+4 handler-level integration tests, plus confirmation that all pre-existing
+Close Week, Reopen, and standings/player-stats tests still pass unchanged
+-- the closest thing to a full regression guarantee available without a
+literal no-op diff.
+
+### Deferred
+
+- Close Week requiring approval before it can close (considered, reverted
+  -- see "Design decision" above)
+- Any UI surfacing of `processed_count` or an "N matches will be
+  auto-processed" preview (Phase 1C)
+- Frontend approve/process buttons and status badges (Phase 1C)
+
 ## Decision History
+
+### 2026-08-25 - Weekly Score Processing Phase 1B: Close Week auto-processes approved matches
+
+**Status:** `accepted`
+
+Close Week now auto-processes every approved-but-unprocessed match as part
+of its existing close transaction, so admins don't need to click Process
+on each match individually. Close Week's own validation is deliberately
+**unchanged** -- a proposal to also require every scored match be approved
+before the week could close was implemented, then reverted after it broke
+~25 existing tests whose purpose is unrelated to approval, and because
+PM's actual scope only asked that unapproved matches not be *silently
+processed*, not that they block the close. See "Weekly Score Processing
+Phase 1B" above for full detail.
 
 ### 2026-08-25 - Weekly Score Processing Phase 1A: match-level approval/processing
 

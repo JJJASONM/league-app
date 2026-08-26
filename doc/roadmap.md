@@ -106,8 +106,10 @@ These items should stay small enough to review and ship independently.
     eligibility before its whole week closes.
   - **Phase 1A (backend foundation) complete 2026-08-25** -- see Completed
     / Largely Completed below. Resolves MATCHES-Q001.
-  - Phase 1B (Close Week requires/auto-processes matches) and Phase 1C
-    (frontend buttons/badges) remain -- not yet scoped.
+  - **Phase 1B (Close Week auto-processes approved matches) complete
+    2026-08-25** -- see Completed / Largely Completed below. Close Week's
+    own requirements are unchanged; it does not require approval to close.
+  - Phase 1C (frontend buttons/badges) remains -- not yet scoped.
 
 ## Next
 
@@ -631,6 +633,33 @@ follow-up.
   (including an end-to-end proof that a processed-but-open-week match
   appears in `GET /handicap-recommendations`); full `go test ./...` and
   `go build ./...` pass. Not yet re-verified against staging.
+- Weekly Score Processing Phase 1B: Close Week auto-processes approved
+  matches (2026-08-25). Close Week's transaction now also processes every
+  match that is approved but not yet individually processed
+  (`approved_at IS NOT NULL AND processed_at IS NULL AND completed=1`),
+  atomically with the existing `week_closed=1`/`league_weeks` writes.
+  `CloseWeekRequest` gained `ProcessedByUserID`; `CloseWeekResult` gained
+  `ProcessedCount`, surfaced as `processed_count` in the close response.
+  A scored-but-never-approved match is skipped by the auto-process step
+  (not silently processed) but does not block the close -- **Close Week's
+  own validation is unchanged in this phase.** A `WEEK_MATCH_NOT_APPROVED`
+  hard-block was implemented first per the original Phase 1A discovery
+  recommendation, then deliberately reverted after it broke ~25 existing
+  Close Week/Reopen/standings tests whose purpose is unrelated to
+  approval, and because it wasn't clearly required by the actual Phase 1B
+  request (which asks that unapproved matches not be silently processed,
+  not that they block closing). A skipped match's handicap eligibility is
+  unaffected -- it qualifies through Phase 1A's existing
+  `week_closed = 1` compatibility path instead. Reopen is completely
+  unchanged and preserves approval/processing state; the Phase 1A
+  correction path (unprocess -> unapprove -> edit -> re-approve ->
+  re-process) works identically after a reopen that followed an
+  auto-process. Verified with 3 new SQLite store tests (auto-processes
+  approved, skips unapproved, does not reprocess already-processed), 1
+  service-level pass-through test, and 4 handler integration tests,
+  plus confirmation every pre-existing Close Week/Reopen/standings test
+  still passes unchanged. Full `go test ./...` and `go build ./...` pass.
+  Not yet re-verified against staging.
 
 ## Open Questions To Resolve
 

@@ -133,9 +133,7 @@ used to be `completed = 1 AND week_closed = 1` alone. It now also admits a
 match the instant it is individually **processed**
 (`POST /api/matches/{id}/process`, `backend/domains/matches`), before its
 week ever closes. The `OR week_closed = 1` half is preserved unconditionally
-so every match closed before this phase existed -- and every match closed
-by today's still-unchanged Close Week, which does not yet set
-`processed_at` on the matches it closes -- keeps counting exactly as
+so every match closed before this phase existed keeps counting exactly as
 before. `ClosedWeekCount` (the "any data yet?" gate that short-circuits to
 `no_data` when zero) uses the identical `processed_at IS NOT NULL OR
 week_closed = 1` condition and kept its name despite no longer checking
@@ -143,9 +141,20 @@ week_closed = 1` condition and kept its name despite no longer checking
 stub, and doc references for a naming-only concern. See
 `doc/domains/matches/README.md`'s "Weekly Score Processing Phase 1A"
 section for the full match-level lifecycle (approve/process/unapprove/
-unprocess) this eligibility change serves. Close Week itself does not yet
-require or auto-set `processed_at` -- that alignment is Phase 1B; until
-then this OR is load-bearing.
+unprocess) this eligibility change serves.
+
+**Update 2026-08-25 (Phase 1B):** Close Week now auto-sets `processed_at`
+on any match that was already approved when the week closes -- but only
+those. A scored match that was never approved still closes with its week
+(Close Week's own requirements are unchanged) and simply keeps counting
+through the `OR week_closed = 1` half of this gate instead, exactly as it
+did before Phase 1A existed. The `OR` is therefore still load-bearing and
+not a temporary shim -- Close Week deliberately does not require every
+match to be approved before it can close, so there will always be closed
+weeks with a mix of processed and never-processed matches. See
+`doc/domains/matches/README.md`'s "Weekly Score Processing Phase 1B"
+section, including why an approval requirement on Close Week was tried and
+reverted.
 
 ## Pure-Go Package (`backend/domains/handicaps`)
 

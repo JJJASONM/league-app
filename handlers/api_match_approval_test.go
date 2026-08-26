@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -290,4 +291,155 @@ func TestHandicapRecommendations_IncludeProcessedButOpenMatch(t *testing.T) {
 		}
 	}
 	t.Errorf("playerA not found in recommendations; recs: %v", recs)
+}
+
+// --- Weekly Score Processing Phase 1B: Close Week auto-processing ---
+
+func TestCloseWeek_AutoProcessesApprovedMatch(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if pc, _ := result["processed_count"].(float64); pc != 1 {
+		t.Errorf("want processed_count=1 in close response, got %v", result["processed_count"])
+	}
+
+	var processedAt sql.NullString
+	db.DB.QueryRow(`SELECT processed_at FROM matches WHERE id=?`, f.matchID).Scan(&processedAt)
+	if !processedAt.Valid || processedAt.String == "" {
+		t.Error("want processed_at set on the match after Close Week auto-processes it")
+	}
+}
+
+func TestCloseWeek_LeavesUnapprovedMatchUnprocessedButStillCloses(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	// Never approved.
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 -- Close Week's own requirements are unchanged in Phase 1B, got %d", resp.StatusCode)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if pc, _ := result["processed_count"].(float64); pc != 0 {
+		t.Errorf("want processed_count=0 (nothing was approved), got %v", result["processed_count"])
+	}
+
+	var processedAt sql.NullString
+	var weekClosed int
+	db.DB.QueryRow(`SELECT processed_at, week_closed FROM matches WHERE id=?`, f.matchID).
+		Scan(&processedAt, &weekClosed)
+	if processedAt.Valid {
+		t.Error("want processed_at to stay NULL for a match that was never approved")
+	}
+	if weekClosed != 1 {
+		t.Error("want the week to close normally regardless of the unapproved match")
+	}
+}
+
+// TestCloseWeek_UnapprovedMatchStillEligibleViaLegacyPath confirms Phase 1A
+// and 1B compose correctly: a match closed without ever being approved (so
+// Phase 1B's auto-process step skips it) still counts toward handicap
+// recommendation eligibility through the pre-existing week_closed=1
+// compatibility path.
+func TestCloseWeek_UnapprovedMatchStillEligibleViaLegacyPath(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_teams (season_id, team_id) VALUES (?,?)`, f.sid, f.teamA)
+	db.DB.Exec(`INSERT OR IGNORE INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`, f.sid, f.teamA, f.playerA)
+	setHandicapMethod(t, f.sid, "game_diff_average")
+	seedRoundResultsN(t, f.matchID, f.playerA, f.playerB, 5, 10, 7, 0.0, 0.0)
+	// Never approved or individually processed.
+
+	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
+	resp.Body.Close()
+
+	var processedAt sql.NullString
+	db.DB.QueryRow(`SELECT processed_at FROM matches WHERE id=?`, f.matchID).Scan(&processedAt)
+	if processedAt.Valid {
+		t.Fatal("test setup error: match should not have been auto-processed (never approved)")
+	}
+
+	httpResp, err := http.Get(fmt.Sprintf("%s/api/seasons/%d/handicap-recommendations", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer httpResp.Body.Close()
+	var data map[string]any
+	json.NewDecoder(httpResp.Body).Decode(&data)
+	recs, _ := data["recommendations"].([]any)
+	for _, r := range recs {
+		rec, _ := r.(map[string]any)
+		if int64(rec["player_id"].(float64)) == f.playerA {
+			includedRacks, _ := rec["included_racks"].(float64)
+			if includedRacks != 15 {
+				t.Errorf("want included_racks=15 via the week_closed=1 legacy path, got %v", includedRacks)
+			}
+			return
+		}
+	}
+	t.Errorf("playerA not found in recommendations; recs: %v", recs)
+}
+
+// TestReopenWeek_PreservesApprovalAndProcessingAfterAutoProcess confirms
+// Phase 1B requirements 5/6: reopening a week whose matches were
+// auto-processed at close time leaves approval/processing state intact
+// (Reopen only clears week_closed), and the existing unprocess/unapprove
+// correction path still works afterward.
+func TestReopenWeek_PreservesApprovalAndProcessingAfterAutoProcess(t *testing.T) {
+	f := weekTestSeed(t)
+	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
+
+	reopenResp, err := http.Post(fmt.Sprintf("%s/api/seasons/%d/weeks/1/reopen", f.srv.URL, f.sid), "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenResp.Body.Close()
+	if reopenResp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 reopening the week, got %d", reopenResp.StatusCode)
+	}
+
+	var approvedAt, processedAt sql.NullString
+	db.DB.QueryRow(`SELECT approved_at, processed_at FROM matches WHERE id=?`, f.matchID).
+		Scan(&approvedAt, &processedAt)
+	if !approvedAt.Valid || !processedAt.Valid {
+		t.Fatal("want approved_at and processed_at to remain set after reopening the week")
+	}
+
+	// Admin correction path: unprocess, then unapprove, then edit scores
+	// again -- all should now succeed since the week is open again.
+	unprocessResp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/unprocess", f.srv.URL, f.matchID))
+	defer unprocessResp.Body.Close()
+	if unprocessResp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 unprocessing after reopen, got %d", unprocessResp.StatusCode)
+	}
+	unapproveResp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/unapprove", f.srv.URL, f.matchID))
+	defer unapproveResp.Body.Close()
+	if unapproveResp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 unapproving after unprocess, got %d", unapproveResp.StatusCode)
+	}
+
+	body := fmt.Sprintf(`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`,
+		f.playerA, f.playerB)
+	editResp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/rounds", f.srv.URL, f.matchID),
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer editResp.Body.Close()
+	if editResp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(editResp.Body)
+		t.Fatalf("want 200 editing scores after full unapprove/unprocess correction path, got %d: %s", editResp.StatusCode, b)
+	}
 }

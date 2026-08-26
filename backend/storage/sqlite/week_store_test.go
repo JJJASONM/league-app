@@ -2,6 +2,8 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
+	"strings"
 	"testing"
 
 	"league_app/backend/domains/matches"
@@ -104,7 +106,7 @@ func TestWeekStore_CloseWeek_UpsertLeagueWeeks(t *testing.T) {
 	seasonID, _ := weekStoreSeed(t)
 	store := sqlite.NewWeekStore(db.DB)
 
-	if err := store.CloseWeek(context.Background(), seasonID, 1, nil); err != nil {
+	if _, err := store.CloseWeek(context.Background(), seasonID, 1, nil, nil); err != nil {
 		t.Fatalf("CloseWeek: %v", err)
 	}
 
@@ -122,7 +124,7 @@ func TestWeekStore_CloseWeek_SetsMatchWeekClosed(t *testing.T) {
 	seasonID, matchID := weekStoreSeed(t)
 	store := sqlite.NewWeekStore(db.DB)
 
-	if err := store.CloseWeek(context.Background(), seasonID, 1, nil); err != nil {
+	if _, err := store.CloseWeek(context.Background(), seasonID, 1, nil, nil); err != nil {
 		t.Fatalf("CloseWeek: %v", err)
 	}
 
@@ -141,7 +143,7 @@ func TestWeekStore_CloseWeek_InsertsAckRows(t *testing.T) {
 	acks := []matches.AckEntry{
 		{MatchID: matchID, WarningCode: "TEST_WARN", Field: "f1", Notes: "note"},
 	}
-	if err := store.CloseWeek(context.Background(), seasonID, 1, acks); err != nil {
+	if _, err := store.CloseWeek(context.Background(), seasonID, 1, acks, nil); err != nil {
 		t.Fatalf("CloseWeek: %v", err)
 	}
 
@@ -152,15 +154,103 @@ func TestWeekStore_CloseWeek_InsertsAckRows(t *testing.T) {
 	}
 }
 
+// Weekly Score Processing Phase 1B: CloseWeek auto-processes approved matches.
+
+func TestWeekStore_CloseWeek_AutoProcessesApprovedMatch(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	db.DB.Exec(`UPDATE matches SET completed=1, approved_at=CURRENT_TIMESTAMP WHERE id=?`, matchID)
+	store := sqlite.NewWeekStore(db.DB)
+
+	uid := int64(7)
+	processedCount, err := store.CloseWeek(context.Background(), seasonID, 1, nil, &uid)
+	if err != nil {
+		t.Fatalf("CloseWeek: %v", err)
+	}
+	if processedCount != 1 {
+		t.Errorf("want processedCount=1, got %d", processedCount)
+	}
+
+	var processedAt sql.NullString
+	var processedBy sql.NullInt64
+	db.DB.QueryRow(`SELECT processed_at, processed_by_user_id FROM matches WHERE id=?`, matchID).
+		Scan(&processedAt, &processedBy)
+	if !processedAt.Valid || processedAt.String == "" {
+		t.Error("want processed_at set after CloseWeek auto-processes an approved match")
+	}
+	if !processedBy.Valid || processedBy.Int64 != 7 {
+		t.Errorf("want processed_by_user_id=7, got %v", processedBy)
+	}
+}
+
+func TestWeekStore_CloseWeek_DoesNotProcessUnapprovedMatch(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID) // completed, never approved
+	store := sqlite.NewWeekStore(db.DB)
+
+	processedCount, err := store.CloseWeek(context.Background(), seasonID, 1, nil, nil)
+	if err != nil {
+		t.Fatalf("CloseWeek: %v", err)
+	}
+	if processedCount != 0 {
+		t.Errorf("want processedCount=0 for an unapproved match, got %d", processedCount)
+	}
+
+	var processedAt sql.NullString
+	db.DB.QueryRow(`SELECT processed_at FROM matches WHERE id=?`, matchID).Scan(&processedAt)
+	if processedAt.Valid {
+		t.Error("want processed_at to stay NULL for a match that was never approved")
+	}
+
+	// The week still closes normally regardless -- Close Week's own
+	// validation and week_closed behavior are unchanged in Phase 1B.
+	var weekClosed int
+	db.DB.QueryRow(`SELECT week_closed FROM matches WHERE id=?`, matchID).Scan(&weekClosed)
+	if weekClosed != 1 {
+		t.Error("want week_closed=1 even though the match was not auto-processed")
+	}
+}
+
+func TestWeekStore_CloseWeek_DoesNotReprocessAlreadyProcessedMatch(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	db.DB.Exec(`
+		UPDATE matches SET completed=1, approved_at=CURRENT_TIMESTAMP,
+		    processed_at='2026-01-01 00:00:00', processed_by_user_id=99
+		WHERE id=?`, matchID)
+	store := sqlite.NewWeekStore(db.DB)
+
+	uid := int64(7)
+	processedCount, err := store.CloseWeek(context.Background(), seasonID, 1, nil, &uid)
+	if err != nil {
+		t.Fatalf("CloseWeek: %v", err)
+	}
+	if processedCount != 0 {
+		t.Errorf("want processedCount=0 for an already-processed match, got %d", processedCount)
+	}
+
+	var processedAt string
+	var processedBy int64
+	db.DB.QueryRow(`SELECT processed_at, processed_by_user_id FROM matches WHERE id=?`, matchID).
+		Scan(&processedAt, &processedBy)
+	if !strings.HasPrefix(processedAt, "2026-01-01") {
+		t.Errorf("want original processed_at (2026-01-01...) preserved, got %q", processedAt)
+	}
+	if processedBy != 99 {
+		t.Errorf("want original processed_by_user_id=99 preserved, got %d", processedBy)
+	}
+}
+
 func TestWeekStore_CloseWeek_IdempotentReClose(t *testing.T) {
 	initWeekDB(t)
 	seasonID, _ := weekStoreSeed(t)
 	store := sqlite.NewWeekStore(db.DB)
 
-	if err := store.CloseWeek(context.Background(), seasonID, 1, nil); err != nil {
+	if _, err := store.CloseWeek(context.Background(), seasonID, 1, nil, nil); err != nil {
 		t.Fatalf("first CloseWeek: %v", err)
 	}
-	if err := store.CloseWeek(context.Background(), seasonID, 1, nil); err != nil {
+	if _, err := store.CloseWeek(context.Background(), seasonID, 1, nil, nil); err != nil {
 		t.Fatalf("second CloseWeek (re-close): %v", err)
 	}
 }
@@ -170,7 +260,7 @@ func TestWeekStore_ReopenWeek_ResetsStatus(t *testing.T) {
 	seasonID, _ := weekStoreSeed(t)
 	store := sqlite.NewWeekStore(db.DB)
 
-	store.CloseWeek(context.Background(), seasonID, 1, nil)
+	store.CloseWeek(context.Background(), seasonID, 1, nil, nil)
 	if err := store.ReopenWeek(context.Background(), seasonID, 1); err != nil {
 		t.Fatalf("ReopenWeek: %v", err)
 	}
@@ -186,7 +276,7 @@ func TestWeekStore_ReopenWeek_ClearsMatchWeekClosed(t *testing.T) {
 	seasonID, matchID := weekStoreSeed(t)
 	store := sqlite.NewWeekStore(db.DB)
 
-	store.CloseWeek(context.Background(), seasonID, 1, nil)
+	store.CloseWeek(context.Background(), seasonID, 1, nil, nil)
 	store.ReopenWeek(context.Background(), seasonID, 1)
 
 	var wc int
@@ -234,7 +324,7 @@ func TestWeekStore_ListWeekSummaries_ClosedAfterClose(t *testing.T) {
 	seasonID, _ := weekStoreSeed(t)
 	store := sqlite.NewWeekStore(db.DB)
 
-	store.CloseWeek(context.Background(), seasonID, 1, nil)
+	store.CloseWeek(context.Background(), seasonID, 1, nil, nil)
 
 	summaries, err := store.ListWeekSummaries(context.Background(), seasonID)
 	if err != nil {
@@ -267,7 +357,7 @@ func TestWeekStore_ListAcknowledgments_ReturnsInsertedRows(t *testing.T) {
 		{MatchID: matchID, WarningCode: "W1", Field: "f1", Notes: "note1"},
 		{MatchID: matchID, WarningCode: "W2", Field: "f2", Notes: "note2"},
 	}
-	store.CloseWeek(context.Background(), seasonID, 1, acks)
+	store.CloseWeek(context.Background(), seasonID, 1, acks, nil)
 
 	got, err := store.ListAcknowledgments(context.Background(), seasonID, 1)
 	if err != nil {
@@ -325,7 +415,7 @@ func TestWeekStore_GetWeekAdvanceSummary_StatusClosedAfterClose(t *testing.T) {
 	seasonID, _ := weekStoreSeed(t)
 	store := sqlite.NewWeekStore(db.DB)
 
-	store.CloseWeek(context.Background(), seasonID, 1, nil)
+	store.CloseWeek(context.Background(), seasonID, 1, nil, nil)
 
 	summary, err := store.GetWeekAdvanceSummary(context.Background(), seasonID, 1)
 	if err != nil {
@@ -558,7 +648,7 @@ func TestWeekStore_GetWeekRecapData_ClosedStatusAfterClose(t *testing.T) {
 	seasonID, _ := weekStoreSeed(t)
 	store := sqlite.NewWeekStore(db.DB)
 
-	store.CloseWeek(context.Background(), seasonID, 1, nil)
+	store.CloseWeek(context.Background(), seasonID, 1, nil, nil)
 
 	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
 	if err != nil {

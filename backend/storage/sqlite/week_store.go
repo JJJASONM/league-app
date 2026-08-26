@@ -146,10 +146,10 @@ func (s *WeekStore) GetWeekStatus(ctx context.Context, seasonID, weekNum int64) 
 
 // CloseWeek atomically upserts the league_weeks row to "closed", sets
 // matches.week_closed=1, and inserts one acknowledgment row per entry in acks.
-func (s *WeekStore) CloseWeek(ctx context.Context, seasonID, weekNum int64, acks []matches.AckEntry) error {
+func (s *WeekStore) CloseWeek(ctx context.Context, seasonID, weekNum int64, acks []matches.AckEntry, processedByUserID *int64) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("close week: begin tx: %w", err)
+		return 0, fmt.Errorf("close week: begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -159,14 +159,37 @@ func (s *WeekStore) CloseWeek(ctx context.Context, seasonID, weekNum int64, acks
 		ON CONFLICT(season_id, week_number) DO UPDATE
 		SET status=excluded.status, closed_at=CURRENT_TIMESTAMP`,
 		seasonID, weekNum, matches.WeekStatusClosed); err != nil {
-		return fmt.Errorf("close week: upsert league_weeks: %w", err)
+		return 0, fmt.Errorf("close week: upsert league_weeks: %w", err)
 	}
 
 	if _, err = tx.ExecContext(ctx, `
 		UPDATE matches SET week_closed=1
 		WHERE season_id=? AND week_number=?`,
 		seasonID, weekNum); err != nil {
-		return fmt.Errorf("close week: update matches: %w", err)
+		return 0, fmt.Errorf("close week: update matches: %w", err)
+	}
+
+	// Phase 1B: auto-process every approved-but-unprocessed match in the
+	// week as part of closing it. The completed=1 guard is defensive
+	// (approved_at can only be set on a completed match by ApproveMatch) --
+	// it exists so this statement never silently processes an incomplete or
+	// unapproved match even if that invariant were ever violated elsewhere.
+	// Matches that are scored but were never approved close along with the
+	// rest of the week (Close Week's own validation is unchanged in Phase
+	// 1B) but are simply skipped here, left for the admin to approve and
+	// process individually, or to count via the existing week_closed=1
+	// compatibility path once the week closes anyway.
+	processResult, err := tx.ExecContext(ctx, `
+		UPDATE matches SET processed_at=CURRENT_TIMESTAMP, processed_by_user_id=?
+		WHERE season_id=? AND week_number=? AND completed=1
+		  AND approved_at IS NOT NULL AND processed_at IS NULL`,
+		processedByUserID, seasonID, weekNum)
+	if err != nil {
+		return 0, fmt.Errorf("close week: auto-process approved matches: %w", err)
+	}
+	processedCount64, err := processResult.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("close week: auto-process rows affected: %w", err)
 	}
 
 	for _, a := range acks {
@@ -179,14 +202,14 @@ func (s *WeekStore) CloseWeek(ctx context.Context, seasonID, weekNum int64, acks
 			    (season_id, week_number, match_id, warning_code, field, notes)
 			VALUES (?, ?, ?, ?, ?, ?)`,
 			seasonID, weekNum, matchIDVal, a.WarningCode, a.Field, a.Notes); err != nil {
-			return fmt.Errorf("close week: insert ack: %w", err)
+			return 0, fmt.Errorf("close week: insert ack: %w", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("close week: commit: %w", err)
+		return 0, fmt.Errorf("close week: commit: %w", err)
 	}
-	return nil
+	return int(processedCount64), nil
 }
 
 // ReopenWeek atomically sets league_weeks.status back to "open" and clears

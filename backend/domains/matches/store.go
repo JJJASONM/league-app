@@ -65,8 +65,13 @@ type WeekStore interface {
 	GetWeekStatus(ctx context.Context, seasonID, weekNum int64) (string, error)
 
 	// CloseWeek atomically upserts the league_weeks row to "closed", sets
-	// matches.week_closed=1, and inserts one ack row per entry in acks.
-	CloseWeek(ctx context.Context, seasonID, weekNum int64, acks []AckEntry) error
+	// matches.week_closed=1, inserts one ack row per entry in acks, and
+	// (Phase 1B) auto-processes every match in the week that is approved
+	// but not yet individually processed (approved_at IS NOT NULL AND
+	// processed_at IS NULL), stamping processed_by_user_id with
+	// processedByUserID (may be nil). Returns the count of matches
+	// auto-processed by this call.
+	CloseWeek(ctx context.Context, seasonID, weekNum int64, acks []AckEntry, processedByUserID *int64) (processedCount int, err error)
 
 	// ReopenWeek atomically sets league_weeks.status to "open" and clears
 	// matches.week_closed for the season/week.

@@ -14,9 +14,11 @@ import (
 type stubWeekStore struct {
 	matchCount        int
 	weekStatus        string
-	closeErr          error
-	closeCalled       bool
-	reopenErr         error
+	closeErr               error
+	closeCalled            bool
+	closeProcessedByUserID *int64
+	closeProcessedCount    int
+	reopenErr              error
 	reopenCalled      bool
 	acks              []models.CloseAck
 	acksErr           error
@@ -46,9 +48,10 @@ func (s *stubWeekStore) GetWeekStatus(_ context.Context, _, _ int64) (string, er
 	return s.weekStatus, nil
 }
 
-func (s *stubWeekStore) CloseWeek(_ context.Context, _, _ int64, _ []matches.AckEntry) error {
+func (s *stubWeekStore) CloseWeek(_ context.Context, _, _ int64, _ []matches.AckEntry, processedByUserID *int64) (int, error) {
 	s.closeCalled = true
-	return s.closeErr
+	s.closeProcessedByUserID = processedByUserID
+	return s.closeProcessedCount, s.closeErr
 }
 
 func (s *stubWeekStore) ReopenWeek(_ context.Context, _, _ int64) error {
@@ -230,6 +233,31 @@ func TestWeekService_CloseWeek_SuccessOnEmptyWeek(t *testing.T) {
 	}
 	if result.AckCount != 0 {
 		t.Errorf("want AckCount=0 (no warnings), got %d", result.AckCount)
+	}
+}
+
+// TestWeekService_CloseWeek_PassesProcessedByUserIDAndReturnsProcessedCount
+// covers Weekly Score Processing Phase 1B: the actor attributed to
+// CloseWeek's auto-processing step flows through to the store, and the
+// store's reported auto-processed count flows back out in the result.
+func TestWeekService_CloseWeek_PassesProcessedByUserIDAndReturnsProcessedCount(t *testing.T) {
+	store := &stubWeekStore{closeProcessedCount: 3}
+	svc := newTestSvc(t, store, nil)
+
+	uid := int64(42)
+	result, err := svc.CloseWeek(context.Background(), matches.CloseWeekRequest{
+		SeasonID:          1,
+		WeekNumber:        1,
+		ProcessedByUserID: &uid,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.closeProcessedByUserID == nil || *store.closeProcessedByUserID != 42 {
+		t.Errorf("want ProcessedByUserID=42 passed to store, got %v", store.closeProcessedByUserID)
+	}
+	if result.ProcessedCount != 3 {
+		t.Errorf("want ProcessedCount=3 from store, got %d", result.ProcessedCount)
 	}
 }
 

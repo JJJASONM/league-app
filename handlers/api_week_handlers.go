@@ -69,9 +69,10 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 	}
 
 	result, err := mgr.CloseWeek(r.Context(), matches.CloseWeekRequest{
-		SeasonID:        seasonID,
-		WeekNumber:      weekNum,
-		Acknowledgments: body.Acknowledgments,
+		SeasonID:          seasonID,
+		WeekNumber:        weekNum,
+		Acknowledgments:   body.Acknowledgments,
+		ProcessedByUserID: approvingUserID(r),
 	})
 	if err != nil {
 		var wce *matches.WeekCloseErr
@@ -101,6 +102,7 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 			"closed":               true,
 			"week_number":          int(weekNum),
 			"acknowledgment_count": result.AckCount,
+			"processed_count":      result.ProcessedCount,
 		})
 		return
 	}
@@ -109,6 +111,7 @@ func closeWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 		"closed":               true,
 		"week_number":          int(weekNum),
 		"acknowledgment_count": result.AckCount,
+		"processed_count":      result.ProcessedCount,
 		"advance_result":       ar,
 	})
 }
