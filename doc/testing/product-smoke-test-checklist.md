@@ -636,19 +636,78 @@ nothing to verify in the browser for this feature.
         the bodyless-POST 411 on the first reopen attempt (see Critical
         blocker above); succeeded once retried with an explicit `{}` body.
 
-  **Not yet re-verified on staging (2026-08-25): Weekly Score Processing
-  Phase 1B.** Close Week now also auto-processes any match that was
-  individually approved (`POST /api/matches/{id}/approve`) but not yet
-  processed, and the close response includes a new `processed_count`
-  field. Close Week's own success/failure requirements are unchanged --
-  this only adds a side effect on success, so the checks above should
-  still hold, but that has not been confirmed against real staging data.
-  A dedicated staging pass (mirroring the Phase 1A one in section 13)
-  would additionally confirm: `processed_count` reflects the number of
-  approved matches actually processed at close time; an unapproved match
-  in the closed week is skipped (not silently processed) and still counts
-  toward handicap eligibility via the existing `week_closed=1` path; and
-  reopening afterward preserves approval/processing state.
+  **Weekly Score Processing Phase 1B -- backend/API foundation verified on
+  staging 2026-08-26.** Ran against real `http://league-staging.local`
+  after commit `c516776` was merged, pushed, and deployed. Used the
+  existing "Fixture Scoresheet Season" (season 6, league 3), week 4's two
+  matches: match 37 (approved before close) and match 38 (left unapproved
+  throughout) -- deliberately choosing one of each in the *same* week so
+  the auto-process/skip distinction is a real per-match result, not just a
+  season-wide one. A disposable bootstrap admin user
+  (`weekly-score-processing-1b-verify-2026-08-26`) was created via
+  `POST /api/users` with the static `LEAGUE_ADMIN_TOKEN`, same pattern as
+  every prior staging pass.
+
+  All 7 verification goals confirmed:
+
+  1. **Close Week auto-processes the approved match**: approved match 37
+     (`POST /api/matches/37/approve` -> 200), then
+     `POST /api/seasons/6/weeks/4/close` -> 200. `GET /api/matches/37`
+     afterward showed `processed_at` populated with a real timestamp.
+  2. **Close Week does not process the unapproved match**: `GET
+     /api/matches/38` after the same close showed `approved_at` and
+     `processed_at` both absent -- match 38 was never touched.
+  3. **`processed_count` matches the real count**: the close response
+     included `"processed_count":1` at the top level, correctly counting
+     only match 37 (the one approved match), not match 38 or the pair as a
+     whole.
+  4. **Auto-processed match contributes via `processed_at`, isolated**:
+     rather than trust the aggregate recommendations response (which can't
+     distinguish the two eligibility paths while the week is still
+     closed), reopened week 4 (`POST .../weeks/4/reopen` -> 200, which
+     clears `week_closed` but leaves `approved_at`/`processed_at` alone --
+     confirmed via `GET /api/matches/37`) and re-fetched
+     `GET /handicap-recommendations`: match 37's six players (Emery Frost,
+     Finley Moss, Devon Reed, Blair Flint, Avery Slate, Casey Vale) still
+     showed real `included_racks`/`lifetime_hc` values even with the week
+     open again -- the only thing still making them eligible is
+     `processed_at`.
+  5. **Unapproved-but-week-closed match counts through the legacy path,
+     also isolated**: in that same post-reopen response, match 38's six
+     players (Gray Lumen, Indigo North, Harper Quill, Jules Pike, Kai
+     Ridge, Lena Stone) all reverted to `"reason":"no_data"` and
+     `included_racks:0` -- proving their *only* prior eligibility (while
+     the week was closed) came from `week_closed=1`, and vanished the
+     instant that flag cleared, since they were never individually
+     processed. This before/after-reopen comparison is a cleaner, more
+     rigorous proof than the equivalent Phase 1A staging check, since it
+     isolates both paths from the same real dataset in one motion.
+  6. **Reopen preserves state and the correction path still works**:
+     confirmed `approved_at`/`processed_at` survived the reopen unchanged
+     (see check 4). Then `POST /api/matches/37/unprocess` -> 200 followed
+     by `POST /api/matches/37/unapprove` -> 200; `GET /api/matches/37`
+     afterward showed match 37 byte-for-byte identical in shape to
+     never-touched match 38 (no approval fields present).
+  7. **No regression**: Close Week, Reopen Week, and Handicap
+     Recommendations all behaved exactly as documented above, with no
+     unexpected errors or state at any step. Week Recap was not
+     independently re-hit this pass (week 4 was reopened before a recap
+     view made sense to check) -- it shares the identical embedded
+     handicap mechanism already exercised via the close response's
+     `advance_result.handicap` block and via Phase 1A's dedicated Week
+     Recap verification, so this is a scope note, not an open gap.
+
+  Restored to baseline immediately after: deleted the temporary
+  `handicap_update_method` rule (season 6 had none before this pass).
+  Confirmed `GET /api/seasons/6/rules`, `GET /api/seasons/6/weeks`, `GET
+  /api/matches/37`, and `GET /api/matches/38` all match the
+  pre-verification baseline exactly (week 4 back to `open`, both matches
+  with no approval fields), and `GET /api/standings?season_id=6` shows 0
+  games played for every team. The bootstrap verification user was left in
+  place, consistent with every prior staging pass.
+
+  All UI/rendering checks remain out of scope -- Phase 1B is backend-only
+  by design, and Phase 1C (frontend buttons/badges) has not shipped.
 
 ### 12. Standings and Player Stats
 
