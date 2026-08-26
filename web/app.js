@@ -52,6 +52,7 @@ function loadSection(sec) {
     case 'standings': document.querySelector('standings-section')?.refresh(state.allSeasons); break;
     case 'stats':     document.querySelector('stats-section')?.refresh(state.allSeasons); break;
     case 'handicap':  document.querySelector('handicaps-page')?.refresh(state.allSeasons, state.activeSeason); break;
+    case 'users':     document.querySelector('users-management-page')?.refresh(); break;
   }
 }
 
@@ -185,19 +186,52 @@ function updateAdminKeyButton() {
   if (label) label.textContent = hasAdminKey() ? 'Admin Key (set)' : 'Admin Key';
 }
 
+// Users Admin Screen Phase 1: resolves the Admin Key currently set for this
+// tab to a real user identity (username/role) via GET /api/users/me, so the
+// shell can show "who am I" in the modal and gate the Users nav entry to
+// system_admin/admin. Returns the resolved identity, or null when no key is
+// set or the key does not resolve (expired, revoked, wrong key) -- a 401/403
+// here is an expected, quiet outcome, not an error to toast on its own;
+// callers that just saved a key decide how to react to a null result.
+async function resolveCurrentIdentity() {
+  if (!hasAdminKey()) {
+    appContext.setCurrentIdentity(null);
+    updateIdentityUI();
+    return null;
+  }
+  let identity = null;
+  try {
+    identity = await api('GET', '/users/me');
+  } catch (_) {
+    identity = null;
+  }
+  appContext.setCurrentIdentity(identity);
+  updateIdentityUI();
+  return identity;
+}
+
+function updateIdentityUI() {
+  const identity = appContext.getState().currentIdentity;
+  const statusEl = document.getElementById('admin-key-current-status');
+  if (statusEl) {
+    statusEl.textContent = identity
+      ? `Signed in as ${identity.username} (${identity.role})`
+      : hasAdminKey()
+        ? 'A key is set for this tab, but it did not resolve to a recognized user.'
+        : 'No key is currently set -- admin actions will fail until one is set.';
+  }
+  const canManageUsers = !!identity && (identity.role === 'system_admin' || identity.role === 'admin');
+  document.getElementById('nav-item-users')?.classList.toggle('d-none', !canManageUsers);
+}
+
 function openAdminKeyModal() {
   const input = document.getElementById('admin-key-input');
   if (input) input.value = '';
-  const statusEl = document.getElementById('admin-key-current-status');
-  if (statusEl) {
-    statusEl.textContent = hasAdminKey()
-      ? 'A key is currently set for this tab.'
-      : 'No key is currently set -- admin actions will fail until one is set.';
-  }
+  updateIdentityUI();
   new bootstrap.Modal(document.getElementById('admin-key-modal')).show();
 }
 
-function saveAdminKey() {
+async function saveAdminKey() {
   const input = document.getElementById('admin-key-input');
   const raw = input?.value.trim();
   if (!raw) { toast('Enter a key, or use Clear to remove the current one', 'warning'); return; }
@@ -206,15 +240,26 @@ function saveAdminKey() {
   const val = raw.replace(/^Bearer\s+/i, '');
   setAdminKey(val);
   updateAdminKeyButton();
-  bootstrap.Modal.getInstance(document.getElementById('admin-key-modal'))?.hide();
-  toast('Admin key set for this tab');
+  const identity = await resolveCurrentIdentity();
+  if (identity) {
+    bootstrap.Modal.getInstance(document.getElementById('admin-key-modal'))?.hide();
+    toast('Admin key set for this tab');
+  } else {
+    // Key is kept (stored) so the user can Clear or replace it, but the
+    // modal stays open and the identity status line already shows "did not
+    // resolve" (via resolveCurrentIdentity -> updateIdentityUI) -- do not
+    // imply success with a green toast and a closed modal.
+    toast('That key was not recognized -- admin actions will fail until a valid key is set', 'danger');
+  }
 }
 
-function clearAdminKeyAndClose() {
+async function clearAdminKeyAndClose() {
   clearAdminKey();
   updateAdminKeyButton();
+  await resolveCurrentIdentity();
   bootstrap.Modal.getInstance(document.getElementById('admin-key-modal'))?.hide();
   toast('Admin key cleared');
 }
 
 updateAdminKeyButton();
+resolveCurrentIdentity();

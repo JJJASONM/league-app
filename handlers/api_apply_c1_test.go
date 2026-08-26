@@ -116,7 +116,7 @@ func TestPostUsers_WrongToken_Returns403(t *testing.T) {
 func TestPostUsers_CorrectToken_Returns201WithOneTimeKey(t *testing.T) {
 	srv, _ := testServerWithApplyAuth(t)
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/users",
-		strings.NewReader(`{"username":"alice"}`))
+		strings.NewReader(`{"username":"alice","role":"league_admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c1AdminToken)
 	resp, err := http.DefaultClient.Do(req)
@@ -134,8 +134,165 @@ func TestPostUsers_CorrectToken_Returns201WithOneTimeKey(t *testing.T) {
 	if got.User.Username != "alice" {
 		t.Errorf("want username alice, got %q", got.User.Username)
 	}
+	if got.User.Role != "league_admin" {
+		t.Errorf("want role league_admin, got %q", got.User.Role)
+	}
 	if len(got.APIKey) != 64 {
 		t.Errorf("want 64-char api_key, got len=%d", len(got.APIKey))
+	}
+}
+
+// TestPostUsers_MissingRole_Returns400 verifies role is required -- Users
+// Admin Screen Phase 1 no longer hardcodes a default role.
+func TestPostUsers_MissingRole_Returns400(t *testing.T) {
+	srv, _ := testServerWithApplyAuth(t)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/users",
+		strings.NewReader(`{"username":"alice"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c1AdminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestPostUsers_LegacyAdminRole_Returns400 verifies "admin" is rejected as a
+// new-creation role even with valid auth -- it remains a legacy alias for
+// existing rows only, per PM decision 2.
+func TestPostUsers_LegacyAdminRole_Returns400(t *testing.T) {
+	srv, _ := testServerWithApplyAuth(t)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/users",
+		strings.NewReader(`{"username":"alice","role":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c1AdminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("want 400 (admin is not a creatable role), got %d", resp.StatusCode)
+	}
+}
+
+// TestPostUsers_SystemAdminPersonalKey_Returns201 verifies a resolved
+// system_admin personal key can create a user, not just the static admin
+// token -- the concrete backend gap identified in discovery (PM decision 1).
+func TestPostUsers_SystemAdminPersonalKey_Returns201(t *testing.T) {
+	srv, authStore := testServerWithApplyAuth(t)
+	ctx := context.Background()
+	_, sysAdminKey, err := authStore.CreateApplyUser(ctx, "sys-admin-caller", "system_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/users",
+		strings.NewReader(`{"username":"created-by-personal-key","role":"league_admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+sysAdminKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("want 201 (system_admin personal key authorizes user creation), got %d: %s",
+			resp.StatusCode, resp.Body)
+	}
+}
+
+// TestPostUsers_LeagueAdminPersonalKey_Returns403 verifies league_admin
+// (unlike system_admin/admin) cannot create users -- this route uses the
+// stricter system-admin gate, like backup, not the broader clearance gate.
+func TestPostUsers_LeagueAdminPersonalKey_Returns403(t *testing.T) {
+	srv, authStore := testServerWithApplyAuth(t)
+	ctx := context.Background()
+	_, leagueAdminKey, err := authStore.CreateApplyUser(ctx, "league-admin-caller", "league_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/users",
+		strings.NewReader(`{"username":"nope","role":"league_admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+leagueAdminKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("want 403 (league_admin cannot create users), got %d", resp.StatusCode)
+	}
+}
+
+// --- GET /api/users/me -----------------------------------------------------
+
+// TestGetMe_NoToken_Returns401 verifies /me requires authentication.
+func TestGetMe_NoToken_Returns401(t *testing.T) {
+	srv, _ := testServerWithApplyAuth(t)
+	resp, err := http.Get(srv.URL + "/api/users/me")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", resp.StatusCode)
+	}
+}
+
+// TestGetMe_StaticAdminToken_Returns403 verifies the static admin token does
+// not resolve to a user identity -- /me has no static-token fallback, since
+// its whole purpose is resolving a real personal key to a real user.
+func TestGetMe_StaticAdminToken_Returns403(t *testing.T) {
+	srv, _ := testServerWithApplyAuth(t)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+c1AdminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("want 403 (static token does not resolve to a user), got %d", resp.StatusCode)
+	}
+}
+
+// TestGetMe_ValidPersonalKey_ReturnsResolvedIdentity verifies /me returns the
+// caller's own username/role/active for any resolvable personal key,
+// regardless of role -- this is what drives the Admin Key modal's identity
+// indicator (Phase 1 frontend).
+func TestGetMe_ValidPersonalKey_ReturnsResolvedIdentity(t *testing.T) {
+	srv, authStore := testServerWithApplyAuth(t)
+	ctx := context.Background()
+	_, key, err := authStore.CreateApplyUser(ctx, "whoami-user", "league_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, resp.Body)
+	}
+	var got models.User
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Username != "whoami-user" {
+		t.Errorf("want username whoami-user, got %q", got.Username)
+	}
+	if got.Role != "league_admin" {
+		t.Errorf("want role league_admin, got %q", got.Role)
 	}
 }
 
@@ -170,7 +327,7 @@ func TestGetUsers_WrongToken_Returns403(t *testing.T) {
 func TestGetUsers_CorrectToken_Returns200(t *testing.T) {
 	srv, authStore := testServerWithApplyAuth(t)
 	ctx := context.Background()
-	if _, _, err := authStore.CreateApplyUser(ctx, "bob"); err != nil {
+	if _, _, err := authStore.CreateApplyUser(ctx, "bob", "league_admin"); err != nil {
 		t.Fatalf("CreateApplyUser: %v", err)
 	}
 
@@ -193,12 +350,57 @@ func TestGetUsers_CorrectToken_Returns200(t *testing.T) {
 	}
 }
 
+// TestGetUsers_SystemAdminPersonalKey_Returns200 verifies a resolved
+// system_admin personal key can list users, not just the static admin
+// token (PM decision 1).
+func TestGetUsers_SystemAdminPersonalKey_Returns200(t *testing.T) {
+	srv, authStore := testServerWithApplyAuth(t)
+	ctx := context.Background()
+	_, sysAdminKey, err := authStore.CreateApplyUser(ctx, "list-caller", "system_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/users", nil)
+	req.Header.Set("Authorization", "Bearer "+sysAdminKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("want 200 (system_admin personal key authorizes list), got %d", resp.StatusCode)
+	}
+}
+
+// TestGetUsers_LeagueAdminPersonalKey_Returns403 verifies league_admin
+// cannot list users -- same stricter system-admin gate as create.
+func TestGetUsers_LeagueAdminPersonalKey_Returns403(t *testing.T) {
+	srv, authStore := testServerWithApplyAuth(t)
+	ctx := context.Background()
+	_, leagueAdminKey, err := authStore.CreateApplyUser(ctx, "league-lister", "league_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/users", nil)
+	req.Header.Set("Authorization", "Bearer "+leagueAdminKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("want 403 (league_admin cannot list users), got %d", resp.StatusCode)
+	}
+}
+
 // ─── Apply attribution: DB column wiring ─────────────────────────────────────
 
 // createUserForTest creates a user via the auth store and returns the user and cleartext key.
 func createUserForTest(t *testing.T, authStore *sqlite.ApplyAuthStore, username string) (models.User, string) {
 	t.Helper()
-	user, key, err := authStore.CreateApplyUser(context.Background(), username)
+	user, key, err := authStore.CreateApplyUser(context.Background(), username, "league_admin")
 	if err != nil {
 		t.Fatalf("CreateApplyUser(%q): %v", username, err)
 	}
@@ -303,7 +505,7 @@ func TestApply_Replay_PreservesAttribution(t *testing.T) {
 func TestGetUsers_ResponseDoesNotContainAPIKey(t *testing.T) {
 	srv, authStore := testServerWithApplyAuth(t)
 	ctx := context.Background()
-	_, key, err := authStore.CreateApplyUser(ctx, "key-check-user")
+	_, key, err := authStore.CreateApplyUser(ctx, "key-check-user", "league_admin")
 	if err != nil {
 		t.Fatalf("CreateApplyUser: %v", err)
 	}

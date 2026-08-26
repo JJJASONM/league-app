@@ -40,8 +40,9 @@ type ApplyAuthResolver interface {
 	// ResolveApplyUserByAPIKey returns the active user matching SHA-256(apiKey),
 	// or nil, nil when no match is found.
 	ResolveApplyUserByAPIKey(ctx context.Context, apiKey string) (*models.User, error)
-	// CreateApplyUser creates a new user and returns the user plus the one-time cleartext key.
-	CreateApplyUser(ctx context.Context, username string) (models.User, string, error)
+	// CreateApplyUser creates a new user with the given role and returns the
+	// user plus the one-time cleartext key.
+	CreateApplyUser(ctx context.Context, username, role string) (models.User, string, error)
 	// ListApplyUsers returns all users. The api_key_hash column is never exposed.
 	ListApplyUsers(ctx context.Context) ([]models.User, error)
 }

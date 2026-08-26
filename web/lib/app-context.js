@@ -15,6 +15,11 @@
       activeSeason: null,
       entryPreSelectSeasonId: null,
       entryPreSelectMatchId: null,
+      // Users Admin Screen Phase 1: the user identity resolved from the
+      // Admin Key currently set for this tab (via GET /api/users/me), or
+      // null when no key is set or it did not resolve. Drives the Users
+      // nav entry's visibility and the Admin Key modal's identity display.
+      currentIdentity: null,
     };
 
     function updateActiveSeasonLabel() {
@@ -120,6 +125,10 @@
       state.allPlayers = players;
     }
 
+    function setCurrentIdentity(identity) {
+      state.currentIdentity = identity;
+    }
+
     async function applyLeaguesChanged(detail) {
       state.allLeagues = detail.leagues;
 
@@ -150,6 +159,7 @@
       getState: getState,
       init: init,
       loadLeagueData: loadLeagueData,
+      setCurrentIdentity: setCurrentIdentity,
       setEntryPreselect: setEntryPreselect,
       switchLeague: switchLeague,
     };

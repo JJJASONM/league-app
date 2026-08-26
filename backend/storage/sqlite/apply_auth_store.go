@@ -48,11 +48,13 @@ func (s *ApplyAuthStore) ResolveApplyUserByAPIKey(ctx context.Context, apiKey st
 	return &u, nil
 }
 
-// CreateApplyUser creates a new user with the given username, generates a
-// random 32-byte API key, stores only its SHA-256 hash, and returns the user
-// along with the cleartext key. The cleartext key is not stored anywhere and
-// cannot be retrieved again.
-func (s *ApplyAuthStore) CreateApplyUser(ctx context.Context, username string) (models.User, string, error) {
+// CreateApplyUser creates a new user with the given username and role,
+// generates a random 32-byte API key, stores only its SHA-256 hash, and
+// returns the user along with the cleartext key. The cleartext key is not
+// stored anywhere and cannot be retrieved again. Role validation (which
+// roles may be assigned to a new user) is the caller's responsibility --
+// this store persists whatever role it is given.
+func (s *ApplyAuthStore) CreateApplyUser(ctx context.Context, username, role string) (models.User, string, error) {
 	cleartext, hash, err := generateAPIKey()
 	if err != nil {
 		return models.User{}, "", fmt.Errorf("generate api key: %w", err)
@@ -62,9 +64,9 @@ func (s *ApplyAuthStore) CreateApplyUser(ctx context.Context, username string) (
 	var active int
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO users (username, api_key_hash, role, active)
-		VALUES (?, ?, 'admin', 1)
+		VALUES (?, ?, ?, 1)
 		RETURNING id, username, role, active, created_at
-	`, username, hash).Scan(&u.ID, &u.Username, &u.Role, &active, &u.CreatedAt)
+	`, username, hash, role).Scan(&u.ID, &u.Username, &u.Role, &active, &u.CreatedAt)
 	if err != nil {
 		return models.User{}, "", fmt.Errorf("create apply user: %w", err)
 	}

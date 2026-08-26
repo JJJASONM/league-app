@@ -132,17 +132,28 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		log.Println("Apply route: NOT MOUNTED - LEAGUE_ADMIN_TOKEN not set")
 	}
 
-	// User management — gated by the static admin token.
-	// Only registered when the Apply route is mounted (AdminToken is non-empty).
-	if deps.AdminToken != "" && deps.ApplyAuth != nil {
+	// User management. POST/GET /api/users accept either the static admin
+	// token (kept as a bootstrap path -- it is the only way to create the
+	// first system_admin user) or a resolved personal key with
+	// system_admin/admin role (Users Admin Screen Phase 1). Both routes are
+	// mounted whenever ApplyAuth is wired, independent of AdminToken --
+	// requireAdminTokenOrSystemAdminAuth only honors the static-token path
+	// when AdminToken is actually configured, so a system_admin's personal
+	// key still works when it is not. GET /api/users/me resolves the
+	// caller's own identity from any valid personal key, no role check, no
+	// static-token fallback.
+	if deps.ApplyAuth != nil {
 		auth := deps.ApplyAuth
+		mux.HandleFunc("GET /api/users/me",
+			requirePersonalKeyAuth(auth, getMe),
+		)
 		mux.HandleFunc("POST /api/users",
-			requireAdminToken(deps.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+			requireAdminTokenOrSystemAdminAuth(deps.AdminToken, auth, func(w http.ResponseWriter, r *http.Request) {
 				postUser(w, r, auth)
 			}),
 		)
 		mux.HandleFunc("GET /api/users",
-			requireAdminToken(deps.AdminToken, func(w http.ResponseWriter, r *http.Request) {
+			requireAdminTokenOrSystemAdminAuth(deps.AdminToken, auth, func(w http.ResponseWriter, r *http.Request) {
 				listUsers(w, r, auth)
 			}),
 		)
@@ -241,6 +252,56 @@ func requireAdminToken(token string, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
+	}
+}
+
+// requireAdminTokenOrSystemAdminAuth gates the user-management routes
+// (POST/GET /api/users). It accepts either the static admin token (kept
+// as a bootstrap path -- something has to be able to create the first
+// system_admin user before any personal key exists) or a resolved
+// personal key with system_admin/admin role. adminToken may be empty
+// (AdminToken unconfigured) -- the static-token path is only honored
+// when adminToken is non-empty AND matches, so an empty AdminToken can
+// never accidentally authorize a request; personal-key resolution still
+// works either way. Unlike requireApplyAuth, the static token is not
+// logged as deprecated here: it is an intentional, ongoing bootstrap
+// mechanism for this route, not a fallback being phased out.
+func requireAdminTokenOrSystemAdminAuth(adminToken string, resolver ApplyAuthResolver, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="league-admin"`)
+			jsonError(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if !strings.HasPrefix(auth, "Bearer ") {
+			jsonError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		token := strings.TrimPrefix(auth, "Bearer ")
+
+		if adminToken != "" && token == adminToken {
+			next(w, r)
+			return
+		}
+
+		if resolver != nil {
+			user, err := resolver.ResolveApplyUserByAPIKey(r.Context(), token)
+			if err != nil {
+				log.Printf("users auth: key resolution error: %v", err)
+				jsonError(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			if user != nil {
+				switch user.Role {
+				case "system_admin", "admin":
+					next(w, r)
+					return
+				}
+			}
+		}
+
+		jsonError(w, "forbidden", http.StatusForbidden)
 	}
 }
 

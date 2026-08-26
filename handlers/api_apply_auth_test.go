@@ -219,8 +219,8 @@ func (s *stubApplyAuth) ResolveApplyUserByAPIKey(_ context.Context, key string) 
 	return nil, nil
 }
 
-func (s *stubApplyAuth) CreateApplyUser(_ context.Context, username string) (models.User, string, error) {
-	return models.User{ID: 1, Username: username, Role: "admin", Active: true}, "fake-key-64chars-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", nil
+func (s *stubApplyAuth) CreateApplyUser(_ context.Context, username, role string) (models.User, string, error) {
+	return models.User{ID: 1, Username: username, Role: role, Active: true}, "fake-key-64chars-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", nil
 }
 
 func (s *stubApplyAuth) ListApplyUsers(_ context.Context) ([]models.User, error) {

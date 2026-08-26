@@ -25,7 +25,7 @@ func TestApplyAuthStore_Create_ReturnsUser(t *testing.T) {
 	store := newApplyAuthStore(t)
 	ctx := context.Background()
 
-	u, key, err := store.CreateApplyUser(ctx, "alice")
+	u, key, err := store.CreateApplyUser(ctx, "alice", "league_admin")
 	if err != nil {
 		t.Fatalf("CreateApplyUser: %v", err)
 	}
@@ -35,8 +35,8 @@ func TestApplyAuthStore_Create_ReturnsUser(t *testing.T) {
 	if u.Username != "alice" {
 		t.Errorf("want username alice, got %q", u.Username)
 	}
-	if u.Role != "admin" {
-		t.Errorf("want role admin, got %q", u.Role)
+	if u.Role != "league_admin" {
+		t.Errorf("want role league_admin, got %q", u.Role)
 	}
 	if !u.Active {
 		t.Error("want active=true")
@@ -46,14 +46,38 @@ func TestApplyAuthStore_Create_ReturnsUser(t *testing.T) {
 	}
 }
 
+// TestApplyAuthStore_Create_PersistsGivenRole verifies the store persists
+// whatever role it is given (Users Admin Screen Phase 1: role is no longer
+// hardcoded to "admin") for both roles the handler is allowed to assign.
+func TestApplyAuthStore_Create_PersistsGivenRole(t *testing.T) {
+	store := newApplyAuthStore(t)
+	ctx := context.Background()
+
+	sysAdmin, _, err := store.CreateApplyUser(ctx, "sys-admin-user", "system_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser(system_admin): %v", err)
+	}
+	if sysAdmin.Role != "system_admin" {
+		t.Errorf("want role system_admin, got %q", sysAdmin.Role)
+	}
+
+	leagueAdmin, _, err := store.CreateApplyUser(ctx, "league-admin-user", "league_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser(league_admin): %v", err)
+	}
+	if leagueAdmin.Role != "league_admin" {
+		t.Errorf("want role league_admin, got %q", leagueAdmin.Role)
+	}
+}
+
 func TestApplyAuthStore_Create_DuplicateUsername_Errors(t *testing.T) {
 	store := newApplyAuthStore(t)
 	ctx := context.Background()
 
-	if _, _, err := store.CreateApplyUser(ctx, "bob"); err != nil {
+	if _, _, err := store.CreateApplyUser(ctx, "bob", "league_admin"); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	if _, _, err := store.CreateApplyUser(ctx, "bob"); err == nil {
+	if _, _, err := store.CreateApplyUser(ctx, "bob", "league_admin"); err == nil {
 		t.Error("want error on duplicate username, got nil")
 	}
 }
@@ -62,8 +86,8 @@ func TestApplyAuthStore_Create_KeysAreUnique(t *testing.T) {
 	store := newApplyAuthStore(t)
 	ctx := context.Background()
 
-	_, k1, _ := store.CreateApplyUser(ctx, "user1")
-	_, k2, _ := store.CreateApplyUser(ctx, "user2")
+	_, k1, _ := store.CreateApplyUser(ctx, "user1", "league_admin")
+	_, k2, _ := store.CreateApplyUser(ctx, "user2", "league_admin")
 	if k1 == k2 {
 		t.Error("want distinct keys for distinct users")
 	}
@@ -75,7 +99,7 @@ func TestApplyAuthStore_Resolve_MatchesCreatedKey(t *testing.T) {
 	store := newApplyAuthStore(t)
 	ctx := context.Background()
 
-	created, key, err := store.CreateApplyUser(ctx, "carol")
+	created, key, err := store.CreateApplyUser(ctx, "carol", "league_admin")
 	if err != nil {
 		t.Fatalf("CreateApplyUser: %v", err)
 	}
@@ -99,7 +123,7 @@ func TestApplyAuthStore_Resolve_WrongKey_ReturnsNil(t *testing.T) {
 	store := newApplyAuthStore(t)
 	ctx := context.Background()
 
-	if _, _, err := store.CreateApplyUser(ctx, "dave"); err != nil {
+	if _, _, err := store.CreateApplyUser(ctx, "dave", "league_admin"); err != nil {
 		t.Fatalf("CreateApplyUser: %v", err)
 	}
 
@@ -116,7 +140,7 @@ func TestApplyAuthStore_Resolve_InactiveUser_ReturnsNil(t *testing.T) {
 	store := newApplyAuthStore(t)
 	ctx := context.Background()
 
-	_, key, err := store.CreateApplyUser(ctx, "eve")
+	_, key, err := store.CreateApplyUser(ctx, "eve", "league_admin")
 	if err != nil {
 		t.Fatalf("CreateApplyUser: %v", err)
 	}
@@ -142,7 +166,7 @@ func TestApplyAuthStore_List_ReturnsAllUsers(t *testing.T) {
 	ctx := context.Background()
 
 	for _, name := range []string{"frank", "grace", "henry"} {
-		if _, _, err := store.CreateApplyUser(ctx, name); err != nil {
+		if _, _, err := store.CreateApplyUser(ctx, name, "league_admin"); err != nil {
 			t.Fatalf("CreateApplyUser(%q): %v", name, err)
 		}
 	}
@@ -162,7 +186,7 @@ func TestApplyAuthStore_List_DoesNotExposeHash(t *testing.T) {
 	store := newApplyAuthStore(t)
 	ctx := context.Background()
 
-	_, key, _ := store.CreateApplyUser(ctx, "iris")
+	_, key, _ := store.CreateApplyUser(ctx, "iris", "league_admin")
 	users, err := store.ListApplyUsers(ctx)
 	if err != nil {
 		t.Fatalf("ListApplyUsers: %v", err)

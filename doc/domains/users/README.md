@@ -4,8 +4,8 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.10`
-**Last reviewed:** `2026-08-08`
+**Current version:** `0.11`
+**Last reviewed:** `2026-08-26`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
@@ -150,6 +150,91 @@ POST /api/seasons/{id}/weeks/{week}/close  Authorization: Bearer <token>
 - No `system_admin`-gated user-management route protection (POST/GET /api/users
   remain gated by static admin token)
 
+## Users Admin Screen Phase 1 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-08-26`
+
+### What this phase added
+
+The first frontend surface for the users domain, plus the backend changes
+needed to make it usable by a real system_admin rather than only the
+shared static token:
+
+- `POST /api/users` and `GET /api/users` now accept EITHER the static
+  `LEAGUE_ADMIN_TOKEN` (kept as a bootstrap path -- something has to be
+  able to create the first system_admin user before any personal key
+  exists) OR a resolved personal key with `system_admin`/`admin` role, via
+  the new `requireAdminTokenOrSystemAdminAuth` middleware. Previously only
+  the static token worked, meaning a real system_admin could not use their
+  own credentials to manage users at all -- this was the concrete blocking
+  gap identified in discovery.
+- New `GET /api/users/me`, gated by `requirePersonalKeyAuth` alone (any
+  resolvable personal key, no role restriction, no static-token fallback).
+  Returns the caller's own username/role/active -- the "who am I" the
+  frontend needed and had no way to ask for before.
+- `CreateApplyUser` (and the `ApplyAuthResolver.CreateApplyUser` interface)
+  now take an explicit `role` parameter instead of hardcoding `role='admin'`
+  on every insert. `postUser` validates the requested role against
+  `{system_admin, league_admin}` -- `admin` is rejected for new creations,
+  remaining valid only as a legacy alias already present on existing rows.
+- New `web/domains/users/` domain: a Users screen (`users-management-page`)
+  listing existing users and creating new ones with an explicit role
+  choice, showing the one-time API key returned at creation (it cannot be
+  retrieved again).
+- The Admin Key modal now resolves the pasted key to a real identity via
+  `GET /api/users/me` and shows "Signed in as `<username>` (`<role>`)" (or
+  an explicit "did not resolve" message) instead of only "a key is set."
+  The Users nav entry is hidden unless the resolved identity is
+  `system_admin`/`admin`.
+
+### Protected routes (this phase)
+
+| Route | Auth requirement |
+|-------|-------------------|
+| `POST /api/users` | static `LEAGUE_ADMIN_TOKEN`, OR personal key + system_admin/admin role |
+| `GET /api/users` | static `LEAGUE_ADMIN_TOKEN`, OR personal key + system_admin/admin role |
+| `GET /api/users/me` | any resolvable personal key (no role restriction, no static-token fallback) |
+
+### Intentionally unprotected / unchanged
+
+- `handicap-apply`'s dual-tier `requireApplyAuth` (personal key + static
+  token fallback) is unchanged -- explicitly out of scope per PM decision.
+- No user deactivate/edit endpoint. `active` remains readable but not
+  writable via the API; deferred per PM decision.
+- No key rotation endpoint. Unchanged from prior phases.
+- No player-facing login, sessions, or JWTs. Unchanged from prior phases.
+
+### What this phase defers
+
+- Player-facing user/profile screen (needs a player auth primitive that
+  does not exist yet; explicitly out of scope).
+- A dedicated League Admin screen (existing operational domain screens
+  already serve league_admin; no separate screen was justified this
+  phase).
+- A dedicated Developer/Admin tools screen (Backup remains a single
+  sidebar button; not enough surface yet to justify consolidation).
+- Role constants/central registry (roles remain bare string literals
+  across `handlers/api.go`; a real cleanup opportunity, not a blocker).
+- Email invitations, password login, browser sessions/JWTs, mobile
+  notifications -- all explicitly out of scope per PM decision.
+
+### Verification
+
+`go test ./...` and `go build ./...` pass, including new focused tests
+covering: role validation on create (missing role, legacy `admin`
+rejected), `system_admin` personal key authorizing create/list,
+`league_admin` personal key rejected from create/list (403), and
+`GET /api/users/me` for the no-token/static-token/valid-personal-key
+cases. Manually verified end to end against a local server build:
+bootstrap via static token, create a `system_admin`, use that user's own
+personal key (not the static token) to create a second (`league_admin`)
+user, confirm the `league_admin` user is rejected from create/list but
+can still read its own identity via `/me`. `node --check` on all changed
+JS files passes. Actual browser rendering of the new Users screen and
+Admin Key modal identity line remain **NOT VERIFIED (no browser)** in
+this developer's tool session.
+
 ## Users Auth Phase 6 Implementation
 
 **Status:** `implemented`
@@ -203,7 +288,10 @@ Before implementing, confirmed no script or frontend code depends on
 With Phase 6 complete, all mutation routes identified in the incremental
 route-level auth rollout are protected. `handicap-apply` retains its
 dual-tier `requireApplyAuth` by design (see Phase C1 above); `POST/GET
-/api/users` retain `requireAdminToken` by design.
+/api/users` retained `requireAdminToken`-only auth by design at the time
+of this phase. See "Users Admin Screen Phase 1 Implementation" below for
+the later change that added personal-key (system_admin/admin) access
+alongside the static token.
 
 ## Users Auth Phase 5 Implementation
 
@@ -493,3 +581,21 @@ per route phase. See USERS-Q001 Discovery section.
 
 Authentication and league participation have different lifecycles and must not
 share one table.
+
+### 2026-08-26 - Users Admin Screen Phase 1: first users domain screen
+
+**Status:** `accepted`
+
+Added the first frontend surface for this domain (list + create users with
+an explicit role) and the backend change needed to make it usable by a real
+system_admin (personal-key access alongside the static token on POST/GET
+/api/users), plus a `GET /api/users/me` identity-resolution endpoint used by
+the Admin Key modal. New users may only be created as `system_admin` or
+`league_admin`; `admin` remains a legacy alias on existing rows only.
+Deactivate/edit, key rotation, email invitations, and player-facing
+login/profile remain deferred. Building this screen is the condition line
+555-557 above named as the trigger to revisit browser sessions/JWTs -- that
+revisit was explicitly declined for this phase (PM decision): personal API
+keys remain the mechanism, and no login endpoint or session model was
+introduced. See "Users Admin Screen Phase 1 Implementation" above for full
+detail.

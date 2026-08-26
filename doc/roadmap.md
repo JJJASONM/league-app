@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-25
+**Last reviewed:** 2026-08-26
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -86,6 +86,12 @@ These items should stay small enough to review and ship independently.
     check (system_admin, admin; league_admin rejected).
   - Keep `handicap-apply` static-token fallback unchanged until a focused
     attribution/auth cleanup phase.
+  - **Users Admin Screen Phase 1 complete 2026-08-26** -- `POST/GET
+    /api/users` now also accept a resolved system_admin/admin personal
+    key (previously the static token was the only way in); new `GET
+    /api/users/me`; first Users screen (list + create) and an Admin Key
+    modal identity indicator. See `doc/domains/users/README.md` and the
+    "Then" section below for full detail.
 
 - Stabilize current official-results workflow.
   - Keep Close Week, Reopen, warning acknowledgment, and advance
@@ -185,8 +191,19 @@ stable.
     attribution/auth cleanup phase.
   - For future online score entry, prefer rostered players assigned to the
     match over a generic scorekeeper role (deferred to MATCHES-Q002).
-  - Browser sessions and JWTs are deferred until online score entry or a users
-    management screen creates the concrete need.
+  - Users Admin Screen Phase 1 implemented 2026-08-26: `POST/GET
+    /api/users` now accept either the static `LEAGUE_ADMIN_TOKEN` or a
+    resolved personal key with system_admin/admin role (previously the
+    static token was the only way in, even for a real system_admin); new
+    `GET /api/users/me` resolves the caller's own identity; a first Users
+    screen (list + create, role choice restricted to system_admin/
+    league_admin) and an Admin Key modal identity indicator were added to
+    the frontend. See `doc/domains/users/README.md`'s "Users Admin Screen
+    Phase 1 Implementation" section for full detail.
+  - Browser sessions and JWTs remain deferred. Building a users management
+    screen was the condition previously named as the trigger to revisit
+    this -- that revisit was explicitly declined for this phase; personal
+    API keys remain the mechanism.
 
 - Player record maintenance.
   - Build a merge UI (preview, confirm) on top of the safe-merge backend after
@@ -704,6 +721,44 @@ follow-up.
   "Backend-only" wording in `doc/domains/matches/README.md`'s Phase 1C
   section to "UI-only." See that doc's "Phase 1C correction" subsection
   for full detail.
+- Users Admin Screen Phase 1 (2026-08-26). Discovery found the backend
+  auth rollout (Phases 1-6 above) was materially further along than the
+  frontend, which had zero user-facing surface for the users domain --
+  no Users/Login/Profile screen, no nav entry, just a session-scoped
+  "paste an API key" bridge with no visibility into who that key
+  belonged to. Also found a concrete blocking gap: `POST/GET /api/users`
+  accepted only the static `LEAGUE_ADMIN_TOKEN`, so a real system_admin
+  could not use their own personal key to manage users at all. This
+  phase: added `requireAdminTokenOrSystemAdminAuth` middleware so those
+  two routes now accept either the static token (kept as a bootstrap
+  path -- something has to create the first system_admin) or a resolved
+  system_admin/admin personal key; added `GET /api/users/me` (any
+  resolvable personal key, no role restriction) for "who am I";
+  `CreateApplyUser` now takes an explicit role instead of hardcoding
+  `role='admin'`, and `POST /api/users` validates new roles against
+  `{system_admin, league_admin}` only (`admin` stays valid on existing
+  rows as a legacy alias, but is not offered for new creation). New
+  `web/domains/users/` frontend domain: a Users screen listing users and
+  creating new ones with a role choice, showing the one-time API key at
+  creation. The Admin Key modal now resolves the pasted key to a real
+  identity via `/me` and shows "Signed in as `<username>` (`<role>`)";
+  the Users nav entry is hidden unless the resolved identity is
+  system_admin/admin. Explicitly deferred, per PM decision: player-facing
+  profile/login, a separate League Admin screen (existing domain screens
+  already serve league_admin), a separate Developer/Admin tools screen
+  (Backup stays a single button), browser sessions/JWTs, password login,
+  email invitations, key rotation, deactivate/edit, mobile notifications,
+  and the `handicap-apply` auth-fallback cleanup. Verified with
+  `go test ./...` and `go build ./...` (new focused tests for role
+  validation, personal-key access, and `/me`), `node --check` on all
+  changed JS files, and a full manual curl walkthrough against a local
+  server build: bootstrap via static token, create a system_admin, use
+  that user's own personal key (not the static token) to create a second
+  (league_admin) user, confirm league_admin is rejected from create/list
+  but can still read its own identity via `/me`. Actual browser rendering
+  of the new Users screen and Admin Key modal identity line remain **NOT
+  VERIFIED (no browser)**. See `doc/domains/users/README.md`'s "Users
+  Admin Screen Phase 1 Implementation" section for full detail.
 
 ## Open Questions To Resolve
 
