@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.8`
-**Last reviewed:** `2026-08-26`
+**Current version:** `0.9`
+**Last reviewed:** `2026-08-27`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -2406,10 +2406,135 @@ behavior in a real browser remain **NOT VERIFIED (no browser)**.
 
 - Note-entry UI for Approve
 - Bulk approve/process across multiple matches from the Schedule page
-- Any change to Week Recap UI (not touched, per PM's Phase 1B/1C scoping)
+  (partially addressed by Weekly Summary Phase 1's client-side "Process
+  Approved Scores" loop below -- still no real bulk backend endpoint)
+- ~~Any change to Week Recap UI~~ (addressed by Weekly Summary Phase 1
+  below -- `RecapMatchRow` now carries approval/processing status)
 - Real captain/player-side approval (Player Portal)
 
+## Weekly Summary Phase 1 -- Standalone Weekly Admin Screen (implemented 2026-08-27)
+
+### Goal
+
+Give the league admin one screen to see where a week stands -- match
+scoring/approval/processing status, what can be processed now, handicap
+changes, and next-week readiness -- without requiring every match in the
+week to be complete first. Builds directly on Week Recap and Weekly
+Score Processing (both already shipped) rather than introducing a new
+aggregate endpoint or a new cross-domain service.
+
+### What Phase 1 added
+
+- `models.RecapMatchRow` gained three fields: `ApprovedAt *string`,
+  `ProcessedAt *string`, `WeekClosed bool` -- the same three fields
+  already on `models.Match`, now also on each Week Recap match row. This
+  is an API-shape addition only (existing columns, no migration, no new
+  route) -- the same pattern used for `week_closed`'s addition to
+  `models.Match` in Weekly Score Processing Phase 1C.
+- `backend/storage/sqlite/week_store.go`'s `GetWeekRecapData` query now
+  selects `m.approved_at, m.processed_at, m.week_closed` alongside the
+  existing per-match columns and scans them the same way
+  `match_store.go` already does for `GET /api/matches`.
+- No new endpoint: `GET /api/seasons/{id}/weeks/{week}/recap` is the
+  same route, now returning three more fields per match. No new auth --
+  it was already an unprotected read.
+- New `web/domains/weekly-summary/` frontend domain: a season+week
+  selector, a per-match status ladder (Unscored / Scored / Approved /
+  Processed / Closed, computed client-side from the three new fields
+  plus the existing `has_result`), an incomplete-week-safe note (shown
+  whenever `missing_count > 0`, explicitly stating the handicap/stats
+  sections reflect data entered so far, not final results), a "Process
+  Approved Scores" button, a next-week readiness card (reusing the
+  existing `next_week`/`next_week_number` fields verbatim), and a
+  handicap section showing both the week's recorded `handicap_changes`
+  and the season-wide recommendations preview (`handicap.message` /
+  `handicap.recommendations`) already embedded in Week Recap.
+- "Process Approved Scores" is a client-side loop over the existing
+  `POST /api/matches/{id}/process` endpoint for every row where
+  `approved_at` is set and `processed_at`/`week_closed` are not -- no new
+  bulk-processing backend endpoint, per PM decision. Each match is
+  processed with its own existing validation; a per-match failure is
+  toasted individually and does not stop the rest of the loop.
+- Close Week itself is untouched and not reachable from this screen
+  beyond a status badge (Week Open / Week Closed) and an "Open in
+  Schedule" button that dispatches the same `season-nav-request` event
+  the Seasons domain already uses to jump to the Schedule page with a
+  season preselected -- no Close Week UI or logic was duplicated here.
+- Reuses existing global shell functions directly (`openMatchEntry`,
+  `openHandicapForWeek`) rather than introducing new cross-domain
+  events for those two actions, consistent with how
+  `schedule-page-component.js` already calls them.
+
+### Response shape addition
+
+```json
+{
+  "matches": [
+    {
+      "match_id": 1,
+      "...": "existing fields unchanged",
+      "approved_at": "2026-08-27T22:04:53Z",
+      "processed_at": null,
+      "week_closed": false
+    }
+  ]
+}
+```
+
+### What Phase 1 defers
+
+All explicitly out of scope per PM decision, not oversights:
+
+- Substitute creation/lineup workflows (`lineup_plans.is_sub`/
+  `sub_for_id` remain read-only in the write path -- unrelated,
+  discovered during Weekly Summary discovery, not touched here).
+- Payment/financial schema of any kind.
+- A real atomic bulk-process-without-closing backend endpoint (V1 uses
+  the client-side loop above; worth reconsidering only if it becomes a
+  real pain point).
+- Auth changes -- Week Recap remains unprotected, same as before.
+- `GetPlayerStats`'s `WinPct`-always-zero bug and the league-scoped
+  roster-only gap (both already tracked as separate follow-ups from
+  Player Overview Phase 1 discovery, unrelated to this phase).
+- Schedule undo and other low-severity polish items.
+
+### Verification
+
+`go test ./... -count=1` and `go build ./...` pass, including two new
+focused store tests in `backend/storage/sqlite/week_store_test.go`:
+`TestWeekStore_GetWeekRecapData_ApprovalFieldsDefaultUnset` (a fresh
+unscored match reports no approval fields and `week_closed=false`) and
+`TestWeekStore_GetWeekRecapData_ApprovalFieldsReflectMatchState` (two
+matches in the same week side by side -- one approved-only, one
+approved+processed+closed -- confirming the scan is correct for both
+states independently). `node --check` passes on all four changed/new JS
+files. Manually verified end to end against a local server build with a
+real generated schedule: approved and processed a real match via curl,
+confirmed the recap's per-match fields updated correctly at each step,
+confirmed `missing_count`, `next_week` readiness (including missing
+lineups on every team, since none were seeded), and the season-wide
+`handicap.message` (`manual_review`, "No handicap changes are applied
+automatically") all rendered exactly as the frontend expects. Actual
+browser rendering of the new screen remains **NOT VERIFIED (no
+browser)** in this developer's tool session.
+
 ## Decision History
+
+### 2026-08-27 - Weekly Summary Phase 1: standalone weekly admin screen
+
+**Status:** `accepted`
+
+Added a new admin-facing "Weekly Summary" screen showing a week's match
+status ladder (unscored/scored/approved/processed/closed), a
+client-side "Process Approved Scores" action looping the existing
+per-match process endpoint, handicap changes/recommendations, and
+next-week readiness. No new endpoint or auth -- built entirely on Week
+Recap (`GET /api/seasons/{id}/weeks/{week}/recap`), which gained three
+API-shape-only fields (`approved_at`, `processed_at`, `week_closed` on
+each `RecapMatchRow`). Close Week stays untouched and separate, linked
+to only via an "Open in Schedule" button. Substitute workflows, a real
+bulk-process backend endpoint, and payment/financial schema all remain
+explicitly deferred. See "Weekly Summary Phase 1" above for full detail.
 
 ### 2026-08-26 - Weekly Score Processing Phase 1C: frontend approval/processing UI
 

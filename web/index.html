@@ -33,6 +33,7 @@
       <li class="nav-item"><a class="nav-link" href="#" data-section="schedule"><i class="bi bi-calendar-week"></i> Schedule</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-section="lineup"><i class="bi bi-person-check"></i> Lineup</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-section="entry"><i class="bi bi-pencil-square"></i> Match Entry</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-section="weekly-summary"><i class="bi bi-clipboard-check"></i> Weekly Summary</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-section="standings"><i class="bi bi-trophy"></i> Standings</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-section="stats"><i class="bi bi-bar-chart-line"></i> Player Stats</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-section="handicap"><i class="bi bi-graph-up-arrow"></i> Handicap</a></li>
@@ -87,6 +88,11 @@
     <!-- Match Entry -->
     <div id="section-entry" class="section">
       <match-entry-page></match-entry-page>
+    </div>
+
+    <!-- Weekly Summary -->
+    <div id="section-weekly-summary" class="section">
+      <weekly-summary-page></weekly-summary-page>
     </div>
 
     <!-- Standings -->
@@ -233,5 +239,6 @@
     <script type="module" src="/domains/dashboard/dashboard-domain.js"></script>
     <script type="module" src="/domains/leagues/leagues-domain.js"></script>
     <script type="module" src="/domains/users/users-domain.js"></script>
+    <script type="module" src="/domains/weekly-summary/weekly-summary-domain.js"></script>
 </body>
 </html>

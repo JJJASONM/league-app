@@ -489,6 +489,10 @@ type AdvanceResult struct {
 // RecapMatchRow is one match entry in a week-end recap.
 // HasResult is true when completed=1 (scores were entered). Set and game counts
 // are 0 when HasResult is false. TeamIDs are nil for unassigned matches.
+// ApprovedAt, ProcessedAt, and WeekClosed (Weekly Summary Phase 1) mirror the
+// same fields already on models.Match, letting a recap consumer show the
+// full unscored/scored/approved/processed/closed status ladder for each
+// match without a second request against GET /api/matches.
 type RecapMatchRow struct {
 	MatchID      int64   `json:"match_id"`
 	HomeTeamID   *int64  `json:"home_team_id"`
@@ -501,6 +505,9 @@ type RecapMatchRow struct {
 	AwaySetsWon  int     `json:"away_sets_won"`
 	HomeGamesWon int     `json:"home_games_won"`
 	AwayGamesWon int     `json:"away_games_won"`
+	ApprovedAt   *string `json:"approved_at,omitempty"`
+	ProcessedAt  *string `json:"processed_at,omitempty"`
+	WeekClosed   bool    `json:"week_closed"`
 }
 
 // RecapPlayerStat is one player's stat totals for a week in a week-end recap.

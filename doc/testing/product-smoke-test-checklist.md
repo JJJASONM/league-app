@@ -1265,6 +1265,61 @@ with every prior staging pass's bootstrap-user handling.
   populated and Player Overview was unaffected, so this is tracked below as
   a low-severity follow-up rather than a blocker for this verification.
 
+### 19. Weekly Summary Screen (Phase 1, 2026-08-27)
+
+- Browser: "Weekly Summary" nav entry, season/week selector.
+  - [ ] **NOT VERIFIED (no browser)**: selecting a season and week should
+        show every match in that week with a status badge (Unscored /
+        Scored / Approved / Processed / Closed), an "Open" button per row
+        that jumps to Match Entry with that match pre-selected, a
+        next-week readiness card, and a handicap section (recorded
+        changes for the week plus the season-wide recommendations
+        preview). **API-verified**: `GET
+        /api/seasons/{id}/weeks/{week}/recap` now returns
+        `approved_at`/`processed_at`/`week_closed` per match against a
+        real generated schedule on a local server build -- confirmed a
+        freshly-generated match shows all three fields empty/false, and
+        after approving then processing that match via curl, the same
+        recap call showed `approved_at` and `processed_at` both set and
+        `week_closed` still false (matches "Processed" in the status
+        ladder, not yet "Closed").
+  - [ ] **NOT VERIFIED (no browser)**: when a week has unscored matches,
+        an incomplete-week-safe note should appear explaining the
+        handicap/stats sections reflect data entered so far, not final
+        results. **API-verified**: `missing_count` in the recap response
+        correctly counted the two remaining unscored matches in the
+        local-server test week.
+  - [ ] **NOT VERIFIED (no browser)**: clicking "Process Approved
+        Scores" should process every approved-but-unprocessed match in
+        the displayed week (looping the existing per-match process
+        endpoint) and show a summary toast, then refresh the match
+        status rows. **Confirmed at the code level and via the
+        underlying endpoint**: `POST /api/matches/{id}/process` on an
+        approved match correctly set `processed_at` and left
+        `week_closed` false; the loop logic itself
+        (`#processApproved()` in `weekly-summary-page-component.js`) is
+        new frontend orchestration, not a new backend capability, so no
+        additional API-level test beyond confirming the underlying
+        single-match endpoint behaves as expected.
+  - [ ] **NOT VERIFIED (no browser)**: "Open in Schedule" should
+        navigate to the Schedule page with the selected season
+        preselected. **Confirmed at the code level**: dispatches the
+        same `season-nav-request` custom event the Seasons domain
+        already uses for this exact purpose, handled by the existing
+        shell listener in `web/app.js` -- no new navigation logic.
+- New focused Go tests (all passing,
+  `backend/storage/sqlite/week_store_test.go`):
+  `TestWeekStore_GetWeekRecapData_ApprovalFieldsDefaultUnset` and
+  `TestWeekStore_GetWeekRecapData_ApprovalFieldsReflectMatchState`
+  (mixed week: one approved-only match, one approved+processed+closed
+  match, confirming both are scanned independently and correctly).
+- Known, deliberately out-of-scope note: substitute lineup rows
+  (`is_sub`/`sub_for_id`) cannot be created through the API today (the
+  write path hardcodes `is_sub=0`), so this screen -- like the rest of
+  the app -- has nothing sub-specific to display; this is a real,
+  pre-existing gap discovered during Weekly Summary discovery, not a
+  regression from this phase.
+
 ---
 
 ## Known Gaps Summary
@@ -1285,6 +1340,7 @@ with every prior staging pass's bootstrap-user handling.
 | 12 | `GetPlayerStats`'s season-scoped query never scans/computes `WinPct` -- every `GET /api/player-stats` and `GET /api/players/{id}/overview` response has `win_pct:0` regardless of real results; Standings' Win% column renders this directly -- discovered 2026-08-27 during Player Overview Phase 1 discovery | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | Open -- explicitly deferred as a separate follow-up, not bundled into Player Overview Phase 1 |
 | 13 | The league-scoped variant of `GetPlayerStats` still drops season-roster-only players (`INNER JOIN teams t ON t.id = p.team_id` on the legacy column) -- only the season-scoped branch was fixed by `player-stats-roster-join-fix` (row #7) -- discovered 2026-08-27 during Player Overview Phase 1 discovery | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` (league-scoped branch) | Open -- explicitly deferred as a separate follow-up, not bundled into Player Overview Phase 1 |
 | 14 | Initial dashboard bootstrap logs `document.querySelector(...)?.refresh is not a function` in the browser console, likely because `app.js` can call `dashboard-page.refresh()` before the module-defined custom element has upgraded; dashboard content still populated during the 2026-08-27 staging pass | Low | `web/app.js` bootstrap/module load ordering | Open |
+| 15 | `lineup_plans.is_sub`/`sub_for_id` are readable but cannot be set through any write path (`SaveTeamLineup` hardcodes `is_sub=0`, never sets `sub_for_id`) -- no substitute workflow is actually creatable today despite the schema/model supporting it -- discovered 2026-08-27 during Weekly Summary Phase 1 discovery | Low | `backend/storage/sqlite/lineup_store.go` `SaveTeamLineup` | Open -- explicitly deferred, not bundled into Weekly Summary Phase 1 |
 
 ## Recommended Next Branches
 

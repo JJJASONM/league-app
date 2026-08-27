@@ -60,6 +60,9 @@ function loadSection(sec) {
         appContext.consumeOverviewPreselect()
       );
       break;
+    case 'weekly-summary':
+      document.querySelector('weekly-summary-page')?.refresh(state.allSeasons, state.activeSeason);
+      break;
   }
 }
 

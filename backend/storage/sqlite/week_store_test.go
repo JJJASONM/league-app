@@ -9,6 +9,7 @@ import (
 	"league_app/backend/domains/matches"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
+	"league_app/models"
 )
 
 // initWeekDB initialises a fresh in-memory-like temp DB for week store tests.
@@ -659,6 +660,100 @@ func TestWeekStore_GetWeekRecapData_ClosedStatusAfterClose(t *testing.T) {
 	}
 	if data.ClosedAt == nil {
 		t.Error("want non-nil ClosedAt after close")
+	}
+}
+
+// TestWeekStore_GetWeekRecapData_ApprovalFieldsDefaultUnset verifies a
+// freshly-seeded, unscored match reports no approved_at/processed_at and
+// week_closed=false (Weekly Summary Phase 1).
+func TestWeekStore_GetWeekRecapData_ApprovalFieldsDefaultUnset(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Matches) != 1 {
+		t.Fatalf("want 1 match, got %d", len(data.Matches))
+	}
+	row := data.Matches[0]
+	if row.ApprovedAt != nil {
+		t.Errorf("want ApprovedAt=nil, got %v", *row.ApprovedAt)
+	}
+	if row.ProcessedAt != nil {
+		t.Errorf("want ProcessedAt=nil, got %v", *row.ProcessedAt)
+	}
+	if row.WeekClosed {
+		t.Error("want WeekClosed=false")
+	}
+}
+
+// TestWeekStore_GetWeekRecapData_ApprovalFieldsReflectMatchState verifies
+// approved_at/processed_at/week_closed are scanned correctly once set,
+// covering a week with matches in different states side by side: one
+// approved-only, one approved-and-processed, one untouched.
+func TestWeekStore_GetWeekRecapData_ApprovalFieldsReflectMatchState(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	d := db.DB
+
+	// matchID: approved but not processed.
+	if _, err := d.Exec(`UPDATE matches SET completed=1, approved_at=CURRENT_TIMESTAMP, approved_by_user_id=1 WHERE id=?`, matchID); err != nil {
+		t.Fatalf("approve match: %v", err)
+	}
+
+	// Second match in the same week: approved, processed, and week_closed.
+	rB, err := d.Exec(`INSERT INTO teams (league_id, name)
+		SELECT league_id, 'Team C' FROM seasons WHERE id=?`, seasonID)
+	if err != nil {
+		t.Fatalf("seed team C: %v", err)
+	}
+	teamC, _ := rB.LastInsertId()
+	rM, err := d.Exec(`
+		INSERT INTO matches (season_id, home_team_id, away_team_id, week_number, completed,
+		                     approved_at, approved_by_user_id, processed_at, processed_by_user_id, week_closed)
+		VALUES (?,?,?,1,1,CURRENT_TIMESTAMP,1,CURRENT_TIMESTAMP,1,1)`, seasonID, teamC, teamC)
+	if err != nil {
+		t.Fatalf("seed processed+closed match: %v", err)
+	}
+	processedMatchID, _ := rM.LastInsertId()
+
+	store := sqlite.NewWeekStore(db.DB)
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Matches) != 2 {
+		t.Fatalf("want 2 matches, got %d", len(data.Matches))
+	}
+
+	byID := map[int64]models.RecapMatchRow{}
+	for _, m := range data.Matches {
+		byID[m.MatchID] = m
+	}
+
+	approvedOnly := byID[matchID]
+	if approvedOnly.ApprovedAt == nil {
+		t.Error("want approved-only match to have ApprovedAt set")
+	}
+	if approvedOnly.ProcessedAt != nil {
+		t.Error("want approved-only match to have ProcessedAt=nil")
+	}
+	if approvedOnly.WeekClosed {
+		t.Error("want approved-only match to have WeekClosed=false")
+	}
+
+	processed := byID[processedMatchID]
+	if processed.ApprovedAt == nil {
+		t.Error("want processed match to have ApprovedAt set")
+	}
+	if processed.ProcessedAt == nil {
+		t.Error("want processed match to have ProcessedAt set")
+	}
+	if !processed.WeekClosed {
+		t.Error("want processed match to have WeekClosed=true")
 	}
 }
 

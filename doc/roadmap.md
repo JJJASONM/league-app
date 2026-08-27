@@ -136,6 +136,20 @@ These items should stay small enough to review and ship independently.
     history, and multi-season views are all explicitly deferred. See
     `doc/domains/players/README.md`'s "Player Overview Phase 1
     Implementation" section for full detail.
+  - **Weekly Summary screen Phase 1 complete 2026-08-27** -- see
+    Completed / Largely Completed below. Built entirely on the existing
+    Week Recap endpoint (no new aggregate endpoint, no new auth) -- added
+    three API-shape-only fields (`approved_at`, `processed_at`,
+    `week_closed`) to `RecapMatchRow` so a new `<weekly-summary-page>`
+    screen can show the full unscored/scored/approved/processed/closed
+    status ladder per match, a "Process Approved Scores" action (client-
+    side loop over the existing per-match process endpoint, no new bulk
+    endpoint), handicap changes/recommendations, and next-week
+    readiness. Close Week stays separate, linked to only via an "Open in
+    Schedule" button. Substitute workflows, a real bulk-process backend
+    endpoint, and payment/financial schema remain explicitly deferred.
+    See `doc/domains/matches/README.md`'s "Weekly Summary Phase 1"
+    section for full detail.
 
 ## Next
 
@@ -816,6 +830,47 @@ follow-up.
   screen and the "View Overview" button remain **NOT VERIFIED (no
   browser)**. See `doc/domains/players/README.md`'s "Player Overview
   Phase 1 Implementation" section for full detail.
+- Weekly Summary screen Phase 1 (2026-08-27). Discovery found that Week
+  Recap (already shipped) already provided nearly everything this
+  screen needed -- per-week match/player/handicap-change data, and the
+  same next-week-readiness block used by Close Week's own preview --
+  except per-match approval/processing status, and that it was embedded
+  as an accordion panel inside the Schedule page rather than a
+  standalone screen. This phase: added `ApprovedAt`, `ProcessedAt`, and
+  `WeekClosed` to `models.RecapMatchRow` (API-shape-only, mirroring the
+  same three fields already on `models.Match`) and updated
+  `GetWeekRecapData`'s query/scan accordingly -- no new endpoint, no new
+  auth, Week Recap was already an unprotected read. New
+  `web/domains/weekly-summary/` frontend domain with its own nav entry:
+  a season+week selector, a per-match status ladder (Unscored / Scored
+  / Approved / Processed / Closed), an incomplete-week-safe note (shown
+  whenever matches are still unscored, making clear the handicap/stats
+  sections reflect partial data), a "Process Approved Scores" button
+  that loops the existing per-match `POST /api/matches/{id}/process`
+  endpoint client-side (no new bulk-processing backend endpoint, per PM
+  decision), a next-week readiness card reusing the existing
+  `next_week`/`next_week_number` fields verbatim, and a handicap section
+  showing both the week's recorded changes and the season-wide
+  recommendations preview already embedded in Week Recap. Close Week
+  itself is untouched -- this screen only shows an Open/Closed badge and
+  an "Open in Schedule" button reusing the existing `season-nav-request`
+  event. Explicitly deferred, per PM decision: substitute
+  creation/lineup workflows (`lineup_plans.is_sub`/`sub_for_id` remain
+  read-only in the write path, a real, unrelated gap found during
+  discovery), a real atomic bulk-process backend endpoint, and any
+  payment/financial schema. Verified with `go test ./... -count=1` and
+  `go build ./...` (two new focused store tests covering a fresh
+  unscored match's default fields and a mixed-state week with an
+  approved-only match alongside an approved+processed+closed one),
+  `node --check` on all four changed/new JS files, and a full manual
+  walkthrough against a local server build with a real generated
+  schedule: approved and processed a real match via curl, confirming
+  the recap's per-match fields, `missing_count`, next-week readiness,
+  and the season-wide handicap message all update and render exactly as
+  the frontend expects at each step. Actual browser rendering of the
+  new screen remains **NOT VERIFIED (no browser)**. See
+  `doc/domains/matches/README.md`'s "Weekly Summary Phase 1" section
+  for full detail.
 
 ## Open Questions To Resolve
 

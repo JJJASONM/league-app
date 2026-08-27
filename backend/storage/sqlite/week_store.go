@@ -502,7 +502,10 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 		    COALESCE(SUM(CASE WHEN mr.team_id = m.home_team_id THEN mr.sets_won ELSE 0 END), 0) AS home_sets_won,
 		    COALESCE(SUM(CASE WHEN mr.team_id = m.away_team_id THEN mr.sets_won ELSE 0 END), 0) AS away_sets_won,
 		    COALESCE(SUM(CASE WHEN mr.team_id = m.home_team_id THEN mr.games_won ELSE 0 END), 0) AS home_games_won,
-		    COALESCE(SUM(CASE WHEN mr.team_id = m.away_team_id THEN mr.games_won ELSE 0 END), 0) AS away_games_won
+		    COALESCE(SUM(CASE WHEN mr.team_id = m.away_team_id THEN mr.games_won ELSE 0 END), 0) AS away_games_won,
+		    m.approved_at,
+		    m.processed_at,
+		    m.week_closed
 		FROM matches m
 		LEFT JOIN season_teams hst ON hst.season_id = m.season_id AND hst.team_id = m.home_team_id
 		LEFT JOIN teams ht ON ht.id = m.home_team_id
@@ -528,11 +531,14 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 			matchDate                              sql.NullString
 			completed                              int
 			homeSets, awaySets, homeGames, awayGames int
+			approvedAt, processedAt                sql.NullString
+			weekClosed                              int
 		)
 		if err := rows.Scan(
 			&mid, &homeID, &homeName, &awayID, &awayName,
 			&matchDate, &completed,
 			&homeSets, &awaySets, &homeGames, &awayGames,
+			&approvedAt, &processedAt, &weekClosed,
 		); err != nil {
 			return matches.WeekRecapData{}, fmt.Errorf("get week recap data: scan: %w", err)
 		}
@@ -545,6 +551,7 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 			AwaySetsWon:  awaySets,
 			HomeGamesWon: homeGames,
 			AwayGamesWon: awayGames,
+			WeekClosed:   weekClosed == 1,
 		}
 		if homeID.Valid {
 			v := homeID.Int64
@@ -557,6 +564,12 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 		if matchDate.Valid && matchDate.String != "" {
 			dateStr := matchDate.String
 			row.MatchDate = &dateStr
+		}
+		if approvedAt.Valid && approvedAt.String != "" {
+			row.ApprovedAt = &approvedAt.String
+		}
+		if processedAt.Valid && processedAt.String != "" {
+			row.ProcessedAt = &processedAt.String
 		}
 		matchRows = append(matchRows, row)
 	}
