@@ -1116,52 +1116,54 @@ nothing to verify in the browser for this feature.
 ### 17. Users Admin Screen (Phase 1, 2026-08-26)
 
 - Browser: sidebar "Admin Key" button/modal, and the new "Users" nav entry.
-  - [ ] **NOT VERIFIED (no browser)**: pasting a valid personal API key
-        into the Admin Key modal should resolve and show "Signed in as
-        `<username>` (`<role>`)"; pasting an invalid/expired key should
-        show "did not resolve"; leaving no key set should show the
-        original "no key set" message. **API-verified**: `GET
-        /api/users/me` returns the resolved user for a valid personal
-        key, 403 for the static admin token (which has no user
-        identity to resolve), and 401 with no `Authorization` header at
-        all -- the exact three states the modal's status line is meant
-        to distinguish.
-  - [ ] **NOT VERIFIED (no browser)**: the "Users" nav entry should be
-        hidden unless the resolved identity is `system_admin` or the
-        legacy `admin` alias, and visible (enabled) for those roles.
-        **API-verified indirectly**: confirmed `GET /api/users` and
-        `POST /api/users` themselves correctly return 200/201 for
-        `system_admin`/`admin` personal keys and 403 for `league_admin`
-        -- the same role check the nav-visibility logic reads from the
-        same `/me` response.
-  - [ ] **NOT VERIFIED (no browser)**: the Users screen should list
-        existing users (username, role, active, created) and let a
-        `system_admin` create a new user with a role choice restricted
-        to System Admin / League Admin, showing the one-time API key
-        after creation. **API-verified** via a full local-server curl
-        walkthrough: bootstrapped a `system_admin` via the static
-        `LEAGUE_ADMIN_TOKEN`, then used that user's own personal key
-        (not the static token) to create a second (`league_admin`)
-        user -- `POST /api/users` returned 201 with a 64-char one-time
-        key; `GET /api/users` (same personal key) listed both users;
-        `POST /api/users` with `role:"admin"` returned 400 (not a
-        creatable role); the `league_admin` user's own key returned 403
-        from both `POST` and `GET /api/users` but 200 from `GET
-        /api/users/me` (it can still read its own identity, just not
-        manage users).
-  - [ ] **NOT VERIFIED (no browser)**: paste an invalid or unrecognized
-        key into the Admin Key modal and click Save. Expected: the modal
-        stays open (does not close), the status line switches to "did
-        not resolve" text, a danger/warning toast appears explaining the
-        key was not recognized, and the Users nav entry remains hidden.
-        This replaces the earlier behavior where an invalid key still
-        closed the modal with a green "Admin key set" toast, which hid
-        the failure until the next admin action 401/403'd. Confirmed at
-        the code level: `saveAdminKey()` now only hides the modal and
-        shows the success toast when `resolveCurrentIdentity()` returns
-        a non-null identity; otherwise it shows a danger toast and
-        leaves the modal open, with the "did not resolve" status text
-        already set by `updateIdentityUI()`.
+  - [x] Pasting a valid personal API key into the Admin Key modal
+        resolves and shows "Signed in as `<username>` (`<role>`)";
+        pasting an invalid/expired key shows "did not resolve."
+        **Browser-verified by PM on staging (2026-08-26)** -- see the
+        staging verification note below for full evidence. Also
+        **API-verified**: `GET /api/users/me` returns the resolved user
+        for a valid personal key, 403 for the static admin token (which
+        has no user identity to resolve), and 401 with no
+        `Authorization` header at all.
+  - [x] The "Users" nav entry is hidden unless the resolved identity is
+        `system_admin` or the legacy `admin` alias, and visible for
+        those roles. **Browser-verified by PM on staging (2026-08-26)**:
+        nav stayed hidden with an unrecognized key, became visible after
+        a valid `system_admin` key resolved. Also **API-verified
+        indirectly**: `GET /api/users` and `POST /api/users` correctly
+        return 200/201 for `system_admin`/`admin` personal keys and 403
+        for `league_admin` -- the same role check the nav-visibility
+        logic reads from the same `/me` response.
+  - [x] The Users screen lists existing users (username, role, active,
+        created) and lets a `system_admin` create a new user with a
+        role choice restricted to System Admin / League Admin, showing
+        the one-time API key after creation. **Browser-verified by PM
+        on staging (2026-08-26)** -- see the staging verification note
+        below for full evidence. Also **API-verified** via a full
+        local-server curl walkthrough: bootstrapped a `system_admin`
+        via the static `LEAGUE_ADMIN_TOKEN`, then used that user's own
+        personal key (not the static token) to create a second
+        (`league_admin`) user -- `POST /api/users` returned 201 with a
+        64-char one-time key; `GET /api/users` (same personal key)
+        listed both users; `POST /api/users` with `role:"admin"`
+        returned 400 (not a creatable role); the `league_admin` user's
+        own key returned 403 from both `POST` and `GET /api/users` but
+        200 from `GET /api/users/me` (it can still read its own
+        identity, just not manage users).
+  - [x] Paste an invalid or unrecognized key into the Admin Key modal
+        and click Save. Expected: the modal stays open (does not
+        close), the status line switches to "did not resolve" text, and
+        the Users nav entry remains hidden. **Browser-verified by PM on
+        staging (2026-08-26)** -- see the staging verification note
+        below for full evidence. This replaces the earlier behavior
+        where an invalid key still closed the modal with a green "Admin
+        key set" toast, which hid the failure until the next admin
+        action 401/403'd. Confirmed at the code level: `saveAdminKey()`
+        now only hides the modal and shows the success toast when
+        `resolveCurrentIdentity()` returns a non-null identity;
+        otherwise it shows a danger toast and leaves the modal open,
+        with the "did not resolve" status text already set by
+        `updateIdentityUI()`.
 - New focused Go tests (all passing): role validation on create (missing
   role -> 400, legacy `admin` role -> 400), `system_admin` personal key
   authorizing create/list (previously only the static token worked --
@@ -1173,6 +1175,34 @@ nothing to verify in the browser for this feature.
   /api/users` when `AdminToken` is completely unconfigured, plus a test
   proving an empty bearer token cannot accidentally match an
   unconfigured (empty-string) `AdminToken`.
+
+**Users Admin Screen Phase 1 -- browser-verified by PM on staging
+2026-08-26.** Staging was deployed from commit `d28cdff`. PM performed
+this pass directly in a browser against real staging, which the
+developer's tool session cannot do -- see the notes on the four checklist
+items above for what specifically was confirmed. Summary of the pass:
+
+  - A disposable `system_admin` user was created through `POST
+    /api/users` using the static bootstrap token.
+  - `GET /api/users/me` resolved that user's personal key as
+    `system_admin`.
+  - Invalid-key flow: pasting an unrecognized key into the Admin Key
+    modal kept the modal open, showed the "did not resolve" status
+    text, and left the Users nav hidden.
+  - Valid `system_admin` key flow: the modal closed, the Admin Key
+    button showed its "set" state, and the Users nav became visible.
+  - Users screen: existing users listed, including the disposable
+    `system_admin` created above; created a new `league_admin` user
+    through the screen, which appeared in the list with role displayed
+    as `league_admin`; the one-time API key alert appeared after
+    creation.
+  - No secrets or actual API keys are recorded here or elsewhere in this
+    checklist entry.
+
+Disposable users created on staging during this pass (the `system_admin`
+bootstrap user and the `league_admin` user created through the browser)
+remain in place afterward -- there is no delete-user endpoint, consistent
+with every prior staging pass's bootstrap-user handling.
 
 ---
 
