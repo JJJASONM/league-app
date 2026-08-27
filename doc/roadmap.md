@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-26
+**Last reviewed:** 2026-08-27
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -122,6 +122,20 @@ These items should stay small enough to review and ship independently.
     was needed for a closed-week button-gating correction.
   - Real captain/player-side approval (Player Portal) remains deferred --
     every action through this UI is still admin-attested.
+
+- Whole-app screens: viewing and testing the product coherently across
+  roles and workflows, rather than continuing low-severity smoke-test
+  polish. Users Admin Screen Phase 1 (above) was the first of these.
+  - **Player Overview screen Phase 1 complete 2026-08-27** -- see
+    Completed / Largely Completed below. New `GET
+    /api/players/{id}/overview` (unprotected read, handler-level
+    composition, no new players-domain service) and a new admin-viewable
+    `<player-overview-page>` screen: team/season context, schedule,
+    season stats, current handicap, and an explicit money-not-tracked
+    placeholder. Real player login/portal, payments/payouts, handicap
+    history, and multi-season views are all explicitly deferred. See
+    `doc/domains/players/README.md`'s "Player Overview Phase 1
+    Implementation" section for full detail.
 
 ## Next
 
@@ -759,6 +773,49 @@ follow-up.
   of the new Users screen and Admin Key modal identity line remain **NOT
   VERIFIED (no browser)**. See `doc/domains/users/README.md`'s "Users
   Admin Screen Phase 1 Implementation" section for full detail.
+- Player Overview screen Phase 1 (2026-08-27). Discovery confirmed
+  money/dues tracking does not exist anywhere in the codebase (schema,
+  code, or docs), and that no endpoint could answer "this player's team
+  for a season," "this player's matches," or "this player's stats"
+  directly -- `GET /api/matches` has no team_id/player_id filter at all,
+  and the season-roster-to-team lookup existed only internally. This
+  phase: added `GET /api/players/{id}/overview?season_id={id}`
+  (unprotected read; `season_id` optional, defaults to the player's
+  league's active season) assembled by handler-level composition per PM
+  decision -- no new players-domain service layer. Team resolution
+  prefers `season_rosters` via a new one-line
+  `SeasonManager.GetPlayerRosterTeam` passthrough (exposing an existing
+  store lookup previously used only internally by roster-add
+  validation), falling back to the player's direct `team_id`; when
+  neither resolves, `team` is `null` and schedule/stats are empty rather
+  than erroring. Schedule is derived by fetching the season's full match
+  list and filtering on the resolved team_id (accepted at current data
+  volumes, no new filter added to `ListMatches`). Stats reuse the
+  existing season-scoped `GetPlayerStats` query, matched by player_id.
+  Money is an explicit `{"tracked": false, "message": "..."}` placeholder
+  -- no schema invented. New `<player-overview-page>` frontend screen
+  (player-select dropdown, team/season header, schedule table, stats,
+  current handicap, money placeholder) plus a "View Overview" button on
+  each Players list row that deep-links there via a new
+  `openPlayerOverview()` shell bridge, mirroring the existing
+  `openMatchEntry`/`openHandicapForWeek` pattern. Explicitly deferred,
+  per PM decision: real player login/self-service portal, payment
+  entry/history, payout calculations, communication/notifications,
+  mobile-specific layout, handicap history/trend, and multi-season
+  views. Two incidental gaps found during discovery were deliberately
+  not bundled into this phase: `GetPlayerStats`'s `WinPct` field is
+  never computed (always `0.0` in every response, including this one),
+  and the league-scoped variant of that same query still drops
+  season-roster-only players. Verified with `go test ./...` and
+  `go build ./...` (five new focused tests: explicit season_id, omitted
+  season_id defaulting to active season, missing player 404, a
+  not-rostered player falling back to their direct team, and a player
+  with no resolvable team at all), `node --check` on all six changed/new
+  JS files, and a manual end-to-end walkthrough against a local server
+  build with seeded demo data. Actual browser rendering of the new
+  screen and the "View Overview" button remain **NOT VERIFIED (no
+  browser)**. See `doc/domains/players/README.md`'s "Player Overview
+  Phase 1 Implementation" section for full detail.
 
 ## Open Questions To Resolve
 

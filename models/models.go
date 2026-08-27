@@ -219,6 +219,71 @@ type MatchDetail struct {
 	Results []MatchResult `json:"results"`
 }
 
+// PlayerOverview aggregates one player's identity, season/team context,
+// schedule, stats, current handicap, and a money placeholder into one
+// read-only response for the Player Overview screen (Player Overview
+// Phase 1). Assembled by handler-level composition across existing
+// managers -- not a persisted table or a new domain-owned service.
+type PlayerOverview struct {
+	Player   Player                 `json:"player"`
+	Season   PlayerOverviewSeason   `json:"season"`
+	Team     *PlayerOverviewTeam    `json:"team"`
+	Handicap PlayerOverviewHandicap `json:"handicap"`
+	Schedule []PlayerOverviewMatch  `json:"schedule"`
+	Stats    PlayerOverviewStats    `json:"stats"`
+	Money    PlayerOverviewMoney    `json:"money"`
+}
+
+// PlayerOverviewSeason is the minimal season context shown on the overview.
+type PlayerOverviewSeason struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// PlayerOverviewTeam is the minimal team context shown on the overview.
+// Nil when the player has no resolvable team for the season (not on the
+// season roster and no direct players.team_id).
+type PlayerOverviewTeam struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// PlayerOverviewHandicap carries the player's current handicap value.
+// History/trend is out of scope for Phase 1.
+type PlayerOverviewHandicap struct {
+	Current float64 `json:"current"`
+}
+
+// PlayerOverviewMatch is one schedule row: a season match involving the
+// player's resolved team, described from that team's perspective.
+type PlayerOverviewMatch struct {
+	MatchID          int64   `json:"match_id"`
+	WeekNumber       int     `json:"week_number"`
+	MatchDate        *string `json:"match_date"`
+	OpponentTeamName string  `json:"opponent_team_name"`
+	HomeOrAway       string  `json:"home_or_away"` // "home" | "away"
+	Completed        bool    `json:"completed"`
+}
+
+// PlayerOverviewStats is the player's season stat totals. Zero-valued
+// when the player has no match_results rows for the season yet.
+type PlayerOverviewStats struct {
+	SetsWon   int     `json:"sets_won"`
+	SetsLost  int     `json:"sets_lost"`
+	GamesWon  int     `json:"games_won"`
+	GamesLost int     `json:"games_lost"`
+	WinPct    float64 `json:"win_pct"`
+}
+
+// PlayerOverviewMoney is an explicit placeholder -- dues/payment tracking
+// does not exist in this schema. Tracked is always false in Phase 1;
+// the field exists so the frontend can render an honest "not tracked
+// yet" section instead of omitting money entirely or inventing a number.
+type PlayerOverviewMoney struct {
+	Tracked bool   `json:"tracked"`
+	Message string `json:"message"`
+}
+
 // RoundResult stores point-per-game results for one player pairing within a match.
 // Scoring: winner of each game gets 10 pts (7 balls × 1 pt + 8-ball × 3 pt).
 // Loser gets however many balls they pocketed (0–7). All 3 games always played.

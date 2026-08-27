@@ -1204,6 +1204,50 @@ bootstrap user and the `league_admin` user created through the browser)
 remain in place afterward -- there is no delete-user endpoint, consistent
 with every prior staging pass's bootstrap-user handling.
 
+### 18. Player Overview Screen (Phase 1, 2026-08-27)
+
+- Browser: "Player Overview" nav entry, and the new "View Overview"
+  button on each Players list row.
+  - [ ] **NOT VERIFIED (no browser)**: selecting a player in the
+        Player Overview screen's dropdown should show their team/season
+        header, schedule table, season stats, current handicap, and a
+        "Dues and payouts are not tracked yet" money placeholder.
+        **API-verified**: `GET /api/players/{id}/overview?season_id=`
+        returns the full shape for a real seeded player against a local
+        server build, and five focused Go tests cover explicit
+        season_id, omitted season_id (defaults to the active season),
+        a missing player (404), a not-rostered player falling back to
+        their direct team, and a player with no resolvable team at all
+        (team: null, empty schedule, zeroed stats) -- every case
+        confirms `money.tracked=false`.
+  - [ ] **NOT VERIFIED (no browser)**: clicking "View Overview" on a
+        Players list row should navigate to the Player Overview screen
+        with that player pre-selected in the dropdown. **Confirmed at
+        the code level**: the button dispatches a
+        `player-overview-nav-request` custom event that the shell
+        handles via a new `openPlayerOverview(playerId)` bridge
+        function, mirroring the existing `openMatchEntry`/
+        `openHandicapForWeek` deep-link pattern (same `appContext`
+        preselect/consume mechanism, new
+        `overviewPreSelectPlayerId` field).
+  - [ ] **NOT VERIFIED (no browser)**: a player with no resolvable team
+        (no season roster entry and no direct team_id) should show "No
+        team" in the header, an empty schedule table with a friendly
+        "No scheduled matches this season" row, and zeroed stats --
+        not an error page. **API-verified** via the dedicated Go test
+        for this exact case.
+- New focused Go tests (all passing, `handlers/api_player_overview_test.go`):
+  explicit `season_id`, omitted `season_id` -> active season, missing
+  player -> 404, not-rostered-but-has-direct-team -> fallback works,
+  no-team-at-all -> `team: null` and empty schedule/stats, and every
+  case asserting `money.tracked=false` with a non-empty explanatory
+  message.
+- Known, deliberately out-of-scope note: `overview.stats.win_pct` will
+  always read `0` here too, since it inherits the pre-existing
+  `GetPlayerStats` `WinPct`-never-computed gap (see Known Gaps Summary
+  below) -- not a regression introduced by this phase, just inherited
+  from the underlying query this endpoint reuses.
+
 ---
 
 ## Known Gaps Summary
@@ -1221,6 +1265,8 @@ with every prior staging pass's bootstrap-user handling.
 | 9 | No way to cleanly undo a generated schedule (`Generate Schedule` has no matching `DELETE`) short of deleting the whole season/league -- discovered 2026-08-23 | Low | `handlers/api_match_routes.go` (no `DELETE /api/matches/{id}`) | Open |
 | 10 | `POST /api/seasons/{id}/teams` with `name` returns a raw 500 with a leaked SQL message instead of a friendly 409 when a same-named standalone team already exists in the league -- discovered 2026-08-23 | Low | `backend/domains/seasons` `AddTeam` | Open |
 | 11 | `PUT /api/seasons/{id}/rules/{rid}` response body echoes `season_id:0, rule_key:""` instead of the real values, even though the stored row is correct -- discovered 2026-08-23 | Low | `handlers` season-rules update handler | Open |
+| 12 | `GetPlayerStats`'s season-scoped query never scans/computes `WinPct` -- every `GET /api/player-stats` and `GET /api/players/{id}/overview` response has `win_pct:0` regardless of real results; Standings' Win% column renders this directly -- discovered 2026-08-27 during Player Overview Phase 1 discovery | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | Open -- explicitly deferred as a separate follow-up, not bundled into Player Overview Phase 1 |
+| 13 | The league-scoped variant of `GetPlayerStats` still drops season-roster-only players (`INNER JOIN teams t ON t.id = p.team_id` on the legacy column) -- only the season-scoped branch was fixed by `player-stats-roster-join-fix` (row #7) -- discovered 2026-08-27 during Player Overview Phase 1 discovery | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` (league-scoped branch) | Open -- explicitly deferred as a separate follow-up, not bundled into Player Overview Phase 1 |
 
 ## Recommended Next Branches
 

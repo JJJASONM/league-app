@@ -75,6 +75,8 @@ class PlayersPage extends HTMLElement {
       if (editBtn) { this.#editPlayer(parseInt(editBtn.dataset.playerId, 10)); return; }
       const delBtn = e.target.closest('[data-action="delete-player"]');
       if (delBtn)  { this.#deletePlayer(parseInt(delBtn.dataset.playerId, 10)); return; }
+      const viewBtn = e.target.closest('[data-action="view-player-overview"]');
+      if (viewBtn) { this.#viewOverview(parseInt(viewBtn.dataset.playerId, 10)); return; }
     });
   }
 
@@ -181,6 +183,8 @@ class PlayersPage extends HTMLElement {
         <td>${p.team_name ? esc(p.team_name) : `<span class="text-muted">${DASH}</span>`}</td>
         <td class="text-muted small">${esc(String(p.phone || DASH))}</td>
         <td class="text-end">
+          <button class="btn btn-outline-primary btn-sm py-0 me-1"
+            data-action="view-player-overview" data-player-id="${p.id}" title="View Overview"><i class="bi bi-person-lines-fill"></i></button>
           <button class="btn btn-outline-secondary btn-sm py-0 me-1"
             data-action="edit-player" data-player-id="${p.id}"><i class="bi bi-pencil"></i></button>
           <button class="btn btn-outline-danger btn-sm py-0"
@@ -287,6 +291,13 @@ class PlayersPage extends HTMLElement {
     this.dispatchEvent(new CustomEvent('players-data-changed', {
       bubbles: true,
       detail:  { players: this.#allPlayers },
+    }));
+  }
+
+  #viewOverview(playerId) {
+    this.dispatchEvent(new CustomEvent('player-overview-nav-request', {
+      bubbles: true,
+      detail:  { playerId },
     }));
   }
 

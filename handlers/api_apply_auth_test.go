@@ -104,6 +104,9 @@ func (n *noopSeasonMgr) DeleteByeRequest(_ context.Context, _, _ int64) error { 
 func (n *noopSeasonMgr) FindActiveSeasonByLeague(_ context.Context, _ int64) (int64, bool, error) {
 	return 0, false, nil
 }
+func (n *noopSeasonMgr) GetPlayerRosterTeam(_ context.Context, _, _ int64) (int64, bool, error) {
+	return 0, false, nil
+}
 func (n *noopSeasonMgr) RosterEligible(_ context.Context, _ int64, _ int) (bool, string, error) {
 	return true, "", nil
 }

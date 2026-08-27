@@ -53,6 +53,13 @@ function loadSection(sec) {
     case 'stats':     document.querySelector('stats-section')?.refresh(state.allSeasons); break;
     case 'handicap':  document.querySelector('handicaps-page')?.refresh(state.allSeasons, state.activeSeason); break;
     case 'users':     document.querySelector('users-management-page')?.refresh(); break;
+    case 'player-overview':
+      document.querySelector('player-overview-page')?.refresh(
+        state.allPlayers,
+        state.activeSeason,
+        appContext.consumeOverviewPreselect()
+      );
+      break;
   }
 }
 
@@ -108,6 +115,11 @@ function openHandicapForWeek(seasonId, weekNum) {
   document.querySelector('handicaps-page')?.openForWeek(seasonId, weekNum);
 }
 
+function openPlayerOverview(playerId) {
+  appContext.setOverviewPreselect(playerId);
+  navTo('player-overview');
+}
+
 // --- Seasons domain bridge ----------------------------------------------------
 // The seasons domain component fires these events; the shell updates cross-domain
 // state (allSeasons, activeSeason) and responds to navigation requests.
@@ -137,6 +149,10 @@ document.addEventListener('players-data-changed', e => {
   appContext.applyPlayersState(e.detail.players);
   const activeSec = document.querySelector('[data-section].active')?.dataset.section;
   if (activeSec === 'teams') loadTeams();
+});
+
+document.addEventListener('player-overview-nav-request', e => {
+  openPlayerOverview(e.detail.playerId);
 });
 
 document.addEventListener('dashboard-nav-request', e => navTo(e.detail.section));

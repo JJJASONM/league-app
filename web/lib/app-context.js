@@ -20,6 +20,10 @@
       // null when no key is set or it did not resolve. Drives the Users
       // nav entry's visibility and the Admin Key modal's identity display.
       currentIdentity: null,
+      // Player Overview Phase 1: the player_id to preselect the next time
+      // the Player Overview section loads, set by the "View Overview"
+      // button on the Players list. Mirrors entryPreSelectMatchId.
+      overviewPreSelectPlayerId: null,
     };
 
     function updateActiveSeasonLabel() {
@@ -115,6 +119,16 @@
       return detail;
     }
 
+    function setOverviewPreselect(playerId) {
+      state.overviewPreSelectPlayerId = playerId;
+    }
+
+    function consumeOverviewPreselect() {
+      const playerId = state.overviewPreSelectPlayerId;
+      state.overviewPreSelectPlayerId = null;
+      return playerId;
+    }
+
     function applySeasonState(detail) {
       state.allSeasons = detail.allSeasons;
       state.activeSeason = detail.activeSeason;
@@ -156,11 +170,13 @@
       applyPlayersState: applyPlayersState,
       applySeasonState: applySeasonState,
       consumeEntryPreselect: consumeEntryPreselect,
+      consumeOverviewPreselect: consumeOverviewPreselect,
       getState: getState,
       init: init,
       loadLeagueData: loadLeagueData,
       setCurrentIdentity: setCurrentIdentity,
       setEntryPreselect: setEntryPreselect,
+      setOverviewPreselect: setOverviewPreselect,
       switchLeague: switchLeague,
     };
   }

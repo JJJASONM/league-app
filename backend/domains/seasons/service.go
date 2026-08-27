@@ -380,6 +380,15 @@ func (s *SeasonService) RosterEligible(ctx context.Context, matchID int64, minPl
 	return s.store.RosterEligible(ctx, matchID, minPlayers)
 }
 
+// GetPlayerRosterTeam returns the team_id the player is currently rostered
+// on for the given season, or found=false when they have no season_rosters
+// entry for it (Player Overview Phase 1: exposes an existing store lookup,
+// previously used only internally by AddRosterPlayer's validation, as a
+// public read for cross-domain composition).
+func (s *SeasonService) GetPlayerRosterTeam(ctx context.Context, seasonID, playerID int64) (int64, bool, error) {
+	return s.store.GetPlayerRosterTeam(ctx, seasonID, playerID)
+}
+
 // getMeta fetches the season meta and converts sql.ErrNoRows to ErrNotFound.
 func (s *SeasonService) getMeta(ctx context.Context, seasonID int64) (SeasonMeta, error) {
 	meta, err := s.store.GetMeta(ctx, seasonID)

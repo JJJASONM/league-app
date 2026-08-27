@@ -190,6 +190,10 @@ type SeasonManager interface {
 	// RosterEligible returns (true, "") when both teams in a match have at least
 	// minPlayers season-roster players, or when the season is not managed.
 	RosterEligible(ctx context.Context, matchID int64, minPlayers int) (bool, string, error)
+	// GetPlayerRosterTeam returns the team_id the player is currently
+	// rostered on for the given season, or found=false when they have no
+	// season_rosters entry for it.
+	GetPlayerRosterTeam(ctx context.Context, seasonID, playerID int64) (int64, bool, error)
 	// ClosePreview returns the read-only close validation state for the season.
 	ClosePreview(ctx context.Context, seasonID int64, weeks []models.WeekSummary, standings []models.Standing) (seasons.SeasonClosePreview, error)
 	// CloseSeason validates and commits the season close.

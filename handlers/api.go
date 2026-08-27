@@ -82,6 +82,14 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	seasonMgr := deps.SeasonMgr
 	registerSeasonSetupRoutes(mux, seasonMgr, deps.RuleMgr, deps.ApplyAuth)
 
+	// Player Overview route registration lives in
+	// api_player_overview_routes.go. Handler-level composition across
+	// PlayerMgr, SeasonMgr, TeamMgr, MatchMgr, and RoundMgr -- requires the
+	// latter two, which are optional elsewhere in Register.
+	if deps.MatchMgr != nil && deps.RoundMgr != nil {
+		registerPlayerOverviewRoute(mux, deps.PlayerMgr, seasonMgr, deps.TeamMgr, deps.MatchMgr, deps.RoundMgr)
+	}
+
 	// Match read and assignment route registration lives in api_match_routes.go.
 	// Scoped to ?season_id= (season implies league).
 	if deps.MatchMgr != nil {
