@@ -1208,8 +1208,8 @@ with every prior staging pass's bootstrap-user handling.
 
 - Browser: "Player Overview" nav entry, and the new "View Overview"
   button on each Players list row.
-  - [ ] **NOT VERIFIED (no browser)**: selecting a player in the
-        Player Overview screen's dropdown should show their team/season
+  - [x] **Browser-verified on staging (2026-08-27)**: selecting a
+        player in the Player Overview screen's dropdown shows their team/season
         header, schedule table, season stats, current handicap, and a
         "Dues and payouts are not tracked yet" money placeholder.
         **API-verified**: `GET /api/players/{id}/overview?season_id=`
@@ -1220,7 +1220,7 @@ with every prior staging pass's bootstrap-user handling.
         their direct team, and a player with no resolvable team at all
         (team: null, empty schedule, zeroed stats) -- every case
         confirms `money.tracked=false`.
-  - [ ] **NOT VERIFIED (no browser)**: clicking "View Overview" on a
+  - [x] **Browser-verified on staging (2026-08-27)**: clicking "View Overview" on a
         Players list row should navigate to the Player Overview screen
         with that player pre-selected in the dropdown. **Confirmed at
         the code level**: the button dispatches a
@@ -1230,7 +1230,7 @@ with every prior staging pass's bootstrap-user handling.
         `openHandicapForWeek` deep-link pattern (same `appContext`
         preselect/consume mechanism, new
         `overviewPreSelectPlayerId` field).
-  - [ ] **NOT VERIFIED (no browser)**: a player with no resolvable team
+  - [ ] **API-verified, browser edge case still not fixture-backed**: a player with no resolvable team
         (no season roster entry and no direct team_id) should show "No
         team" in the header, an empty schedule table with a friendly
         "No scheduled matches this season" row, and zeroed stats --
@@ -1247,6 +1247,23 @@ with every prior staging pass's bootstrap-user handling.
   `GetPlayerStats` `WinPct`-never-computed gap (see Known Gaps Summary
   below) -- not a regression introduced by this phase, just inherited
   from the underlying query this endpoint reuses.
+- Staging verification (2026-08-27, `http://league-staging.local`,
+  deployed from `dc2940a`): opened the app in the in-app browser, confirmed
+  the Player Overview nav entry is visible without admin auth, opened the
+  screen directly, confirmed a 12-player dropdown on the Fixture Scoresheet
+  data, and verified the selected player's header, team/season context,
+  schedule table, stats card, current handicap card, and money placeholder
+  render together. Then opened the Players list, confirmed every row has a
+  View Overview button, clicked the first row's button, and confirmed the
+  app navigated to Player Overview with that player pre-selected and the
+  matching overview rendered. Changed the dropdown to another player and
+  confirmed the overview reloaded without an error. No staging data was
+  changed by this pass.
+- Non-blocking observation from the same browser pass: the console still logs
+  `document.querySelector(...)?.refresh is not a function` from the initial
+  dashboard bootstrap path (`web/app.js:93`). The dashboard content still
+  populated and Player Overview was unaffected, so this is tracked below as
+  a low-severity follow-up rather than a blocker for this verification.
 
 ---
 
@@ -1267,6 +1284,7 @@ with every prior staging pass's bootstrap-user handling.
 | 11 | `PUT /api/seasons/{id}/rules/{rid}` response body echoes `season_id:0, rule_key:""` instead of the real values, even though the stored row is correct -- discovered 2026-08-23 | Low | `handlers` season-rules update handler | Open |
 | 12 | `GetPlayerStats`'s season-scoped query never scans/computes `WinPct` -- every `GET /api/player-stats` and `GET /api/players/{id}/overview` response has `win_pct:0` regardless of real results; Standings' Win% column renders this directly -- discovered 2026-08-27 during Player Overview Phase 1 discovery | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | Open -- explicitly deferred as a separate follow-up, not bundled into Player Overview Phase 1 |
 | 13 | The league-scoped variant of `GetPlayerStats` still drops season-roster-only players (`INNER JOIN teams t ON t.id = p.team_id` on the legacy column) -- only the season-scoped branch was fixed by `player-stats-roster-join-fix` (row #7) -- discovered 2026-08-27 during Player Overview Phase 1 discovery | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` (league-scoped branch) | Open -- explicitly deferred as a separate follow-up, not bundled into Player Overview Phase 1 |
+| 14 | Initial dashboard bootstrap logs `document.querySelector(...)?.refresh is not a function` in the browser console, likely because `app.js` can call `dashboard-page.refresh()` before the module-defined custom element has upgraded; dashboard content still populated during the 2026-08-27 staging pass | Low | `web/app.js` bootstrap/module load ordering | Open |
 
 ## Recommended Next Branches
 
