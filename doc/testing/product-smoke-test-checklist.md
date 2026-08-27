@@ -1268,7 +1268,7 @@ with every prior staging pass's bootstrap-user handling.
 ### 19. Weekly Summary Screen (Phase 1, 2026-08-27)
 
 - Browser: "Weekly Summary" nav entry, season/week selector.
-  - [ ] **NOT VERIFIED (no browser)**: selecting a season and week should
+  - [x] **Browser-verified on staging (2026-08-27)**: selecting a season and week should
         show every match in that week with a status badge (Unscored /
         Scored / Approved / Processed / Closed), an "Open" button per row
         that jumps to Match Entry with that match pre-selected, a
@@ -1283,13 +1283,13 @@ with every prior staging pass's bootstrap-user handling.
         recap call showed `approved_at` and `processed_at` both set and
         `week_closed` still false (matches "Processed" in the status
         ladder, not yet "Closed").
-  - [ ] **NOT VERIFIED (no browser)**: when a week has unscored matches,
+  - [x] **Browser-verified on staging (2026-08-27)**: when a week has unscored matches,
         an incomplete-week-safe note should appear explaining the
         handicap/stats sections reflect data entered so far, not final
         results. **API-verified**: `missing_count` in the recap response
         correctly counted the two remaining unscored matches in the
         local-server test week.
-  - [ ] **NOT VERIFIED (no browser)**: clicking "Process Approved
+  - [x] **Browser-verified on staging (2026-08-27)**: clicking "Process Approved
         Scores" should process every approved-but-unprocessed match in
         the displayed week (looping the existing per-match process
         endpoint) and show a summary toast, then refresh the match
@@ -1301,7 +1301,7 @@ with every prior staging pass's bootstrap-user handling.
         new frontend orchestration, not a new backend capability, so no
         additional API-level test beyond confirming the underlying
         single-match endpoint behaves as expected.
-  - [ ] **NOT VERIFIED (no browser)**: "Open in Schedule" should
+  - [x] **Browser-verified on staging (2026-08-27)**: "Open in Schedule" should
         navigate to the Schedule page with the selected season
         preselected. **Confirmed at the code level**: dispatches the
         same `season-nav-request` custom event the Seasons domain
@@ -1319,6 +1319,26 @@ with every prior staging pass's bootstrap-user handling.
   the app -- has nothing sub-specific to display; this is a real,
   pre-existing gap discovered during Weekly Summary discovery, not a
   regression from this phase.
+- Staging verification (2026-08-27, `http://league-staging.local`,
+  deployed from `b93a177`): opened Weekly Summary in the in-app browser,
+  confirmed the Fixture Scoresheet Season and five week options load,
+  and verified Week 1 renders two Unscored rows, the incomplete-week
+  warning, Week 2 readiness, the handicap section, and the Open in
+  Schedule action. For the action path, created a disposable
+  `league_admin` staging user, approved match 33 through the API, opened
+  Week 2 in Weekly Summary, confirmed the "Process Approved Scores (1)"
+  button and mixed Approved/Scored rows, clicked the button in the
+  browser, and confirmed the row refreshed to Processed, the button
+  disappeared, and the success toast said "Processed 1 of 1 match".
+  Also verified the per-row Open button navigates to Match Entry with
+  the selected match loaded, Open in Schedule navigates to Schedule, and
+  Review & Apply opens Handicap Review with the selected week context.
+  Restored match 33 by unprocessing and unapproving it; final recap
+  confirmed `approved_at=false`, `processed_at=false`, and
+  `week_closed=false`. The temporary admin key file was deleted and the
+  browser Admin Key was cleared afterward. The disposable staging user
+  remains because there is no delete-user endpoint, consistent with prior
+  staging passes.
 
 ---
 
