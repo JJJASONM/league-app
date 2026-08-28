@@ -167,6 +167,14 @@ is admin-viewable only, per PM decision.
   anywhere in the codebase or docs). Per PM decision, no schema was
   invented; the section exists so the frontend can show an honest
   "not tracked yet" message instead of omitting money entirely.
+  **Update 2026-08-27:** a real financial data model now exists (see
+  `doc/domains/finances/README.md`, Financial Phase 1) -- `dues_payments`
+  and `payouts` tables, a new `finances` domain, and a league-admin-only
+  Financial screen. Replacing this placeholder with a real per-player
+  dues lookup was explicitly scoped as a small, separate Phase 2 and was
+  not part of Financial Phase 1; this section still reflects the
+  as-shipped Phase 1 behavior (`tracked` is still always `false` here)
+  until that follow-on lands.
 - Frontend: new `<player-overview-page>` component
   (`web/domains/players/player-overview-page-component.js`) with a
   player-select dropdown, and a new "Player Overview" nav entry/section.

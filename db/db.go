@@ -317,6 +317,42 @@ CREATE TABLE IF NOT EXISTS users (
     created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash);
+
+-- Financial Phase 1: dues and payouts, both append-only history tables
+-- (no update/delete path -- mirrors handicap_history's shape). "Paid" for
+-- a player/season means at least one dues_payments row exists; there is
+-- no partial-payment/balance math. team_id on dues_payments is a
+-- denormalized snapshot of the player's roster team at payment time, so
+-- history stays accurate even if the player's roster team changes later.
+-- recorded_by_user_id is nullable with no FK constraint, matching the
+-- existing attribution columns handicap_history.applied_by_user_id and
+-- matches.approved_by_user_id.
+CREATE TABLE IF NOT EXISTS dues_payments (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id           INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    player_id           INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    team_id             INTEGER REFERENCES teams(id),
+    amount              REAL    NOT NULL,
+    paid_at             DATE    NOT NULL,
+    recorded_by_user_id INTEGER,
+    note                TEXT    NOT NULL DEFAULT '',
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_dues_payments_season_player ON dues_payments(season_id, player_id);
+
+-- Payouts: admin-entered amounts per team per season. Standings are shown
+-- for reference when recording a payout but are never used to compute the
+-- amount automatically (Financial Phase 1 -- no payout formulas).
+CREATE TABLE IF NOT EXISTS payouts (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id           INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    team_id             INTEGER NOT NULL REFERENCES teams(id),
+    amount              REAL    NOT NULL,
+    recorded_by_user_id INTEGER,
+    note                TEXT    NOT NULL DEFAULT '',
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_payouts_season_team ON payouts(season_id, team_id);
 `
 	if _, err := DB.Exec(schema); err != nil {
 		return err

@@ -63,6 +63,9 @@ function loadSection(sec) {
     case 'weekly-summary':
       document.querySelector('weekly-summary-page')?.refresh(state.allSeasons, state.activeSeason);
       break;
+    case 'finances':
+      document.querySelector('finances-page')?.refresh(state.allSeasons, state.activeSeason);
+      break;
   }
 }
 
@@ -241,6 +244,13 @@ function updateIdentityUI() {
   }
   const canManageUsers = !!identity && (identity.role === 'system_admin' || identity.role === 'admin');
   document.getElementById('nav-item-users')?.classList.toggle('d-none', !canManageUsers);
+
+  // Financial Phase 1: finance routes require league_admin/admin/system_admin
+  // (the same role set clearanceAuth allows), matching the backend exactly --
+  // unlike Users, league_admin also qualifies here.
+  const canManageFinances = !!identity &&
+    (identity.role === 'system_admin' || identity.role === 'admin' || identity.role === 'league_admin');
+  document.getElementById('nav-item-finances')?.classList.toggle('d-none', !canManageFinances);
 }
 
 function openAdminKeyModal() {

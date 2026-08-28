@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"time"
 
+	"league_app/backend/domains/finances"
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
@@ -117,6 +118,8 @@ func main() {
 	lineupSvc := matches.NewLineupService(lineupStore)
 	pushbackStore := sqlite.NewPushbackStore(db.DB)
 	pushbackSvc := matches.NewPushbackService(pushbackStore)
+	financeStore := sqlite.NewFinanceStore(db.DB)
+	financeSvc := finances.NewFinanceService(financeStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,
@@ -134,6 +137,7 @@ func main() {
 		LineupMgr:       lineupSvc,
 		PushbackMgr:      pushbackSvc,
 		PushbackApplyMgr: pushbackSvc,
+		FinanceMgr:       financeSvc,
 	}
 
 	// API routes

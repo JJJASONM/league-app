@@ -1340,6 +1340,63 @@ with every prior staging pass's bootstrap-user handling.
   remains because there is no delete-user endpoint, consistent with prior
   staging passes.
 
+### 20. Financial Screen (Phase 1, 2026-08-27)
+
+- Browser: "Financial" nav entry (hidden unless the Admin Key resolves to
+  league_admin/admin/system_admin), season selector.
+  - [ ] **NOT VERIFIED (no browser)**: selecting a season should show a
+        Dues section listing every rostered player with a paid/unpaid
+        badge, total paid, and last payment date, and a Payouts section
+        listing every season team with its standing shown for reference
+        and total paid. **API-verified** against a local server build
+        with a real seeded season/roster: `GET
+        /api/seasons/{id}/finances/dues` correctly listed all rostered
+        players as unpaid before any payment, and `GET
+        /api/seasons/{id}/finances/payouts` correctly listed all season
+        teams with `total_paid:0` and a real (zero-value) standings
+        reference before any payout.
+  - [ ] **NOT VERIFIED (no browser)**: without a valid league_admin/
+        admin/system_admin Admin Key, the Financial nav entry should
+        stay hidden, and the screen should show a clear error if reached
+        anyway. **API-verified**: all four finance routes correctly
+        return 401 with no Authorization header and 403 with an invalid
+        key -- confirmed directly via curl for GET dues, POST
+        dues-payments, GET payouts, and POST payouts.
+  - [ ] **NOT VERIFIED (no browser)**: clicking "Record Payment" on a
+        player row should open a modal (amount, paid date, note),
+        submitting it should flip that player to Paid with the entered
+        amount, and the row should update without a full page reload.
+        **API-verified**: `POST /api/seasons/{id}/finances/dues-payments`
+        correctly recorded a payment, denormalized the player's roster
+        `team_id` onto the stored row, and a follow-up `GET .../dues`
+        showed `paid:true`, the correct `total_paid`, and the payment in
+        the player's history.
+  - [ ] **NOT VERIFIED (no browser)**: clicking "Record Payout" on a
+        team row should open a modal (amount, note), submitting it
+        should update that team's total paid and history.
+        **API-verified**: `POST /api/seasons/{id}/finances/payouts`
+        correctly recorded a payout and a follow-up `GET .../payouts`
+        showed the updated `total_paid` and the payout in the team's
+        history.
+  - [ ] **NOT VERIFIED (no browser)**: attempting to record a payment
+        for a player not on the season's roster, or a payout for a team
+        not in the season, should show a clear error rather than
+        silently succeeding or crashing. **API-verified**: both return
+        404 with a specific message ("player is not rostered for this
+        season" / "team is not part of this season").
+- New focused Go tests (all passing): 12 `FinanceService` tests
+  (`backend/domains/finances/service_test.go`) covering validation and
+  store delegation for both dues payments and payouts; 8 `FinanceStore`
+  tests (`backend/storage/sqlite/finances_store_test.go`) covering
+  insert/list/newest-first-ordering/season-scoping for both tables; 11
+  handler tests (`handlers/api_finances_test.go`) covering 401/403 on
+  all four routes, a successful league_admin read, full dues and payout
+  success paths, and the two 404 validation cases above.
+- Known, deliberately out-of-scope note: dues/payout entries cannot be
+  edited or voided (both tables are append-only by design) -- correcting
+  a mistake today means recording an offsetting entry, not modifying the
+  original row. This is intentional for Phase 1, not a gap.
+
 ---
 
 ## Known Gaps Summary

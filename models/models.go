@@ -284,6 +284,79 @@ type PlayerOverviewMoney struct {
 	Message string `json:"message"`
 }
 
+// DuesPayment is one recorded dues payment for a player in a season
+// (Financial Phase 1). Append-only history -- "paid" for a player/season
+// means at least one row exists here; there is no update/delete path and
+// no partial-payment/balance math. TeamID is a denormalized snapshot of
+// the player's roster team at payment time.
+type DuesPayment struct {
+	ID               int64   `json:"id"`
+	SeasonID         int64   `json:"season_id"`
+	PlayerID         int64   `json:"player_id"`
+	PlayerName       string  `json:"player_name,omitempty"`
+	TeamID           *int64  `json:"team_id"`
+	TeamName         string  `json:"team_name,omitempty"`
+	Amount           float64 `json:"amount"`
+	PaidAt           string  `json:"paid_at"`
+	RecordedByUserID *int64  `json:"recorded_by_user_id,omitempty"`
+	Note             string  `json:"note,omitempty"`
+	CreatedAt        string  `json:"created_at"`
+}
+
+// Payout is one recorded payout to a team for a season (Financial Phase 1).
+// Append-only history; the amount is always admin-entered -- standings are
+// shown for reference only and never used to compute it automatically.
+type Payout struct {
+	ID               int64   `json:"id"`
+	SeasonID         int64   `json:"season_id"`
+	TeamID           int64   `json:"team_id"`
+	TeamName         string  `json:"team_name,omitempty"`
+	Amount           float64 `json:"amount"`
+	RecordedByUserID *int64  `json:"recorded_by_user_id,omitempty"`
+	Note             string  `json:"note,omitempty"`
+	CreatedAt        string  `json:"created_at"`
+}
+
+// SeasonDuesResponse is the response for GET /api/seasons/{id}/finances/dues
+// (Financial Phase 1). DuesAmount is read from the season_rules "dues_amount"
+// freeform key (informational display only -- not enforced, no partial-payment
+// math against it in Phase 1); empty when the rule has not been set.
+type SeasonDuesResponse struct {
+	SeasonID   int64           `json:"season_id"`
+	DuesAmount string          `json:"dues_amount,omitempty"`
+	Players    []PlayerDuesRow `json:"players"`
+}
+
+// PlayerDuesRow is one rostered player's dues status for the season.
+// Paid is true when Payments is non-empty. Payments is ordered newest first.
+type PlayerDuesRow struct {
+	PlayerID     int64         `json:"player_id"`
+	PlayerName   string        `json:"player_name"`
+	PlayerNumber string        `json:"player_number,omitempty"`
+	TeamID       int64         `json:"team_id"`
+	TeamName     string        `json:"team_name,omitempty"`
+	Paid         bool          `json:"paid"`
+	TotalPaid    float64       `json:"total_paid"`
+	Payments     []DuesPayment `json:"payments"`
+}
+
+// SeasonPayoutsResponse is the response for GET /api/seasons/{id}/finances/payouts
+// (Financial Phase 1).
+type SeasonPayoutsResponse struct {
+	SeasonID int64           `json:"season_id"`
+	Teams    []TeamPayoutRow `json:"teams"`
+}
+
+// TeamPayoutRow is one season team's payout history plus its current
+// standing, shown for reference only -- Standing never determines Payouts.
+type TeamPayoutRow struct {
+	TeamID    int64     `json:"team_id"`
+	TeamName  string    `json:"team_name"`
+	TotalPaid float64   `json:"total_paid"`
+	Payouts   []Payout  `json:"payouts"`
+	Standing  *Standing `json:"standing,omitempty"`
+}
+
 // RoundResult stores point-per-game results for one player pairing within a match.
 // Scoring: winner of each game gets 10 pts (7 balls × 1 pt + 8-ball × 3 pt).
 // Loser gets however many balls they pocketed (0–7). All 3 games always played.

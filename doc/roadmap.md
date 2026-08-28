@@ -150,6 +150,19 @@ These items should stay small enough to review and ship independently.
     endpoint, and payment/financial schema remain explicitly deferred.
     See `doc/domains/matches/README.md`'s "Weekly Summary Phase 1"
     section for full detail.
+  - **Financial screen Phase 1 complete 2026-08-27** -- see Completed /
+    Largely Completed below. New `finances` domain (`dues_payments` and
+    `payouts` tables, both simple append-only history, no partial-
+    payment/balance math) and a new league-admin-only Financial screen:
+    per-player dues paid/unpaid status with payment history, per-team
+    payout totals/history with standings shown for reference only.
+    Unlike every other domain, ALL finance routes (reads and writes)
+    require `clearanceAuth` -- money data is not made public just
+    because other domain reads are. Payout amounts are always
+    admin-entered; standings never compute them automatically. Player
+    Overview money integration, real player login, payment
+    editing/voiding, penalties, and payout formulas are all explicitly
+    deferred. See `doc/domains/finances/README.md` for full detail.
 
 ## Next
 
@@ -871,6 +884,51 @@ follow-up.
   new screen remains **NOT VERIFIED (no browser)**. See
   `doc/domains/matches/README.md`'s "Weekly Summary Phase 1" section
   for full detail.
+- Financial screen Phase 1 (2026-08-27). Discovery re-confirmed no
+  financial schema, code, or endpoint existed anywhere in this codebase
+  -- `models.PlayerOverviewMoney` was a static placeholder, not an
+  implementation. This phase: added a new `finances` domain
+  (`backend/domains/finances/{service.go,store.go}`, SQLite impl
+  `backend/storage/sqlite/finances_store.go`) owning two new
+  append-only history tables, `dues_payments` and `payouts` -- no
+  update/delete path, mirroring `handicap_history`'s shape and insert
+  pattern. "Paid" for a player/season means at least one
+  `dues_payments` row exists; there is no partial-payment/balance math.
+  A configurable dues amount reuses the existing `season_rules`
+  freeform-key mechanism (`dues_amount`) rather than a new column, per
+  PM decision. `handlers/api_finances_handlers.go` composes the full
+  dues/payouts views by concatenating `SeasonManager.ListRoster` across
+  every season team (no new season-wide roster method, matching Player
+  Overview's own minimal-diff choice) and joining against
+  `FinanceManager`'s payment/payout history and
+  `RoundManager.GetStandings` for reference. Unlike every other domain, **all four
+  routes (reads and writes) require `clearanceAuth`**
+  (league_admin/admin/system_admin) -- per explicit PM decision, money
+  data is not made public just because other domain reads are. Payout
+  amounts are always admin-entered; standings are shown for reference
+  only and never used to compute one automatically. New
+  `web/domains/finances/` frontend domain with its own nav entry,
+  hidden unless the resolved Admin Key identity qualifies (extending
+  `updateIdentityUI()`'s existing gating pattern from the Users screen
+  with a `canManageFinances` check matching `clearanceAuth`'s allowed
+  roles exactly). Explicitly deferred, per PM decision: Player Overview
+  money integration (a small, isolated Phase 2), real player-facing
+  login/money view, payment editing/voiding (both tables are
+  append-only by design), penalties, automated payout formulas,
+  email/notifications, broader audit history, and any payment
+  processor/accounting integration. Verified with `go test ./...
+  -count=1` and `go build ./...` (12 new FinanceService tests, 8 new
+  FinanceStore tests, 11 new handler tests covering auth enforcement on
+  all four routes and both success paths), `node --check` on all four
+  changed/new JS files, and a full manual walkthrough against a local
+  server build with a real seeded season/roster: confirmed 401/403
+  without a valid league_admin key, recorded a real dues payment and
+  payout end to end, and confirmed a real bug found during this pass (a
+  Go nil-slice defaulting to JSON `null` instead of `[]` for
+  players/teams with no payment/payout history yet) was fixed before
+  handoff. Actual browser rendering of the new screen remains **NOT
+  VERIFIED (no browser)**. See `doc/domains/finances/README.md` for
+  full detail.
 
 ## Open Questions To Resolve
 

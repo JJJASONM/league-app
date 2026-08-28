@@ -90,6 +90,19 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		registerPlayerOverviewRoute(mux, deps.PlayerMgr, seasonMgr, deps.TeamMgr, deps.MatchMgr, deps.RoundMgr)
 	}
 
+	// Finance route registration lives in api_finances_routes.go. Handler-
+	// level composition across FinanceMgr, SeasonMgr, RuleMgr, and RoundMgr
+	// (standings reference on payouts). SeasonMgr and RuleMgr are required
+	// elsewhere in Register (never nil by this point), but are still
+	// checked explicitly here so this gate documents every collaborator
+	// the finance routes actually need, not just the optional ones.
+	// RoundMgr is optional elsewhere in Register. Unlike most other
+	// domains, ALL four finance routes (reads and writes) are gated by
+	// clearanceAuth.
+	if deps.FinanceMgr != nil && seasonMgr != nil && deps.RuleMgr != nil && deps.RoundMgr != nil {
+		registerFinanceRoutes(mux, deps.FinanceMgr, seasonMgr, deps.RuleMgr, deps.RoundMgr, deps.ApplyAuth)
+	}
+
 	// Match read and assignment route registration lives in api_match_routes.go.
 	// Scoped to ?season_id= (season implies league).
 	if deps.MatchMgr != nil {

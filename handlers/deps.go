@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 
+	"league_app/backend/domains/finances"
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
@@ -155,6 +156,15 @@ type TeamManager interface {
 	DeleteTeam(ctx context.Context, id int64) error
 }
 
+// FinanceManager handles dues payments and season payouts (Financial Phase
+// 1). Routes are registered only when non-nil.
+type FinanceManager interface {
+	RecordDuesPayment(ctx context.Context, input finances.RecordDuesPaymentInput) (models.DuesPayment, error)
+	ListDuesPayments(ctx context.Context, seasonID int64) ([]models.DuesPayment, error)
+	RecordPayout(ctx context.Context, input finances.RecordPayoutInput) (models.Payout, error)
+	ListPayouts(ctx context.Context, seasonID int64) ([]models.Payout, error)
+}
+
 // SeasonManager handles season lifecycle: activation, checklist evaluation,
 // previous-season lookup, draft/stale checks, team management, bye requests,
 // and season roster operations.
@@ -250,4 +260,7 @@ type Dependencies struct {
 	// LineupMgr handles lineup plan listing, atomic save, and deletion.
 	// Routes are registered only when non-nil.
 	LineupMgr LineupManager
+	// FinanceMgr handles dues payments and season payouts (Financial Phase 1).
+	// Routes are registered only when non-nil.
+	FinanceMgr FinanceManager
 }
