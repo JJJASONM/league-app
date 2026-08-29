@@ -32,9 +32,16 @@ const DUES_MODAL_ID   = 'finances-dues-modal';
 const PAYOUT_MODAL_ID = 'finances-payout-modal';
 
 class FinancesPage extends HTMLElement {
-  #allSeasons = [];
-  #dues       = null;
-  #payouts    = null;
+  #allSeasons     = [];
+  #dues           = null;
+  #payouts        = null;
+  // Selected-record state for the two modals. Component fields, not hidden
+  // form inputs -- the modal only ever displays a name that was set in the
+  // same call that set the matching ID, so the displayed name and the
+  // submitted ID cannot drift apart the way a separately-populated hidden
+  // input could.
+  #duesPlayerId   = null;
+  #payoutTeamId   = null;
 
   connectedCallback() {
     this.innerHTML = `
@@ -183,7 +190,6 @@ class FinancesPage extends HTMLElement {
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <input type="hidden" id="fin-dues-player-id">
         <p class="mb-3">Player: <strong id="fin-dues-player-name"></strong></p>
         <div class="mb-3">
           <label class="form-label">Amount *</label>
@@ -220,7 +226,6 @@ class FinancesPage extends HTMLElement {
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <input type="hidden" id="fin-payout-team-id">
         <p class="mb-3">Team: <strong id="fin-payout-team-name"></strong></p>
         <div class="mb-3">
           <label class="form-label">Amount *</label>
@@ -242,7 +247,7 @@ class FinancesPage extends HTMLElement {
   }
 
   #openDuesModal(playerId, playerName) {
-    document.getElementById('fin-dues-player-id').value = playerId;
+    this.#duesPlayerId = playerId;
     document.getElementById('fin-dues-player-name').textContent = playerName;
     document.getElementById('fin-dues-amount').value = '';
     document.getElementById('fin-dues-paid-at').value = new Date().toISOString().slice(0, 10);
@@ -251,7 +256,7 @@ class FinancesPage extends HTMLElement {
   }
 
   #openPayoutModal(teamId, teamName) {
-    document.getElementById('fin-payout-team-id').value = teamId;
+    this.#payoutTeamId = teamId;
     document.getElementById('fin-payout-team-name').textContent = teamName;
     document.getElementById('fin-payout-amount').value = '';
     document.getElementById('fin-payout-note').value = '';
@@ -260,14 +265,15 @@ class FinancesPage extends HTMLElement {
 
   async #saveDuesPayment() {
     const seasonId  = this.querySelector('.fin-season-sel')?.value;
-    const playerId  = document.getElementById('fin-dues-player-id').value;
+    const playerId  = this.#duesPlayerId;
     const amount    = parseFloat(document.getElementById('fin-dues-amount').value);
     const paidAt    = document.getElementById('fin-dues-paid-at').value;
     const note      = document.getElementById('fin-dues-note').value.trim();
+    if (!playerId) { toast('No player selected', 'danger'); return; }
     if (!amount || amount <= 0) { toast('Enter an amount greater than zero', 'warning'); return; }
     if (!paidAt) { toast('Enter a paid date', 'warning'); return; }
     try {
-      await recordDuesPayment(seasonId, { player_id: parseInt(playerId, 10), amount, paid_at: paidAt, note });
+      await recordDuesPayment(seasonId, { player_id: playerId, amount, paid_at: paidAt, note });
       bootstrap.Modal.getInstance(document.getElementById(DUES_MODAL_ID))?.hide();
       toast('Payment recorded');
       await this.#load();
@@ -278,12 +284,13 @@ class FinancesPage extends HTMLElement {
 
   async #savePayout() {
     const seasonId = this.querySelector('.fin-season-sel')?.value;
-    const teamId   = document.getElementById('fin-payout-team-id').value;
+    const teamId   = this.#payoutTeamId;
     const amount   = parseFloat(document.getElementById('fin-payout-amount').value);
     const note     = document.getElementById('fin-payout-note').value.trim();
+    if (!teamId) { toast('No team selected', 'danger'); return; }
     if (!amount || amount <= 0) { toast('Enter an amount greater than zero', 'warning'); return; }
     try {
-      await recordPayout(seasonId, { team_id: parseInt(teamId, 10), amount, note });
+      await recordPayout(seasonId, { team_id: teamId, amount, note });
       bootstrap.Modal.getInstance(document.getElementById(PAYOUT_MODAL_ID))?.hide();
       toast('Payout recorded');
       await this.#load();

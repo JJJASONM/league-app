@@ -1397,6 +1397,53 @@ with every prior staging pass's bootstrap-user handling.
   a mistake today means recording an offsetting entry, not modifying the
   original row. This is intentional for Phase 1, not a gap.
 
+#### Staging verification (2026-08-29)
+
+- **API checks: passed.** Against staging with a disposable
+  `financial-phase-1-verify-20260829` league_admin user and the Fixture
+  Scoresheet Season (`league_id: 3`, `season_id: 6`, 12 rostered
+  players, 4 season teams):
+  - `GET .../finances/dues` and `GET .../finances/payouts` both
+    correctly returned 401 with no Authorization header.
+  - With the disposable key, both GETs succeeded.
+  - `POST .../finances/dues-payments` recorded `payment_id: 1`
+    (`player_id: 42`, `team_id: 14`, `amount: 1.23`) and the player
+    correctly flipped to paid.
+  - `POST .../finances/payouts` recorded `payout_id: 1` (`team_id: 14`,
+    `amount: 2.34`) with the team's `total_paid` correctly updated to
+    2.34.
+- **Browser checks: passed up to modal open.** Nav hidden with no
+  Admin Key, visible and identity-resolved after setting the disposable
+  league_admin key, Financial screen opens, Dues table renders all 12
+  players, Payouts table renders all 4 teams, both API-created records
+  above are visible in the UI, and both modals open showing the correct
+  selected player/team name.
+- **Bug found:** the Dues and Payout modals displayed the correct
+  selected name but their hidden `#fin-dues-player-id` /
+  `#fin-payout-team-id` inputs stayed empty, so a browser-driven submit
+  would not reliably send the selected `player_id`/`team_id`. The
+  browser write workflow (as opposed to the API writes above, which
+  bypassed the modal entirely) was **not** verified working end-to-end
+  on staging.
+  - Fixed on branch `financial-screen-phase-1-followup-modal-ids`:
+    the modals now track the selected `player_id`/`team_id` as private
+    `<finances-page>` component fields set in the same call that sets
+    the displayed name, instead of separate hidden form inputs, so the
+    displayed name and submitted ID cannot drift apart. Final manual
+    browser re-verification (open modal for a known player/team, submit,
+    confirm the exact record lands on that player/team) is still
+    required after this branch deploys -- see item below.
+  - [ ] **NOT VERIFIED (no browser)**: after the modal-ID fix deploys,
+        re-confirm clicking "Record Payment" opens the correct player
+        and submitting records the payment against that exact player,
+        and clicking "Record Payout" opens the correct team and
+        submitting records the payout against that exact team.
+- Staging artifacts created by this pass are real, append-only rows
+  and were intentionally left in place (matches the append-only-by-
+  design note above): `dues_payments` id 1 (`amount: 1.23`,
+  `player_id: 42`, `team_id: 14`), `payouts` id 1 (`amount: 2.34`,
+  `team_id: 14`).
+
 ---
 
 ## Known Gaps Summary
