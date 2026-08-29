@@ -1344,7 +1344,7 @@ with every prior staging pass's bootstrap-user handling.
 
 - Browser: "Financial" nav entry (hidden unless the Admin Key resolves to
   league_admin/admin/system_admin), season selector.
-  - [ ] **NOT VERIFIED (no browser)**: selecting a season should show a
+  - [x] **Browser-verified on staging (2026-08-29)**: selecting a season should show a
         Dues section listing every rostered player with a paid/unpaid
         badge, total paid, and last payment date, and a Payouts section
         listing every season team with its standing shown for reference
@@ -1355,14 +1355,14 @@ with every prior staging pass's bootstrap-user handling.
         /api/seasons/{id}/finances/payouts` correctly listed all season
         teams with `total_paid:0` and a real (zero-value) standings
         reference before any payout.
-  - [ ] **NOT VERIFIED (no browser)**: without a valid league_admin/
+  - [x] **Browser-verified on staging (2026-08-29)**: without a valid league_admin/
         admin/system_admin Admin Key, the Financial nav entry should
         stay hidden, and the screen should show a clear error if reached
         anyway. **API-verified**: all four finance routes correctly
         return 401 with no Authorization header and 403 with an invalid
         key -- confirmed directly via curl for GET dues, POST
         dues-payments, GET payouts, and POST payouts.
-  - [ ] **NOT VERIFIED (no browser)**: clicking "Record Payment" on a
+  - [x] **Browser-verified on staging (2026-08-29)**: clicking "Record Payment" on a
         player row should open a modal (amount, paid date, note),
         submitting it should flip that player to Paid with the entered
         amount, and the row should update without a full page reload.
@@ -1371,7 +1371,7 @@ with every prior staging pass's bootstrap-user handling.
         `team_id` onto the stored row, and a follow-up `GET .../dues`
         showed `paid:true`, the correct `total_paid`, and the payment in
         the player's history.
-  - [ ] **NOT VERIFIED (no browser)**: clicking "Record Payout" on a
+  - [x] **Browser-verified on staging (2026-08-29)**: clicking "Record Payout" on a
         team row should open a modal (amount, note), submitting it
         should update that team's total paid and history.
         **API-verified**: `POST /api/seasons/{id}/finances/payouts`
@@ -1429,20 +1429,28 @@ with every prior staging pass's bootstrap-user handling.
     the modals now track the selected `player_id`/`team_id` as private
     `<finances-page>` component fields set in the same call that sets
     the displayed name, instead of separate hidden form inputs, so the
-    displayed name and submitted ID cannot drift apart. Final manual
-    browser re-verification (open modal for a known player/team, submit,
-    confirm the exact record lands on that player/team) is still
-    required after this branch deploys -- see item below.
-  - [ ] **NOT VERIFIED (no browser)**: after the modal-ID fix deploys,
-        re-confirm clicking "Record Payment" opens the correct player
-        and submitting records the payment against that exact player,
-        and clicking "Record Payout" opens the correct team and
-        submitting records the payout against that exact team.
+    displayed name and submitted ID cannot drift apart.
+  - **Post-fix browser verification passed (2026-08-29, deployed from
+    `c693a41`)**: after redeploying the modal-ID fix, opened Financial
+    with the disposable league_admin Admin Key, confirmed the nav was
+    visible and the screen loaded Fixture Scoresheet Season, then
+    clicked "Record Payment" for Avery Slate (`player_id: 41`) and
+    confirmed the modal showed Avery Slate, no hidden ID input existed,
+    submitting `3.21` closed the modal, showed "Payment recorded", and
+    refreshed Avery Slate's row to Paid with `$3.21`. Also clicked
+    "Record Payout" for Fixture Bankers (`team_id: 15`) and confirmed
+    the modal showed Fixture Bankers, no hidden ID input existed,
+    submitting `4.56` closed the modal, showed "Payout recorded", and
+    refreshed Fixture Bankers' row to `$4.56`.
 - Staging artifacts created by this pass are real, append-only rows
   and were intentionally left in place (matches the append-only-by-
   design note above): `dues_payments` id 1 (`amount: 1.23`,
   `player_id: 42`, `team_id: 14`), `payouts` id 1 (`amount: 2.34`,
-  `team_id: 14`).
+  `team_id: 14`), plus the post-fix browser rows for Avery Slate
+  (`player_id: 41`, amount `3.21`) and Fixture Bankers (`team_id: 15`,
+  amount `4.56`). The disposable staging user remains because there is
+  no delete-user endpoint; the browser Admin Key was cleared and the
+  temporary key file was deleted after verification.
 
 ---
 
