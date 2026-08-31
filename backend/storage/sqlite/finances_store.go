@@ -76,6 +76,35 @@ func (s *FinanceStore) ListDuesPayments(ctx context.Context, seasonID int64) ([]
 	return payments, rows.Err()
 }
 
+// ListDuesPaymentsByPlayer returns one player's dues payments for the
+// season, newest first. Returns a non-nil empty slice when none exist.
+func (s *FinanceStore) ListDuesPaymentsByPlayer(ctx context.Context, seasonID, playerID int64) ([]models.DuesPayment, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT dp.id, dp.season_id, dp.player_id, p.first_name || ' ' || p.last_name,
+		       dp.team_id, COALESCE(t.name, ''),
+		       dp.amount, dp.paid_at, dp.recorded_by_user_id, dp.note, dp.created_at
+		FROM dues_payments dp
+		JOIN players p ON p.id = dp.player_id
+		LEFT JOIN teams t ON t.id = dp.team_id
+		WHERE dp.season_id = ? AND dp.player_id = ?
+		ORDER BY dp.created_at DESC, dp.id DESC`, seasonID, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("list dues payments by player: %w", err)
+	}
+	defer rows.Close()
+
+	payments := []models.DuesPayment{}
+	for rows.Next() {
+		var p models.DuesPayment
+		if err := rows.Scan(&p.ID, &p.SeasonID, &p.PlayerID, &p.PlayerName,
+			&p.TeamID, &p.TeamName, &p.Amount, &p.PaidAt, &p.RecordedByUserID, &p.Note, &p.CreatedAt); err != nil {
+			return nil, fmt.Errorf("list dues payments by player: scan: %w", err)
+		}
+		payments = append(payments, p)
+	}
+	return payments, rows.Err()
+}
+
 // InsertPayout records one payout and returns the stored row with TeamName
 // populated for immediate display.
 func (s *FinanceStore) InsertPayout(ctx context.Context, row models.Payout) (models.Payout, error) {

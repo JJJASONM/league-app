@@ -22,6 +22,12 @@ type FinanceStore interface {
 	// first. Returns a non-nil empty slice when none exist.
 	ListDuesPayments(ctx context.Context, seasonID int64) ([]models.DuesPayment, error)
 
+	// ListDuesPaymentsByPlayer returns one player's dues payments for the
+	// season, newest first. Returns a non-nil empty slice when none exist.
+	// Added for Player Overview Phase 2, which needs only one player's
+	// history rather than the full season list ListDuesPayments returns.
+	ListDuesPaymentsByPlayer(ctx context.Context, seasonID, playerID int64) ([]models.DuesPayment, error)
+
 	// InsertPayout records one payout and returns the stored row (ID and
 	// CreatedAt populated by the database).
 	InsertPayout(ctx context.Context, row models.Payout) (models.Payout, error)

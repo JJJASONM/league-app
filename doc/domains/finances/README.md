@@ -194,7 +194,10 @@ All explicitly out of scope per PM decision, not oversights:
 
 - Player Overview money integration (replacing the static placeholder
   with a real per-player dues lookup) -- deferred to Phase 2, a small,
-  isolated follow-on once this backend exists.
+  isolated follow-on once this backend exists. **Update 2026-08-29:**
+  implemented -- see "Player Overview Phase 2 read method" below and
+  `doc/domains/players/README.md`'s "Player Overview Phase 2
+  Implementation" for full detail.
 - Real player-facing login or a player-only money view.
 - Payment editing or voiding (both tables are append-only; correcting a
   mistake today means recording an offsetting entry, not modifying the
@@ -233,6 +236,27 @@ non-nil empty slice, matching the rest of the codebase's convention.
 Actual browser rendering of the new screen remains **NOT VERIFIED (no
 browser)** in this developer's tool session.
 
+## Player Overview Phase 2 read method (added 2026-08-29)
+
+`FinanceStore` gained a fifth method, `ListDuesPaymentsByPlayer(ctx,
+seasonID, playerID)`, added when Player Overview Phase 2 needed one
+player's dues history rather than `ListDuesPayments`' full season list.
+It is a straightforward narrowing of the same query (adds `AND
+dp.player_id = ?`), kept in this domain's store/service per the
+`finances` domain's own convention of owning all reads/writes to its two
+tables -- Player Overview's handler calls `FinanceManager` the same way
+it calls every other manager, rather than the finances package gaining
+any dependency on players/seasons. See
+`doc/domains/players/README.md`'s "Player Overview Phase 2
+Implementation" for the consuming handler's composition detail.
+**Update 2026-08-30:** this integration initially left Player Overview's
+route unprotected despite surfacing the same money data this domain's
+own routes keep behind `clearanceAuth`; PM resolved that gap
+(`PLAYERS-Q002`) by requiring `clearanceAuth` on the whole Player
+Overview route too -- see "Privacy inconsistency -- resolved 2026-08-30"
+in the players doc for full detail. No change was made to any Financial
+Phase 1 route, table, or auth as part of that correction.
+
 ## Decision History
 
 ### 2026-08-27 - Financial Phase 1: dues and payouts
@@ -250,3 +274,28 @@ data should not be public just because other domain reads are. Real
 player login, payment editing/voiding, penalties, payout formulas, and
 Player Overview integration are all explicitly deferred. See "Financial
 Phase 1 -- Dues and Payouts" above for full detail.
+
+### 2026-08-29 - Player Overview Phase 2 read method
+
+**Status:** `accepted`
+
+Added `FinanceStore.ListDuesPaymentsByPlayer` (season+player-scoped
+read) so Player Overview Phase 2 could show real per-player dues status
+without duplicating SQL outside this domain. No change to any Financial
+Phase 1 route, table, or auth. At initial ship this left Player
+Overview's route unprotected despite surfacing the same money data --
+flagged as `PLAYERS-Q002` and resolved 2026-08-30 (see below). See
+"Player Overview Phase 2 read method" above and
+`doc/domains/players/README.md` for full detail.
+
+### 2026-08-30 - Player Overview auth correction (resolves PLAYERS-Q002)
+
+**Status:** `accepted`
+
+Player Overview's `GET /api/players/{id}/overview` is now protected by
+`clearanceAuth`, the same role gate (league_admin/admin/system_admin)
+this domain's own routes use, since it exposes the same kind of
+per-player money data. No change to any Financial Phase 1 route, table,
+or auth -- this correction is entirely within the players/handlers
+layer. See `doc/domains/players/README.md`'s "Privacy inconsistency --
+resolved 2026-08-30" for full detail.

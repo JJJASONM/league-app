@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"league_app/backend/domains/matches"
@@ -10,11 +11,11 @@ import (
 // getPlayerOverview handles GET /api/players/{id}/overview. Composes a
 // read-only Player Overview from existing managers: player identity,
 // season/team context, that team's matches for the season, the player's
-// season stats, current handicap, and a money placeholder (dues/payouts
-// are not tracked yet). Handler-level composition per PM decision --
-// Player Overview Phase 1 does not introduce a new cross-domain service
-// layer; if this grows, promoting it into a dedicated service is a later
-// decision.
+// season stats, current handicap, and money status (Player Overview
+// Phase 2 -- backed by the finances domain from Financial Phase 1).
+// Handler-level composition per PM decision -- Player Overview does not
+// introduce a new cross-domain service layer; if this grows, promoting
+// it into a dedicated service is a later decision.
 //
 // season_id is optional: when omitted, the player's league's active
 // season is used. An explicit season_id belonging to a different league
@@ -28,10 +29,18 @@ import (
 // the season -- this covers both non-roster-managed seasons and a player
 // who simply isn't on that season's roster. When no team resolves at all,
 // team is null and schedule/stats are returned empty rather than erroring.
+//
+// financeMgr is nil in test-only setups that don't wire one (e.g. the
+// shared testServer() helper); when nil, money falls back to the old
+// Phase 1 "not tracked" placeholder instead of erroring. This route
+// remains an unprotected GET like every other Player Overview read even
+// though it now surfaces the same money data the Financial screen keeps
+// behind clearanceAuth -- see doc/domains/players/README.md for the
+// resulting privacy-inconsistency note and recommendation.
 func getPlayerOverview(
 	w http.ResponseWriter, r *http.Request,
 	playerMgr PlayerManager, seasonMgr SeasonManager, teamMgr TeamManager,
-	matchMgr MatchManager, roundMgr RoundManager,
+	matchMgr MatchManager, roundMgr RoundManager, financeMgr FinanceManager, ruleMgr RuleManager,
 ) {
 	id, err := pathID(r, "id")
 	if err != nil {
@@ -88,6 +97,10 @@ func getPlayerOverview(
 		},
 	}
 
+	if financeMgr != nil {
+		overview.Money = playerOverviewMoney(r.Context(), financeMgr, ruleMgr, seasonID, id)
+	}
+
 	teamID, found, err := seasonMgr.GetPlayerRosterTeam(r.Context(), seasonID, id)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
@@ -141,4 +154,43 @@ func getPlayerOverview(
 	}
 
 	jsonOK(w, overview)
+}
+
+// playerOverviewMoney composes the player's dues status for the season.
+// Only called when financeMgr is non-nil. Paid is true whenever the
+// player has at least one dues_payments row -- there is no partial-
+// payment/balance math. dues_amount is read from the season_rules
+// freeform key of the same name for display only; ruleMgr is always
+// non-nil in production (RuleManager is required elsewhere in Register),
+// but is still nil-checked here since it is only reachable through this
+// function's caller, not guaranteed by this function's own signature.
+// Errors from either manager are treated the same way the rest of this
+// handler treats optional composition failures: fail soft into an empty
+// result rather than failing the whole overview request.
+func playerOverviewMoney(ctx context.Context, financeMgr FinanceManager, ruleMgr RuleManager, seasonID, playerID int64) models.PlayerOverviewMoney {
+	money := models.PlayerOverviewMoney{Tracked: true, Payments: []models.DuesPayment{}}
+
+	if payments, err := financeMgr.ListDuesPaymentsByPlayer(ctx, seasonID, playerID); err == nil {
+		money.Payments = payments
+	}
+	for _, p := range money.Payments {
+		money.TotalPaid += p.Amount
+	}
+	money.Paid = len(money.Payments) > 0
+	if !money.Paid {
+		money.Message = "No dues payment recorded yet."
+	}
+
+	if ruleMgr != nil {
+		if rules, err := ruleMgr.List(ctx, seasonID); err == nil {
+			for _, rule := range rules {
+				if rule.RuleKey == "dues_amount" {
+					money.DuesAmount = rule.RuleValue
+					break
+				}
+			}
+		}
+	}
+
+	return money
 }

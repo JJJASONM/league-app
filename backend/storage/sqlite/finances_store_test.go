@@ -188,6 +188,88 @@ func TestFinanceStore_ListDuesPayments_ScopedBySeason(t *testing.T) {
 	}
 }
 
+// -- ListDuesPaymentsByPlayer -------------------------------------------------
+
+func TestFinanceStore_ListDuesPaymentsByPlayer_EmptyReturnsEmptySlice(t *testing.T) {
+	store := newFinanceStore(t)
+	seasonID, _, playerID := financeStoreSeed(t)
+
+	got, err := store.ListDuesPaymentsByPlayer(context.Background(), seasonID, playerID)
+	if err != nil {
+		t.Fatalf("ListDuesPaymentsByPlayer: %v", err)
+	}
+	if got == nil {
+		t.Error("want non-nil empty slice, got nil")
+	}
+	if len(got) != 0 {
+		t.Errorf("want 0 payments, got %d", len(got))
+	}
+}
+
+func TestFinanceStore_ListDuesPaymentsByPlayer_NewestFirst(t *testing.T) {
+	store := newFinanceStore(t)
+	seasonID, teamID, playerID := financeStoreSeed(t)
+	ctx := context.Background()
+
+	first, err := store.InsertDuesPayment(ctx, models.DuesPayment{
+		SeasonID: seasonID, PlayerID: playerID, TeamID: &teamID, Amount: 10, PaidAt: "2026-01-01",
+	})
+	if err != nil {
+		t.Fatalf("insert first: %v", err)
+	}
+	second, err := store.InsertDuesPayment(ctx, models.DuesPayment{
+		SeasonID: seasonID, PlayerID: playerID, TeamID: &teamID, Amount: 15, PaidAt: "2026-01-02",
+	})
+	if err != nil {
+		t.Fatalf("insert second: %v", err)
+	}
+
+	got, err := store.ListDuesPaymentsByPlayer(ctx, seasonID, playerID)
+	if err != nil {
+		t.Fatalf("ListDuesPaymentsByPlayer: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 payments, got %d", len(got))
+	}
+	if got[0].ID != second.ID || got[1].ID != first.ID {
+		t.Errorf("want newest-first order [%d,%d], got [%d,%d]", second.ID, first.ID, got[0].ID, got[1].ID)
+	}
+}
+
+func TestFinanceStore_ListDuesPaymentsByPlayer_ScopedByPlayer(t *testing.T) {
+	store := newFinanceStore(t)
+	seasonID, teamID, playerID := financeStoreSeed(t)
+	ctx := context.Background()
+
+	r, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Away','Player',?,2.0)`, teamID)
+	if err != nil {
+		t.Fatalf("seed second player: %v", err)
+	}
+	otherPlayerID, _ := r.LastInsertId()
+
+	if _, err := store.InsertDuesPayment(ctx, models.DuesPayment{
+		SeasonID: seasonID, PlayerID: playerID, TeamID: &teamID, Amount: 25, PaidAt: "2026-01-01",
+	}); err != nil {
+		t.Fatalf("insert for playerID: %v", err)
+	}
+	if _, err := store.InsertDuesPayment(ctx, models.DuesPayment{
+		SeasonID: seasonID, PlayerID: otherPlayerID, TeamID: &teamID, Amount: 99, PaidAt: "2026-01-01",
+	}); err != nil {
+		t.Fatalf("insert for otherPlayerID: %v", err)
+	}
+
+	got, err := store.ListDuesPaymentsByPlayer(ctx, seasonID, playerID)
+	if err != nil {
+		t.Fatalf("ListDuesPaymentsByPlayer: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 payment scoped to playerID, got %d", len(got))
+	}
+	if got[0].Amount != 25 {
+		t.Errorf("want amount=25 from the correct player, got %v", got[0].Amount)
+	}
+}
+
 // -- InsertPayout / ListPayouts ----------------------------------------------
 
 func TestFinanceStore_InsertPayout_ReturnsStoredRowWithTeamName(t *testing.T) {

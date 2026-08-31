@@ -175,6 +175,9 @@ is admin-viewable only, per PM decision.
   not part of Financial Phase 1; this section still reflects the
   as-shipped Phase 1 behavior (`tracked` is still always `false` here)
   until that follow-on lands.
+  **Update 2026-08-29:** that follow-on has now shipped -- see "Player
+  Overview Phase 2" below. `tracked` is `true` whenever a `FinanceManager`
+  is wired; it is `false` only in test-only setups that omit one.
 - Frontend: new `<player-overview-page>` component
   (`web/domains/players/player-overview-page-component.js`) with a
   player-select dropdown, and a new "Player Overview" nav entry/section.
@@ -218,7 +221,10 @@ All explicitly out of scope per PM decision, not oversights:
 - Real player login, player-facing self-service portal.
 - Payment entry/history, payout calculations (blocked on the money/dues
   data model not existing at all yet -- a project of its own, not a
-  screen addition).
+  screen addition). **Update 2026-08-29:** the data model now exists and
+  Phase 2 added read-only dues status/history to this screen (see below)
+  -- payment *entry* and payout display remain out of scope here; use
+  the Financial screen for those.
 - Communication/notifications, mobile-specific layout.
 - Handicap history/trend view (the `handicap_history` table exists but
   has no query or endpoint reading it by `player_id` anywhere in the
@@ -251,6 +257,179 @@ returned 404, and the new nav entry/section/script tags all served
 correctly from the running binary. Actual browser rendering of the new
 screen and the "View Overview" button remain **NOT VERIFIED (no
 browser)** in this developer's tool session.
+
+## Player Overview Phase 2 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-08-29`
+
+### What Phase 2 added
+
+Replaced the Phase 1 money placeholder with real per-player season dues
+status, backed by the `finances` domain added in Financial Phase 1.
+Admin-viewable only -- no player login or permissions added. Payout
+display was considered and deliberately left out: payouts are team-level,
+not player-level, and per PM decision were only worth adding here if
+trivial; composing team-level payout data onto a player-level screen
+was judged not trivial enough to bundle into this phase.
+
+- New read method `FinanceStore.ListDuesPaymentsByPlayer(ctx, seasonID,
+  playerID)` (`backend/domains/finances/store.go`,
+  `backend/storage/sqlite/finances_store.go`), plus the matching
+  `FinanceService`/`FinanceManager` passthrough. Added instead of
+  duplicating SQL in the Player Overview handler, per PM's implementation
+  guidance -- mirrors `ListDuesPayments`' query but scopes by
+  `player_id` too, since Player Overview needs one player's history,
+  not the full season list the Financial screen's `GET .../dues` uses.
+- `getPlayerOverview` (`handlers/api_player_overview_handler.go`) gained
+  two new parameters, `financeMgr FinanceManager` and `ruleMgr
+  RuleManager`, and a new `playerOverviewMoney` helper that composes the
+  money section: `ListDuesPaymentsByPlayer` for `paid`/`total_paid`/
+  `payments`, plus `RuleManager.List` matched against the `dues_amount`
+  season_rules key for display only (same convention Financial Phase 1
+  established). `financeMgr` may be `nil` (the shared `testServer()`
+  test helper does not wire one); when `nil`, money falls back to the
+  original Phase 1 placeholder rather than erroring, so none of the six
+  existing Phase 1 tests needed to change. `ruleMgr` is always non-nil
+  in production (`RuleManager` is required elsewhere in `Register`), but
+  is still nil-checked in the helper rather than assumed.
+- Money composition uses the player's own ID directly -- it does not
+  depend on team/roster resolution, so a player with no season roster
+  entry (or no team at all) still gets a real dues status rather than
+  silently inheriting the untracked placeholder.
+- Both manager calls fail soft, matching every other optional
+  composition step in this handler (team lookup, schedule, stats): a
+  `FinanceManager`/`RuleManager` error degrades to an empty/zero result
+  rather than failing the whole overview request.
+- Route registration (`api_player_overview_routes.go`,
+  `handlers/api.go`) passes `deps.FinanceMgr` and `deps.RuleMgr` through
+  but does not add them to the registration gate (still `MatchMgr !=
+  nil && RoundMgr != nil`) -- a missing `FinanceMgr` is a valid,
+  supported state (the placeholder fallback above), not a reason to
+  refuse to mount the route. **Update 2026-08-30:** the route is now
+  wrapped in `clearanceAuth(deps.ApplyAuth, ...)` -- see "Privacy
+  inconsistency -- resolved" below.
+- Frontend (`web/domains/players/player-overview-page-component.js`):
+  the money section now renders a Dues card (paid/unpaid badge, total
+  paid, last payment date, dues amount when configured) instead of the
+  static warning banner, falling back to the original warning banner
+  only when `money.tracked` is `false`.
+
+### Response shape
+
+```json
+"money": {
+  "tracked": true,
+  "paid": true,
+  "total_paid": 25.5,
+  "dues_amount": "25",
+  "payments": [
+    { "id": 1, "season_id": 1, "player_id": 1, "team_id": 2,
+      "amount": 25.5, "paid_at": "2026-01-05T00:00:00Z",
+      "recorded_by_user_id": 1, "note": "cash",
+      "created_at": "2026-08-29T..." }
+  ]
+}
+```
+
+When unpaid, `paid` is `false`, `total_paid` is `0`, `payments` is `[]`,
+and `message` is `"No dues payment recorded yet."` (`dues_amount` is
+omitted whenever the season has no `dues_amount` rule configured, and
+`message` is omitted whenever `paid` is `true`).
+
+### Privacy inconsistency -- resolved 2026-08-30
+
+At initial ship (2026-08-29), Financial Phase 1's ALL-four-routes-
+protected convention (`clearanceAuth`, league_admin/admin/system_admin --
+money data should not be public just because other domain reads are)
+was not extended to Player Overview: `GET /api/players/{id}/overview`
+stayed an unprotected GET even though it now surfaced the same kind of
+per-player dues status (paid/unpaid, amounts, payment dates). This was
+flagged as open question `PLAYERS-Q002` rather than resolved
+unilaterally, since the approved scope for that phase did not include
+an auth change.
+
+**PM decision (2026-08-30):** protect the whole route with
+`clearanceAuth(deps.ApplyAuth, ...)`, the same role gate Financial
+Phase 1 uses -- not field-level auth on just `money`. Rationale: this
+screen is admin-facing until real player login/permissions exist, and
+gating the full route is simpler and clearer than trying to keep a
+field-level exception legible. `registerPlayerOverviewRoute` now wraps
+its handler in `clearanceAuth` exactly like `registerFinanceRoutes`
+does; the nav entry (`#nav-item-player-overview`) is hidden unless the
+resolved identity qualifies, reusing the same role check the Financial
+nav entry already computes in `updateIdentityUI()` (`web/app.js`).
+Under the shared `testServer()` test helper (no `ApplyAuth` wired),
+`clearanceAuth` is a passthrough and the route stays open -- the same
+behavior every other clearanceAuth-protected route already has under
+that setup, not a special case introduced here. This resolves
+`PLAYERS-Q002`; see `doc/roadmap.md`'s Resolved Questions table for the
+recorded decision text.
+
+**Follow-up correction (2026-08-30, same day):** the Players list's
+"View Overview" row button initially still rendered unconditionally --
+a non-admin viewer would see it, click it, and get the existing
+401/403 toast rather than a broken page, which was safe but did not
+match the admin-facing screen intent. PM asked for the row action
+hidden too, matching the nav's intent exactly. Fixed by extracting the
+role check in `web/app.js` into a shared top-level function,
+`hasFinanceAdminRole(identity)`, used by `updateIdentityUI()` for both
+nav entries *and* passed as a new third `canViewPlayerOverview`
+argument to `<players-page>.refresh()`. `players-page-component.js`
+stores it as a private field and only renders the "View Overview"
+button when it is `true` -- no auth logic was added inside the
+component itself, per PM's explicit instruction; it only renders what
+the shell tells it. One known limitation, not fixed: setting or
+clearing the Admin Key only calls `updateIdentityUI()` (nav
+visibility), not `loadSection()`, so if a viewer is already on the
+Players page when their key changes, the row button won't
+appear/disappear until they navigate away and back -- this matches how
+every other identity-gated nav item already behaves in this shell (none
+of them force a live re-render of the currently active section either),
+so it was not treated as a new gap introduced by this fix.
+
+### What Phase 2 defers
+
+- Payout display on Player Overview (team-level; judged not trivial
+  enough to bundle in per PM's "unless trivial" guidance).
+- Payment entry from Player Overview (still Financial-screen-only).
+- Any change to the Financial screen or standings behavior (none made).
+
+### Verification
+
+`go test ./... -count=1` and `go build ./...` pass, including: 1 new
+`FinanceService` delegation test and 3 new `FinanceStore` tests
+(empty/newest-first/scoped-by-player) for `ListDuesPaymentsByPlayer`;
+4 new handler tests in `handlers/api_player_overview_money_test.go`
+(no payments -> `tracked=true paid=false`, one payment -> `tracked=true
+paid=true` with correct `total_paid`, a `dues_amount` rule shown in the
+response, and an unrostered player still getting a real money status);
+and 7 new handler tests in `handlers/api_player_overview_auth_test.go`
+(no header -> 401 with `WWW-Authenticate`, invalid token -> 403, the
+static `LEAGUE_ADMIN_TOKEN` -> 403, `score_keeper` role -> 403, and
+league_admin/admin/system_admin each reaching the handler). All six
+pre-existing Phase 1 Player Overview tests pass unchanged (they use the
+shared `testServer()` helper, which has no `ApplyAuth`/`FinanceMgr`
+wired, so they continue to exercise the unauthenticated,
+`tracked=false` fallback path). `node --check` passes on the changed JS
+files. Manually verified end to end against a local server build:
+created a league/season/team/player, confirmed the initial overview
+showed `tracked:true paid:false`, recorded a real dues payment through
+the Financial API, confirmed the overview updated to `paid:true` with
+the correct `total_paid` and payment history, then set a `dues_amount`
+season rule and confirmed it appeared in the response (this manual pass
+predates the auth correction and used an unauthenticated local build;
+the automated auth tests above are what verify the corrected behavior).
+Actual browser rendering of the new Dues card and the corrected nav
+gating remain **NOT VERIFIED (no browser)** in this developer's tool
+session. The row-action follow-up (`hasFinanceAdminRole` extraction,
+`players-page-component.js`'s conditional button render) added no new
+Go code, so `go test ./... -count=1`/`go build ./...` were rerun for
+regression safety only; `node --check` was rerun on `web/app.js`,
+`web/domains/players/players-page-component.js`, and
+`web/domains/players/player-overview-page-component.js`. Actual browser
+confirmation that the row button appears/disappears with the resolved
+identity remains **NOT VERIFIED (no browser)** as well.
 
 ## Questions
 
@@ -343,3 +522,46 @@ discovery (`GetPlayerStats`'s `WinPct` always zero; the league-scoped
 stats query still dropping roster-only players) were deliberately not
 bundled into this phase. See "Player Overview Phase 1 Implementation"
 above for full detail.
+
+### 2026-08-29 - Player Overview Phase 2: real dues status
+
+**Status:** `accepted`
+
+Replaced the Phase 1 money placeholder with real per-player season dues
+status (paid/unpaid, total paid, payment history, configured dues
+amount), backed by a new `FinanceStore.ListDuesPaymentsByPlayer` read
+method added to the `finances` domain from Financial Phase 1 rather than
+duplicating SQL in the handler. Admin-viewable only; no player login or
+permissions added. Payout display and payment entry from this screen
+were both left out -- payouts are team-level (not trivial to bundle
+here per PM's "unless trivial" guidance) and payment entry stays
+Financial-screen-only. `FinanceManager` is optional in the route's
+parameters (falls back to the Phase 1 placeholder when nil, e.g. in the
+shared test helper), so no existing Phase 1 test needed to change.
+At initial ship, Player Overview's money section was reachable through
+an unprotected GET even though Financial Phase 1 deliberately put the
+same money data behind `clearanceAuth` -- flagged as open question
+`PLAYERS-Q002` rather than resolved unilaterally. See the "Auth
+correction" entry below for the resolution.
+
+### 2026-08-30 - Player Overview Phase 2 auth correction: protect the route
+
+**Status:** `accepted`
+
+Resolves `PLAYERS-Q002`. `GET /api/players/{id}/overview` is now
+protected by `clearanceAuth` (league_admin/admin/system_admin) -- the
+same role gate Financial Phase 1 uses -- rather than field-level auth
+on just `money`, per explicit PM decision: this screen is admin-facing
+until real player login/permissions exist, and gating the whole route
+is simpler and clearer. The nav entry is hidden unless the resolved
+identity qualifies. Same-day follow-up: PM asked for the Players list's
+"View Overview" row button hidden too, matching the nav's intent
+exactly (it had initially been left rendering unconditionally, failing
+safely with a 401/403 toast for non-admins rather than a broken page,
+but not matching the admin-facing decision). Fixed by extracting the
+role check into a shared `hasFinanceAdminRole(identity)` function in
+`web/app.js`, used by both nav entries and passed into
+`<players-page>.refresh()` as a new `canViewPlayerOverview` argument --
+no auth logic was added inside the component. See "Privacy
+inconsistency -- resolved 2026-08-30" in "Player Overview Phase 2
+Implementation" above for full detail.

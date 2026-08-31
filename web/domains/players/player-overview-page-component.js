@@ -1,8 +1,8 @@
-// <player-overview-page> - Player Overview Phase 1: a read-only, admin-
-// viewable summary of one player's season -- team, schedule, stats,
-// current handicap, and a money placeholder (dues/payouts are not
-// tracked yet). Presentation-only; all data comes from the backend's
-// GET /api/players/{id}/overview aggregate.
+// <player-overview-page> - a read-only, admin-viewable summary of one
+// player's season -- team, schedule, stats, current handicap, and season
+// dues status (Player Overview Phase 2, backed by the finances domain
+// added in Financial Phase 1). Presentation-only; all data comes from
+// the backend's GET /api/players/{id}/overview aggregate.
 //
 // Public API:
 //   refresh(allPlayers, activeSeason, preSelectPlayerId)
@@ -21,6 +21,11 @@ function esc(s) {
 }
 
 function fmtHC(v) { return (v >= 0 ? '+' : '') + v; }
+
+function fmtMoney(v) {
+  const n = Number(v) || 0;
+  return '$' + n.toFixed(2);
+}
 
 class PlayerOverviewPage extends HTMLElement {
   #allPlayers   = [];
@@ -132,11 +137,33 @@ class PlayerOverviewPage extends HTMLElement {
       </div>
     </div>`;
 
-    html += `<div class="alert alert-warning mb-0">
-      <i class="bi bi-cash-coin me-1"></i>${esc(overview.money.message)}
-    </div>`;
+    html += this.#renderMoney(overview.money);
 
     return html;
+  }
+
+  #renderMoney(money) {
+    if (!money.tracked) {
+      return `<div class="alert alert-warning mb-0">
+        <i class="bi bi-cash-coin me-1"></i>${esc(money.message)}
+      </div>`;
+    }
+
+    const latest = money.payments && money.payments.length ? money.payments[0] : null;
+    const duesAmountNote = money.dues_amount
+      ? `<span class="text-muted small ms-2">Dues amount: ${esc(money.dues_amount)}</span>`
+      : '';
+
+    return `<div class="card mb-0">
+      <div class="card-header fw-semibold py-2">Dues${duesAmountNote}</div>
+      <div class="card-body d-flex align-items-center gap-4">
+        ${money.paid
+          ? '<span class="badge bg-success">Paid</span>'
+          : '<span class="badge bg-secondary">Unpaid</span>'}
+        <div><div class="text-muted small">Total Paid</div><div class="fw-bold">${fmtMoney(money.total_paid)}</div></div>
+        <div><div class="text-muted small">Last Payment</div><div class="fw-bold">${latest ? esc(latest.paid_at) : '<span class="text-muted">None</span>'}</div></div>
+      </div>
+    </div>`;
   }
 }
 

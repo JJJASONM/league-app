@@ -53,6 +53,11 @@ func (s *FinanceService) ListDuesPayments(ctx context.Context, seasonID int64) (
 	return s.store.ListDuesPayments(ctx, seasonID)
 }
 
+// ListDuesPaymentsByPlayer returns one player's dues payments for the season.
+func (s *FinanceService) ListDuesPaymentsByPlayer(ctx context.Context, seasonID, playerID int64) ([]models.DuesPayment, error) {
+	return s.store.ListDuesPaymentsByPlayer(ctx, seasonID, playerID)
+}
+
 // RecordPayout validates the input and inserts one payout row. Returns
 // domainerr.InvalidInput when season_id/team_id are missing or amount is
 // not positive. Amount is always admin-entered -- this method does not

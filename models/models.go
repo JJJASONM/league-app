@@ -275,13 +275,24 @@ type PlayerOverviewStats struct {
 	WinPct    float64 `json:"win_pct"`
 }
 
-// PlayerOverviewMoney is an explicit placeholder -- dues/payment tracking
-// does not exist in this schema. Tracked is always false in Phase 1;
-// the field exists so the frontend can render an honest "not tracked
-// yet" section instead of omitting money entirely or inventing a number.
+// PlayerOverviewMoney is the player's season dues status (Player Overview
+// Phase 2, backed by the finances domain added in Financial Phase 1).
+// Tracked is true whenever a FinanceManager is wired; it is false only in
+// test-only setups that omit one, in which case Message explains why
+// money data is unavailable rather than showing a real Phase 1 "not
+// tracked yet" claim. Paid is true whenever Payments is non-empty --
+// there is no partial-payment/balance math. DuesAmount is read from the
+// season_rules "dues_amount" freeform key (informational display only)
+// and is empty when unset. Payout display is intentionally not included
+// here -- payouts are team-level, not player-level, and are out of scope
+// for Player Overview per PM decision.
 type PlayerOverviewMoney struct {
-	Tracked bool   `json:"tracked"`
-	Message string `json:"message"`
+	Tracked    bool          `json:"tracked"`
+	Paid       bool          `json:"paid"`
+	TotalPaid  float64       `json:"total_paid"`
+	DuesAmount string        `json:"dues_amount,omitempty"`
+	Payments   []DuesPayment `json:"payments"`
+	Message    string        `json:"message,omitempty"`
 }
 
 // DuesPayment is one recorded dues payment for a player in a season

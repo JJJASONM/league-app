@@ -1265,6 +1265,108 @@ with every prior staging pass's bootstrap-user handling.
   populated and Player Overview was unaffected, so this is tracked below as
   a low-severity follow-up rather than a blocker for this verification.
 
+### 18a. Player Overview Screen Phase 2 -- Real Dues Status (2026-08-29)
+
+- Browser: the Player Overview screen's money section now shows a real
+  Dues card instead of the static placeholder.
+  - [ ] **NOT VERIFIED (no browser)**: selecting a player should show a
+        Dues card with a paid/unpaid badge, total paid, last payment
+        date, and the configured dues amount when the season has one --
+        replacing the old "Dues and payouts are not tracked yet" banner
+        (that banner still renders as a fallback when `money.tracked` is
+        `false`, e.g. in a test-only setup with no `FinanceManager`
+        wired). **API-verified** against a local server build with a
+        real seeded league/season/team/player: the initial overview
+        showed `money.tracked:true, paid:false`; recording a real dues
+        payment through `POST
+        /api/seasons/{id}/finances/dues-payments` and re-fetching the
+        overview showed `paid:true` with the correct `total_paid` and
+        the payment in `money.payments`; setting a `dues_amount`
+        season_rules key and re-fetching showed it in
+        `money.dues_amount`.
+- New focused Go tests (all passing): 1 new `FinanceService` delegation
+  test and 3 new `FinanceStore` tests (empty/newest-first/scoped-by-
+  player) for `ListDuesPaymentsByPlayer`
+  (`backend/domains/finances/service_test.go`,
+  `backend/storage/sqlite/finances_store_test.go`); 4 new handler tests
+  in `handlers/api_player_overview_money_test.go` covering no-payments
+  (`tracked=true paid=false`), one-payment (`tracked=true paid=true`
+  with correct `total_paid`), a `dues_amount` rule shown in the
+  response, and an unrostered player still getting a real money status.
+  All six pre-existing Phase 1 Player Overview tests
+  (`handlers/api_player_overview_test.go`) pass unchanged -- they use
+  the shared `testServer()` helper, which has no `FinanceManager`
+  wired, so they continue to exercise the `tracked=false` fallback path
+  exactly as before.
+- At initial ship (2026-08-29), `GET /api/players/{id}/overview` was an
+  unprotected read that surfaced the same per-player money data
+  (paid/unpaid, amounts, payment dates) Financial Phase 1 deliberately
+  put behind `clearanceAuth` for its own routes -- flagged as open
+  question `PLAYERS-Q002` rather than resolved in this pass. The
+  API-verified evidence above (initial `tracked:false`, recording a
+  payment, setting `dues_amount`) was gathered against that
+  unauthenticated build. **See section 18b below for the auth
+  correction and its own verification.**
+- Staging verification: not yet done for this phase.
+
+### 18b. Player Overview Screen Phase 2 -- Auth Correction (2026-08-30)
+
+Resolves `PLAYERS-Q002` (see 18a above and `doc/roadmap.md`'s Resolved
+Questions table). `GET /api/players/{id}/overview` now requires
+`clearanceAuth` (league_admin/admin/system_admin) -- the same role gate
+Financial Phase 1 uses -- instead of staying an unprotected read.
+
+- Browser: the Player Overview nav entry and the Players list's "View
+  Overview" row button are both now hidden unless the resolved Admin
+  Key identity qualifies, matching the Financial nav entry's gating
+  exactly.
+  - [ ] **NOT VERIFIED (no browser)**: without a valid league_admin/
+        admin/system_admin Admin Key, the Player Overview nav entry
+        should stay hidden. **Confirmed at the code level**:
+        `web/app.js`'s `updateIdentityUI()` toggles
+        `#nav-item-player-overview`'s `d-none` class using a shared
+        `hasFinanceAdminRole(identity)` function (extracted from the
+        Financial nav entry's own check).
+  - [ ] **NOT VERIFIED (no browser)**: without a valid league_admin/
+        admin/system_admin Admin Key, the "View Overview" button should
+        not render on any Players list row at all (same-day follow-up
+        correction -- it initially rendered unconditionally). **Confirmed
+        at the code level**: `loadSection()`'s `'players'` case now
+        passes `hasFinanceAdminRole(state.currentIdentity)` as a third
+        argument to `<players-page>.refresh()`;
+        `players-page-component.js` stores it and only renders the
+        button's markup when it is `true` -- no auth logic added inside
+        the component.
+- New focused Go tests (all passing, `handlers/api_player_overview_auth_test.go`):
+  no `Authorization` header -> 401 with `WWW-Authenticate`; an invalid
+  token -> 403; the static `LEAGUE_ADMIN_TOKEN` -> 403 (personal-key-
+  only auth has no static-token fallback, matching every other
+  `clearanceAuth` route); a `score_keeper`-role user -> 403; and
+  league_admin, admin, and system_admin each reaching the handler
+  (200). **API-verified** against a `financeTestServer` build (real
+  `ApplyAuthStore`) for all seven cases.
+- `handlers/api_player_overview_money_test.go`'s four money-behavior
+  tests were updated to authenticate as a league_admin user (via a new
+  `getPlayerOverviewAuth`/`financeAdminKey` helper pair) now that the
+  route requires it -- all four still pass with the same assertions as
+  18a.
+- All six pre-existing Phase 1 tests (`handlers/api_player_overview_test.go`,
+  using the plain `testServer()` helper with no `ApplyAuth` wired) pass
+  unchanged -- `clearanceAuth` is a passthrough when its resolver is
+  nil, the same behavior every other `clearanceAuth`-protected route
+  already has under that test setup.
+- `node --check` passes on all three changed JS files: `web/app.js`,
+  `web/domains/players/players-page-component.js`,
+  `web/domains/players/player-overview-page-component.js` (unchanged
+  content, rechecked for regression safety).
+- Known limitation, not a gap: setting or clearing the Admin Key only
+  calls `updateIdentityUI()` (nav visibility), not `loadSection()`, so
+  a viewer already on the Players page when their key changes won't see
+  the row button appear/disappear until they navigate away and back --
+  matches how every other identity-gated nav item in this shell already
+  behaves (none force a live re-render of the currently active section).
+- Staging verification: not yet done for this correction.
+
 ### 19. Weekly Summary Screen (Phase 1, 2026-08-27)
 
 - Browser: "Weekly Summary" nav entry, season/week selector.

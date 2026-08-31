@@ -33,7 +33,13 @@ function loadSection(sec) {
     case 'dashboard': document.querySelector('dashboard-page')?.refresh(state.activeLeague, state.activeSeason, state.allTeams, state.allPlayers); break;
     case 'seasons':   document.querySelector('seasons-page')?.refresh(state.activeLeague, state.allSeasons, state.allTeams); break;
     case 'teams':     loadTeams(); break;
-    case 'players':   document.querySelector('players-page')?.refresh(state.allTeams, state.activeLeague); break;
+    case 'players':
+      document.querySelector('players-page')?.refresh(
+        state.allTeams,
+        state.activeLeague,
+        hasFinanceAdminRole(state.currentIdentity)
+      );
+      break;
     case 'schedule':  document.querySelector('schedule-page')?.refresh(state.allSeasons, state.allTeams, state.activeLeague); break;
     case 'lineup':    document.querySelector('lineup-page')?.refresh(state.allSeasons, state.activeSeason, state.allTeams, state.allPlayers); break;
     case 'entry':
@@ -232,6 +238,18 @@ async function resolveCurrentIdentity() {
   return identity;
 }
 
+// hasFinanceAdminRole is the single definition of "can see money data"
+// (league_admin/admin/system_admin -- the same role set clearanceAuth
+// allows on Financial Phase 1's routes and, since the Phase 2 auth
+// correction, Player Overview's route too). Used to gate the Financial
+// nav entry, the Player Overview nav entry, and the Players list's
+// "View Overview" row action -- one definition shared by all three so
+// they cannot drift out of sync with each other or with the backend.
+function hasFinanceAdminRole(identity) {
+  return !!identity &&
+    (identity.role === 'system_admin' || identity.role === 'admin' || identity.role === 'league_admin');
+}
+
 function updateIdentityUI() {
   const identity = appContext.getState().currentIdentity;
   const statusEl = document.getElementById('admin-key-current-status');
@@ -245,12 +263,13 @@ function updateIdentityUI() {
   const canManageUsers = !!identity && (identity.role === 'system_admin' || identity.role === 'admin');
   document.getElementById('nav-item-users')?.classList.toggle('d-none', !canManageUsers);
 
-  // Financial Phase 1: finance routes require league_admin/admin/system_admin
-  // (the same role set clearanceAuth allows), matching the backend exactly --
-  // unlike Users, league_admin also qualifies here.
-  const canManageFinances = !!identity &&
-    (identity.role === 'system_admin' || identity.role === 'admin' || identity.role === 'league_admin');
+  const canManageFinances = hasFinanceAdminRole(identity);
   document.getElementById('nav-item-finances')?.classList.toggle('d-none', !canManageFinances);
+
+  // Player Overview Phase 2 correction: the route now requires the same
+  // clearanceAuth role set as Financial Phase 1 (it surfaces the same kind
+  // of per-player money data), so the nav entry is gated identically.
+  document.getElementById('nav-item-player-overview')?.classList.toggle('d-none', !canManageFinances);
 }
 
 function openAdminKeyModal() {

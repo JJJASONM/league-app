@@ -1,9 +1,17 @@
 // <players-page> component.
 //
 // Public API:
-//   refresh(allTeams, activeLeague)
+//   refresh(allTeams, activeLeague, canViewPlayerOverview = false)
 //     Called by the shell when the Players section activates or league context changes.
-//     Fetches and renders the current player list.
+//     Fetches and renders the current player list. canViewPlayerOverview
+//     controls whether each row's "View Overview" button renders -- the
+//     shell computes it (hasFinanceAdminRole in web/app.js) from the
+//     resolved Admin Key identity, the same role check that gates the
+//     Player Overview nav entry itself (Player Overview Phase 2 exposes
+//     per-player money data behind clearanceAuth, so the row-level deep
+//     link into it must not be offered to viewers who cannot reach the
+//     route). No auth logic lives in this component -- it only renders
+//     what it is told.
 //
 // Custom events dispatched (bubbles: true):
 //   players-data-changed  { detail: { players } }
@@ -34,6 +42,7 @@ class PlayersPage extends HTMLElement {
   #allPlayers   = [];
   #allTeams     = [];
   #activeLeague = null;
+  #canViewPlayerOverview = false;
 
   connectedCallback() {
     this.innerHTML = `
@@ -80,9 +89,10 @@ class PlayersPage extends HTMLElement {
     });
   }
 
-  refresh(allTeams, activeLeague) {
+  refresh(allTeams, activeLeague, canViewPlayerOverview = false) {
     this.#allTeams    = allTeams    ?? [];
     this.#activeLeague = activeLeague;
+    this.#canViewPlayerOverview = !!canViewPlayerOverview;
     this.#load();
   }
 
@@ -183,8 +193,8 @@ class PlayersPage extends HTMLElement {
         <td>${p.team_name ? esc(p.team_name) : `<span class="text-muted">${DASH}</span>`}</td>
         <td class="text-muted small">${esc(String(p.phone || DASH))}</td>
         <td class="text-end">
-          <button class="btn btn-outline-primary btn-sm py-0 me-1"
-            data-action="view-player-overview" data-player-id="${p.id}" title="View Overview"><i class="bi bi-person-lines-fill"></i></button>
+          ${this.#canViewPlayerOverview ? `<button class="btn btn-outline-primary btn-sm py-0 me-1"
+            data-action="view-player-overview" data-player-id="${p.id}" title="View Overview"><i class="bi bi-person-lines-fill"></i></button>` : ''}
           <button class="btn btn-outline-secondary btn-sm py-0 me-1"
             data-action="edit-player" data-player-id="${p.id}"><i class="bi bi-pencil"></i></button>
           <button class="btn btn-outline-danger btn-sm py-0"

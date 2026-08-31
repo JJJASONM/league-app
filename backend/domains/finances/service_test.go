@@ -11,10 +11,11 @@ import (
 )
 
 type stubFinanceStore struct {
-	insertDuesFn   func(ctx context.Context, row models.DuesPayment) (models.DuesPayment, error)
-	listDuesFn     func(ctx context.Context, seasonID int64) ([]models.DuesPayment, error)
-	insertPayoutFn func(ctx context.Context, row models.Payout) (models.Payout, error)
-	listPayoutsFn  func(ctx context.Context, seasonID int64) ([]models.Payout, error)
+	insertDuesFn       func(ctx context.Context, row models.DuesPayment) (models.DuesPayment, error)
+	listDuesFn         func(ctx context.Context, seasonID int64) ([]models.DuesPayment, error)
+	listDuesByPlayerFn func(ctx context.Context, seasonID, playerID int64) ([]models.DuesPayment, error)
+	insertPayoutFn     func(ctx context.Context, row models.Payout) (models.Payout, error)
+	listPayoutsFn      func(ctx context.Context, seasonID int64) ([]models.Payout, error)
 }
 
 func (s *stubFinanceStore) InsertDuesPayment(ctx context.Context, row models.DuesPayment) (models.DuesPayment, error) {
@@ -26,6 +27,12 @@ func (s *stubFinanceStore) InsertDuesPayment(ctx context.Context, row models.Due
 func (s *stubFinanceStore) ListDuesPayments(ctx context.Context, seasonID int64) ([]models.DuesPayment, error) {
 	if s.listDuesFn != nil {
 		return s.listDuesFn(ctx, seasonID)
+	}
+	return []models.DuesPayment{}, nil
+}
+func (s *stubFinanceStore) ListDuesPaymentsByPlayer(ctx context.Context, seasonID, playerID int64) ([]models.DuesPayment, error) {
+	if s.listDuesByPlayerFn != nil {
+		return s.listDuesByPlayerFn(ctx, seasonID, playerID)
 	}
 	return []models.DuesPayment{}, nil
 }
@@ -148,6 +155,27 @@ func TestFinanceService_ListDuesPayments_DelegatesToStore(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("want 2 payments, got %d", len(got))
+	}
+}
+
+// -- ListDuesPaymentsByPlayer -------------------------------------------------
+
+func TestFinanceService_ListDuesPaymentsByPlayer_DelegatesToStore(t *testing.T) {
+	want := []models.DuesPayment{{ID: 3}}
+	svc := newFinanceSvc(&stubFinanceStore{
+		listDuesByPlayerFn: func(_ context.Context, seasonID, playerID int64) ([]models.DuesPayment, error) {
+			if seasonID != 5 || playerID != 42 {
+				t.Errorf("want seasonID=5 playerID=42, got seasonID=%d playerID=%d", seasonID, playerID)
+			}
+			return want, nil
+		},
+	})
+	got, err := svc.ListDuesPaymentsByPlayer(context.Background(), 5, 42)
+	if err != nil {
+		t.Fatalf("ListDuesPaymentsByPlayer: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("want 1 payment, got %d", len(got))
 	}
 }
 

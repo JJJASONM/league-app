@@ -161,6 +161,9 @@ type TeamManager interface {
 type FinanceManager interface {
 	RecordDuesPayment(ctx context.Context, input finances.RecordDuesPaymentInput) (models.DuesPayment, error)
 	ListDuesPayments(ctx context.Context, seasonID int64) ([]models.DuesPayment, error)
+	// ListDuesPaymentsByPlayer returns one player's dues payments for the
+	// season (Player Overview Phase 2).
+	ListDuesPaymentsByPlayer(ctx context.Context, seasonID, playerID int64) ([]models.DuesPayment, error)
 	RecordPayout(ctx context.Context, input finances.RecordPayoutInput) (models.Payout, error)
 	ListPayouts(ctx context.Context, seasonID int64) ([]models.Payout, error)
 }

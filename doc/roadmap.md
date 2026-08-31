@@ -136,6 +136,23 @@ These items should stay small enough to review and ship independently.
     history, and multi-season views are all explicitly deferred. See
     `doc/domains/players/README.md`'s "Player Overview Phase 1
     Implementation" section for full detail.
+  - **Player Overview screen Phase 2 complete 2026-08-29, auth-corrected
+    2026-08-30** -- see Completed / Largely Completed below. Replaced
+    the Phase 1 money-not-tracked placeholder with real per-player
+    season dues status (paid/unpaid, total paid, payment history,
+    configured dues amount), backed by a new
+    `FinanceStore.ListDuesPaymentsByPlayer` read method on the
+    `finances` domain. Payout display and payment entry from this
+    screen remain out of scope. `GET /api/players/{id}/overview` is now
+    protected by `clearanceAuth` (league_admin/admin/system_admin),
+    resolving `PLAYERS-Q002` -- the route surfaces the same kind of
+    money data Financial Phase 1 keeps behind `clearanceAuth`, so it is
+    now gated the same way rather than left open. The nav entry and the
+    Players list's "View Overview" row button are both hidden unless
+    the resolved identity qualifies, matching the Financial screen's
+    gating exactly. See `doc/domains/players/README.md`'s "Player
+    Overview Phase 2
+    Implementation" section for full detail.
   - **Weekly Summary screen Phase 1 complete 2026-08-27** -- see
     Completed / Largely Completed below. Built entirely on the existing
     Week Recap endpoint (no new aggregate endpoint, no new auth) -- added
@@ -159,10 +176,11 @@ These items should stay small enough to review and ship independently.
     Unlike every other domain, ALL finance routes (reads and writes)
     require `clearanceAuth` -- money data is not made public just
     because other domain reads are. Payout amounts are always
-    admin-entered; standings never compute them automatically. Player
-    Overview money integration, real player login, payment
-    editing/voiding, penalties, and payout formulas are all explicitly
-    deferred. See `doc/domains/finances/README.md` for full detail.
+    admin-entered; standings never compute them automatically. Real
+    player login, payment editing/voiding, penalties, and payout
+    formulas are all explicitly deferred. Player Overview money
+    integration shipped as Phase 2 on 2026-08-29 (see above and below).
+    See `doc/domains/finances/README.md` for full detail.
 
 ## Next
 
@@ -929,6 +947,69 @@ follow-up.
   handoff. Actual browser rendering of the new screen remains **NOT
   VERIFIED (no browser)**. See `doc/domains/finances/README.md` for
   full detail.
+- Player Overview screen Phase 2 (2026-08-29). Replaced the Phase 1
+  money-not-tracked placeholder with real per-player season dues status
+  now that Financial Phase 1's `finances` domain exists. Added
+  `FinanceStore.ListDuesPaymentsByPlayer(ctx, seasonID, playerID)` (plus
+  the matching `FinanceService`/`FinanceManager` passthrough) rather than
+  duplicating SQL in the Player Overview handler, per PM's implementation
+  guidance -- a straightforward narrowing of `ListDuesPayments`' query to
+  one player. `getPlayerOverview` gained `financeMgr`/`ruleMgr`
+  parameters and a new `playerOverviewMoney` composition helper: paid/
+  total_paid/payment history from `ListDuesPaymentsByPlayer`, plus the
+  `dues_amount` season_rules key (via `RuleManager.List`, matching
+  Financial Phase 1's own convention) for display only. `financeMgr` may
+  be `nil` (the shared `testServer()` test helper doesn't wire one); when
+  `nil`, money falls back to the original placeholder rather than
+  erroring, so none of the six pre-existing Phase 1 tests needed to
+  change. Money composition uses the player's own ID directly, so an
+  unrostered player still gets a real dues status. Payout display was
+  considered and left out -- team-level data judged not trivial enough to
+  bundle onto a player-level screen per PM's "unless trivial" guidance;
+  payment entry also remains Financial-screen-only. New frontend: the
+  money section renders a real Dues card (paid/unpaid badge, total paid,
+  last payment date, configured dues amount) instead of the static
+  warning banner, falling back to the original banner only when
+  `money.tracked` is `false`. At initial ship, this route remained an
+  unprotected GET even though it surfaced the same per-player money
+  data Financial Phase 1 deliberately put behind `clearanceAuth` --
+  flagged as open question `PLAYERS-Q002` rather than resolved
+  unilaterally. **Auth-corrected 2026-08-30, resolving PLAYERS-Q002:**
+  PM decided the whole route, not just the `money` field, must require
+  `clearanceAuth` (league_admin/admin/system_admin) -- simpler and
+  clearer than field-level auth, and this screen is admin-facing until
+  real player login exists. `registerPlayerOverviewRoute` now wraps the
+  handler in `clearanceAuth(applyAuth, ...)`; the nav entry is hidden
+  unless the resolved identity qualifies. Under the shared `testServer()`
+  test helper (no `ApplyAuth` wired), `clearanceAuth` is a passthrough
+  and the route stays open, matching every other clearanceAuth-protected
+  route's behavior under that same setup -- so all six pre-existing
+  Phase 1 tests kept passing unchanged. **Same-day follow-up:** the
+  Players list's "View Overview" row button had initially been left
+  rendering unconditionally -- safe (a non-admin got the existing
+  401/403 toast, not a broken page) but not matching the admin-facing
+  decision. PM asked for it hidden too. Fixed by extracting the role
+  check into a shared `hasFinanceAdminRole(identity)` function in
+  `web/app.js`, reused by both nav entries and passed into
+  `<players-page>.refresh()` as a new `canViewPlayerOverview` argument
+  -- no auth logic added inside the component itself. Verified with
+  `go test ./... -count=1` and `go build ./...` (1 new FinanceService
+  delegation test, 3 new FinanceStore tests for the new read method, 4
+  new money-behavior handler tests, 7 new auth-enforcement handler tests
+  covering no-header/invalid-token/static-token/score_keeper rejections
+  and league_admin/admin/system_admin success, all six pre-existing
+  Phase 1 tests unchanged), `node --check` on all changed JS files
+  (`web/app.js`, `players-page-component.js`,
+  `player-overview-page-component.js`), and a full manual walkthrough
+  against a local server build: created a league/season/team/player,
+  confirmed the initial overview showed `tracked:true paid:false`,
+  recorded a real dues payment through the Financial API, confirmed the
+  overview updated to `paid:true` with correct `total_paid` and
+  history, then set a `dues_amount` season rule and confirmed it
+  appeared in the response. Actual browser rendering of the new Dues
+  card and the corrected nav/row-button gating remain **NOT VERIFIED
+  (no browser)**. See `doc/domains/players/README.md`'s "Player
+  Overview Phase 2 Implementation" section for full detail.
 
 ## Open Questions To Resolve
 
@@ -944,6 +1025,7 @@ follow-up.
 | `USERS-Q001` | Users | Resolved 2026-07-27 - Admin-provisioned accounts; two-role model (system_admin, league_admin); personal API keys continue; player link deferred; route auth wires incrementally per phase. |
 | `MATCHES-Q001` | Matches | Resolved 2026-08-25 - Two new admin-attested match-level states (`approved`, `processed`) added underneath Close Week, not a single review status; processed matches count toward handicap eligibility before week close; real captain/player login approval deferred. See Weekly Score Processing Phase 1A. |
 | `PLAYERS-Q001` | Players | Resolved 2026-07-14 - Phase 1 quick-add uses at least one name, diff rating default 0, and optional team; duplicate detection and INCOMPLETE status deferred. |
+| `PLAYERS-Q002` | Players / Finances | Resolved 2026-08-30 - Player Overview is protected with `clearanceAuth` while it exposes dues/payment status. Player-facing access to a player's own money/stat/schedule view remains deferred until real player login/permissions exist. |
 | `CODES-Q001` | Codes | Resolved 2026-07-14 - behavior-driving codes remain developer-owned constants; DB-backed code tables deferred. |
 | `SCHEDULES-Q001` | Schedules | Resolved 2026-07-13 - preview policy and enforcement complete. |
 

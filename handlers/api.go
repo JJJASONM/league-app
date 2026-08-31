@@ -85,9 +85,15 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	// Player Overview route registration lives in
 	// api_player_overview_routes.go. Handler-level composition across
 	// PlayerMgr, SeasonMgr, TeamMgr, MatchMgr, and RoundMgr -- requires the
-	// latter two, which are optional elsewhere in Register.
+	// latter two, which are optional elsewhere in Register. FinanceMgr
+	// (Player Overview Phase 2) is passed through even when nil -- the
+	// handler falls back to the Phase 1 money placeholder in that case,
+	// so it does not gate registration. RuleMgr is required elsewhere in
+	// Register (never nil by this point). Protected by clearanceAuth
+	// (deps.ApplyAuth) since the money integration above -- see
+	// registerPlayerOverviewRoute's doc comment.
 	if deps.MatchMgr != nil && deps.RoundMgr != nil {
-		registerPlayerOverviewRoute(mux, deps.PlayerMgr, seasonMgr, deps.TeamMgr, deps.MatchMgr, deps.RoundMgr)
+		registerPlayerOverviewRoute(mux, deps.PlayerMgr, seasonMgr, deps.TeamMgr, deps.MatchMgr, deps.RoundMgr, deps.FinanceMgr, deps.RuleMgr, deps.ApplyAuth)
 	}
 
 	// Finance route registration lives in api_finances_routes.go. Handler-
