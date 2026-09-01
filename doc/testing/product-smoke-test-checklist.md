@@ -1269,20 +1269,22 @@ with every prior staging pass's bootstrap-user handling.
 
 - Browser: the Player Overview screen's money section now shows a real
   Dues card instead of the static placeholder.
-  - [ ] **NOT VERIFIED (no browser)**: selecting a player should show a
-        Dues card with a paid/unpaid badge, total paid, last payment
-        date, and the configured dues amount when the season has one --
-        replacing the old "Dues and payouts are not tracked yet" banner
-        (that banner still renders as a fallback when `money.tracked` is
-        `false`, e.g. in a test-only setup with no `FinanceManager`
-        wired). **API-verified** against a local server build with a
-        real seeded league/season/team/player: the initial overview
-        showed `money.tracked:true, paid:false`; recording a real dues
-        payment through `POST
-        /api/seasons/{id}/finances/dues-payments` and re-fetching the
-        overview showed `paid:true` with the correct `total_paid` and
-        the payment in `money.payments`; setting a `dues_amount`
-        season_rules key and re-fetching showed it in
+  - [x] **Browser-verified on staging (2026-09-01)**: selecting a
+        player shows a Dues card with a paid/unpaid badge, total paid,
+        and last payment date -- replacing the old "Dues and payouts
+        are not tracked yet" banner (that banner still renders as a
+        fallback when `money.tracked` is `false`, e.g. in a test-only
+        setup with no `FinanceManager` wired). Staging confirmed Blair
+        Flint's card rendering Paid, Total Paid ($1.23), and Last
+        Payment; the configured `dues_amount` display specifically was
+        not part of this staging pass's evidence. **API-verified**
+        against a local server build with a real seeded
+        league/season/team/player: the initial overview showed
+        `money.tracked:true, paid:false`; recording a real dues payment
+        through `POST /api/seasons/{id}/finances/dues-payments` and
+        re-fetching the overview showed `paid:true` with the correct
+        `total_paid` and the payment in `money.payments`; setting a
+        `dues_amount` season_rules key and re-fetching showed it in
         `money.dues_amount`.
 - New focused Go tests (all passing): 1 new `FinanceService` delegation
   test and 3 new `FinanceStore` tests (empty/newest-first/scoped-by-
@@ -1307,7 +1309,10 @@ with every prior staging pass's bootstrap-user handling.
   payment, setting `dues_amount`) was gathered against that
   unauthenticated build. **See section 18b below for the auth
   correction and its own verification.**
-- Staging verification: not yet done for this phase.
+- Staging verification: **PASS, 2026-09-01** -- see 18b below for the
+  full evidence (this phase's money rendering was verified together
+  with the auth correction in a single staging pass, since both landed
+  in the same commit).
 
 ### 18b. Player Overview Screen Phase 2 -- Auth Correction (2026-08-30)
 
@@ -1320,20 +1325,20 @@ Financial Phase 1 uses -- instead of staying an unprotected read.
   Overview" row button are both now hidden unless the resolved Admin
   Key identity qualifies, matching the Financial nav entry's gating
   exactly.
-  - [ ] **NOT VERIFIED (no browser)**: without a valid league_admin/
-        admin/system_admin Admin Key, the Player Overview nav entry
-        should stay hidden. **Confirmed at the code level**:
+  - [x] **Browser-verified on staging (2026-09-01)**: without a valid
+        league_admin/admin/system_admin Admin Key, the Player Overview
+        nav entry stays hidden. **Confirmed at the code level**:
         `web/app.js`'s `updateIdentityUI()` toggles
         `#nav-item-player-overview`'s `d-none` class using a shared
         `hasFinanceAdminRole(identity)` function (extracted from the
         Financial nav entry's own check).
-  - [ ] **NOT VERIFIED (no browser)**: without a valid league_admin/
-        admin/system_admin Admin Key, the "View Overview" button should
-        not render on any Players list row at all (same-day follow-up
-        correction -- it initially rendered unconditionally). **Confirmed
-        at the code level**: `loadSection()`'s `'players'` case now
-        passes `hasFinanceAdminRole(state.currentIdentity)` as a third
-        argument to `<players-page>.refresh()`;
+  - [x] **Browser-verified on staging (2026-09-01)**: without a valid
+        league_admin/admin/system_admin Admin Key, the "View Overview"
+        button does not render on any Players list row (same-day
+        follow-up correction -- it initially rendered unconditionally).
+        **Confirmed at the code level**: `loadSection()`'s `'players'`
+        case now passes `hasFinanceAdminRole(state.currentIdentity)` as
+        a third argument to `<players-page>.refresh()`;
         `players-page-component.js` stores it and only renders the
         button's markup when it is `true` -- no auth logic added inside
         the component.
@@ -1365,7 +1370,38 @@ Financial Phase 1 uses -- instead of staying an unprotected read.
   the row button appear/disappear until they navigate away and back --
   matches how every other identity-gated nav item in this shell already
   behaves (none force a live re-render of the currently active section).
-- Staging verification: not yet done for this correction.
+
+#### Staging verification (2026-09-01)
+
+**Result: PASS.** Verified on `http://league-staging.local`, `main` /
+`origin/main` at `9a2a158`.
+
+- **API-verified:** `GET /api/players/{id}/overview` without
+  Authorization returned 401; with the static `LEAGUE_ADMIN_TOKEN`
+  returned 403 (personal-key-only, no static fallback, as expected);
+  with a disposable `league_admin` personal key returned 200.
+- **Money data verified:** the authenticated response showed
+  `money.tracked=true`, an existing dues payment rendered as Paid,
+  total paid rendered as `$1.23`, and the last payment date rendered --
+  the old Phase 1 money placeholder did not render.
+- **Browser-verified, no Admin Key:** Player Overview nav hidden,
+  Financial nav hidden, Players list loaded normally, and the "View
+  Overview" row buttons were hidden on a fresh no-key page load (the
+  row-action correction's primary claim).
+- **Browser-verified, valid disposable `league_admin` Admin Key:** the
+  key resolved as `league_admin`; Player Overview nav visible; Financial
+  nav visible; the Players list showed 12 "View Overview" row buttons;
+  clicking one opened Blair Flint's Player Overview; the Dues card
+  rendered with Paid, Total Paid, and Last Payment.
+- **Cleanup:** browser Admin Key cleared, temporary local key file
+  removed. The disposable staging user was left in place -- no
+  delete-user endpoint exists, matching every prior staging pass's
+  bootstrap-user handling.
+- **Known limitation reconfirmed on staging:** changing or clearing the
+  Admin Key does not live-rerender an already-loaded Players table
+  until navigation/reload; a fresh no-key load behaves correctly. This
+  matches the code-level limitation already documented above and was
+  not treated as a new gap.
 
 ### 19. Weekly Summary Screen (Phase 1, 2026-08-27)
 
