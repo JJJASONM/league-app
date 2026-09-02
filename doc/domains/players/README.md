@@ -157,10 +157,23 @@ is admin-viewable only, per PM decision.
   team_id or player_id filter) and filters client-side (in the handler)
   on the resolved team_id matching `home_team_id`/`away_team_id`.
   Accepted for Phase 1 at current data volumes per PM decision.
+  **Update 2026-09-02 (Substitute Workflow Phase 1):** verified this
+  means a player's one-off match substituting for a *different* team
+  will not appear in their own schedule here, since the resolved
+  team_id is always their own team for the season, not the team they
+  subbed for. Accepted as a known, documented limitation rather than
+  the larger player-history redesign fixing it would require -- see
+  `doc/domains/matches/README.md`'s "Substitute Workflow Phase 1".
 - Stats are the player's season totals from the existing
   `RoundManager.GetPlayerStats` season-scoped query, matched by
   `player_id` from the full season response (no new query). Zero-valued
   when the player has no `match_results` rows for the season.
+  **Update 2026-09-02:** confirmed (with a new regression test,
+  `TestRoundStore_GetPlayerStats_SubstitutePlayer_StatsCountTowardOwnTeam`)
+  that this correctly counts a substitute's results from a match played
+  for someone else's team, since the underlying query matches
+  `match_results` by `player_id` alone with no team filter -- no code
+  change was needed here.
 - Money is an explicit placeholder (`{"tracked": false, "message": "..."}`)
   -- dues/payment tracking does not exist in this schema (confirmed
   during discovery: no table, column, or planned-but-deferred mention

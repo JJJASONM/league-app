@@ -168,10 +168,11 @@ These items should stay small enough to review and ship independently.
     side loop over the existing per-match process endpoint, no new bulk
     endpoint), handicap changes/recommendations, and next-week
     readiness. Close Week stays separate, linked to only via an "Open in
-    Schedule" button. Substitute workflows, a real bulk-process backend
-    endpoint, and payment/financial schema remain explicitly deferred.
-    See `doc/domains/matches/README.md`'s "Weekly Summary Phase 1"
-    section for full detail.
+    Schedule" button. Substitute workflows (shipped 2026-09-02, see
+    below), a real bulk-process backend endpoint, and payment/financial
+    schema remain/remained explicitly deferred. See
+    `doc/domains/matches/README.md`'s "Weekly Summary Phase 1" section
+    for full detail.
   - **Financial screen Phase 1 complete 2026-08-27** -- see Completed /
     Largely Completed below. New `finances` domain (`dues_payments` and
     `payouts` tables, both simple append-only history, no partial-
@@ -186,6 +187,22 @@ These items should stay small enough to review and ship independently.
     formulas are all explicitly deferred. Player Overview money
     integration shipped as Phase 2 on 2026-08-29 (see above and below).
     See `doc/domains/finances/README.md` for full detail.
+  - **Substitute Workflow Phase 1 complete 2026-09-02** -- see Completed
+    / Largely Completed below. `lineup_plans.is_sub`/`sub_for_id`
+    (schema already supported this, previously read-only) can now be
+    set/cleared via two new `clearanceAuth`-gated endpoints
+    (`POST`/`DELETE /api/lineup-plans/{id}/substitute`), rejected with
+    409 when the team's match is season-closed, week-closed, approved,
+    or processed -- the same lock set score edits respect. Match Entry
+    now resolves players (auto-fill and the manual picker) against the
+    full player list instead of the team roster, and the scoresheet
+    roster table gained a Sub/Undo control per slot. Weekly Summary's
+    player-stats query gained substitute-status fields (data only, no
+    new UI section yet). Player Overview's stats were verified to
+    already count a substitute's results correctly; its schedule
+    section still won't show a sub's one-off match for another team, an
+    accepted limitation. See `doc/domains/matches/README.md`'s
+    "Substitute Workflow Phase 1" section for full detail.
 
 ## Next
 
@@ -1091,6 +1108,61 @@ follow-up.
     league-scoped roster-only player through the full API requires a
     multi-step season/roster bootstrap the store tests already cover
     more directly and deterministically.
+- Substitute Workflow Phase 1 (2026-09-02). Discovery confirmed
+  `lineup_plans.is_sub`/`sub_for_id` already existed in the schema and
+  were readable, but every write path was hardcoded (`SaveTeamLineup`
+  always inserted `is_sub=0`, never set `sub_for_id`) and no test in the
+  repo exercised substitute creation at all. This phase: added two new
+  `clearanceAuth`-gated endpoints, `POST`/`DELETE
+  /api/lineup-plans/{id}/substitute`, that replace an existing lineup
+  slot's player in place (one row per slot, matching what Match Entry's
+  auto-fill already expects) rather than adding a parallel row.
+  `LineupService` gained a second constructor dependency, a narrow
+  `MatchLockChecker` interface (`IsSeasonClosedForMatch`, `IsWeekClosed`,
+  `GetMatchApprovalState`) that `RoundStore` already satisfies
+  structurally, so no second store had to be built -- callers pass the
+  same `RoundStore` instance already constructed for `RoundService`.
+  Rejected with 409 when the team's match for that season/week is
+  season-closed, week-closed, approved, or processed -- the same lock
+  set score edits respect, since a substitute swap changes who is
+  credited for a match just as much as a score edit would; allowed when
+  no match has been scheduled yet for that team/week. Match Entry
+  (`web/domains/matches/match-entry-page-component.js`) now resolves
+  players (round-result reload, lineup-plan auto-fill, and the manual
+  "Confirm Tonight's Lineup" picker) against the full player list
+  instead of the team-filtered roster arrays, since a substitute's
+  player_id may not carry the team's team_id -- the old team-filtered
+  lookups would have silently broken auto-fill for a substituted slot.
+  The picker's dropdowns now offer every league player, grouped "This
+  Team" / "Other Players (Substitute)". The scoresheet's roster table
+  gained a small "Sub" button per slot (shown only when that slot has a
+  known `lineup_plans` row and scores are still editable) opening a
+  shared modal, plus a "Sub for X" badge with an "Undo" link once
+  substituted. Weekly Summary's `GetWeekPlayerStats` gained
+  `is_sub`/`sub_for_name` fields via one additional `LEFT JOIN` on the
+  same season/team/week/player key it already groups by -- data only, no
+  new UI, since Weekly Summary doesn't render its `player_stats` array
+  in any screen yet (adding that display would be new UI construction,
+  not "showing status when data is already available"). Player
+  Overview's stats section was verified (not changed) to already count
+  a substitute's results correctly, since the underlying season-scoped
+  `GetPlayerStats` query matches `match_results` by player_id alone with
+  no team filter; its schedule section still won't show a substitute's
+  one-off match for a different team, an accepted, documented limitation
+  rather than the larger player-history redesign fixing it would
+  require. Verified with `go test ./... -count=1` and `go build ./...`
+  (12 new `LineupService` unit tests covering validation and all four
+  lock checks, 8 new SQLite `LineupStore` tests, 13 new handler tests
+  covering auth/lock/success paths end to end, 1 new Weekly Summary
+  store test, and 1 new Player Overview stats regression test),
+  `node --check` on both changed/new JS files, and a full manual
+  walkthrough against a local server build: saved a real lineup, called
+  the substitute endpoint, confirmed the change via a follow-up GET,
+  then cleared it and confirmed the exact original row was restored.
+  Actual browser rendering of the new Sub/Undo controls and the
+  widened roster picker remain **NOT VERIFIED (no browser)**. See
+  `doc/domains/matches/README.md`'s "Substitute Workflow Phase 1"
+  section for full detail.
 
 ## Open Questions To Resolve
 

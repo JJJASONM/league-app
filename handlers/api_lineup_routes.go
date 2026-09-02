@@ -20,4 +20,16 @@ func registerLineupRoutes(mux *http.ServeMux, lineupMgr LineupManager, applyAuth
 			deleteLineupPlan(w, r, lineupMgr)
 		}),
 	)
+	// Substitute Workflow Phase 1: set/clear a substitute for an existing
+	// lineup slot. Same clearanceAuth gate as the other mutations.
+	mux.HandleFunc("POST /api/lineup-plans/{id}/substitute",
+		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+			setLineupSubstitute(w, r, lineupMgr)
+		}),
+	)
+	mux.HandleFunc("DELETE /api/lineup-plans/{id}/substitute",
+		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+			clearLineupSubstitute(w, r, lineupMgr)
+		}),
+	)
 }

@@ -120,6 +120,9 @@ type LineupManager interface {
 	ListLineupPlans(ctx context.Context, req matches.ListLineupPlansRequest) ([]models.LineupPlan, error)
 	SaveTeamLineup(ctx context.Context, req matches.SaveLineupRequest) error
 	DeleteLineupPlan(ctx context.Context, id int64) error
+	// SetSubstitute and ClearSubstitute are Substitute Workflow Phase 1.
+	SetSubstitute(ctx context.Context, req matches.SetSubstituteRequest) (models.LineupPlan, error)
+	ClearSubstitute(ctx context.Context, id int64) (models.LineupPlan, error)
 }
 
 // LeagueManager handles league CRUD operations.

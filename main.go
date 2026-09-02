@@ -115,7 +115,7 @@ func main() {
 	matchStore := sqlite.NewMatchStore(db.DB)
 	matchSvc := matches.NewMatchService(matchStore)
 	lineupStore := sqlite.NewLineupStore(db.DB)
-	lineupSvc := matches.NewLineupService(lineupStore)
+	lineupSvc := matches.NewLineupService(lineupStore, roundStore)
 	pushbackStore := sqlite.NewPushbackStore(db.DB)
 	pushbackSvc := matches.NewPushbackService(pushbackStore)
 	financeStore := sqlite.NewFinanceStore(db.DB)

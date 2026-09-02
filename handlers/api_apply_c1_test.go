@@ -59,7 +59,7 @@ func testServerWithApplyAuth(t *testing.T) (*httptest.Server, *sqlite.ApplyAuthS
 	matchStore := sqlite.NewMatchStore(db.DB)
 	matchSvc := matches.NewMatchService(matchStore)
 	lineupStore := sqlite.NewLineupStore(db.DB)
-	lineupSvc := matches.NewLineupService(lineupStore)
+	lineupSvc := matches.NewLineupService(lineupStore, roundStore)
 	deps := handlers.Dependencies{
 		HandicapSvc:     hcSvc,
 		HandicapApplier: hcSvc,

@@ -589,6 +589,11 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 // prefers season_teams.season_name and falls back to teams.name for legacy seasons.
 // Returns a non-nil empty slice when no match_results rows exist for the week.
 func (s *WeekStore) GetWeekPlayerStats(ctx context.Context, seasonID, weekNum int64) ([]models.RecapPlayerStat, error) {
+	// Substitute Workflow Phase 1: LEFT JOIN lineup_plans on the same
+	// season/team/week/player key match_results is already grouped by, to
+	// show substitute status without a larger redesign -- a player with no
+	// matching lineup_plans row (is_sub was never set, or they scored
+	// without ever being added to lineup_plans) simply gets is_sub=false.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 		    p.id,
@@ -598,12 +603,17 @@ func (s *WeekStore) GetWeekPlayerStats(ctx context.Context, seasonID, weekNum in
 		    COALESCE(SUM(mr.sets_lost), 0),
 		    COALESCE(SUM(mr.games_won), 0),
 		    COALESCE(SUM(mr.games_lost), 0),
-		    COALESCE(SUM(mr.diff), 0)
+		    COALESCE(SUM(mr.diff), 0),
+		    COALESCE(MAX(lp.is_sub), 0),
+		    TRIM(COALESCE(subp.first_name || ' ' || subp.last_name, ''))
 		FROM match_results mr
 		JOIN matches m ON m.id = mr.match_id
 		JOIN players p ON p.id = mr.player_id
 		LEFT JOIN teams t ON t.id = mr.team_id
 		LEFT JOIN season_teams st ON st.season_id = m.season_id AND st.team_id = mr.team_id
+		LEFT JOIN lineup_plans lp ON lp.season_id = m.season_id AND lp.team_id = mr.team_id
+		    AND lp.week_number = m.week_number AND lp.player_id = mr.player_id
+		LEFT JOIN players subp ON subp.id = lp.sub_for_id
 		WHERE m.season_id = ? AND m.week_number = ?
 		GROUP BY mr.player_id, mr.team_id
 		ORDER BY team_name, player_name`, seasonID, weekNum)
@@ -615,14 +625,17 @@ func (s *WeekStore) GetWeekPlayerStats(ctx context.Context, seasonID, weekNum in
 	out := []models.RecapPlayerStat{}
 	for rows.Next() {
 		var stat models.RecapPlayerStat
+		var isSub int
 		if err := rows.Scan(
 			&stat.PlayerID, &stat.PlayerName, &stat.TeamName,
 			&stat.SetsWon, &stat.SetsLost,
 			&stat.GamesWon, &stat.GamesLost,
 			&stat.Diff,
+			&isSub, &stat.SubForName,
 		); err != nil {
 			return nil, fmt.Errorf("get week player stats: scan: %w", err)
 		}
+		stat.IsSub = isSub == 1
 		out = append(out, stat)
 	}
 	if err := rows.Err(); err != nil {

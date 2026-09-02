@@ -215,6 +215,12 @@ func (n *noopLineupMgr) SaveTeamLineup(_ context.Context, _ matches.SaveLineupRe
 	return nil
 }
 func (n *noopLineupMgr) DeleteLineupPlan(_ context.Context, _ int64) error { return nil }
+func (n *noopLineupMgr) SetSubstitute(_ context.Context, _ matches.SetSubstituteRequest) (models.LineupPlan, error) {
+	return models.LineupPlan{}, nil
+}
+func (n *noopLineupMgr) ClearSubstitute(_ context.Context, _ int64) (models.LineupPlan, error) {
+	return models.LineupPlan{}, nil
+}
 
 // testServer initializes a fresh SQLite database in a temp directory and
 // returns a running test HTTP server with all routes registered.

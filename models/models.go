@@ -606,6 +606,15 @@ type RecapPlayerStat struct {
 	GamesWon   int     `json:"games_won"`
 	GamesLost  int     `json:"games_lost"`
 	Diff       float64 `json:"diff"`
+	// IsSub and SubForName are Substitute Workflow Phase 1: true/populated
+	// when this player has a lineup_plans row for this season/team/week with
+	// is_sub=1. Resolved by matching mr.team_id/mr.player_id against
+	// lineup_plans -- a player who subbed without ever being added to
+	// lineup_plans (scored directly, no lineup row at all) shows IsSub=false
+	// here even if they were a real substitute; this reflects the recorded
+	// lineup, not just match_results.
+	IsSub      bool   `json:"is_sub,omitempty"`
+	SubForName string `json:"sub_for_name,omitempty"`
 }
 
 // RecapHandicapChange is one applied handicap change from handicap_history for a

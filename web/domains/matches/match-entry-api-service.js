@@ -45,3 +45,13 @@ export async function unprocessMatch(matchId) {
 export async function unapproveMatch(matchId) {
   return api('POST', `/matches/${matchId}/unapprove`);
 }
+
+// Substitute Workflow Phase 1: set/clear a substitute for an existing
+// lineup_plans slot. lineupPlanId is the row's id, not a player id.
+export async function setLineupSubstitute(lineupPlanId, substitutePlayerId) {
+  return api('POST', `/lineup-plans/${lineupPlanId}/substitute`, { substitute_player_id: substitutePlayerId });
+}
+
+export async function clearLineupSubstitute(lineupPlanId) {
+  return api('DELETE', `/lineup-plans/${lineupPlanId}/substitute`);
+}

@@ -819,4 +819,64 @@ func TestWeekStore_GetWeekPlayerStats_ReturnsTotalsForPlayer(t *testing.T) {
 	if s.GamesWon != 6 || s.GamesLost != 3 {
 		t.Errorf("want games 6/3, got %d/%d", s.GamesWon, s.GamesLost)
 	}
+	if s.IsSub {
+		t.Error("want is_sub=false for a player with no lineup_plans row")
+	}
+}
+
+// TestWeekStore_GetWeekPlayerStats_ShowsSubstituteStatus is a Substitute
+// Workflow Phase 1 regression test: a player recorded via match_results who
+// also has a lineup_plans row for the same season/team/week with is_sub=1
+// should show IsSub=true and SubForName resolved from sub_for_id.
+func TestWeekStore_GetWeekPlayerStats_ShowsSubstituteStatus(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+
+	var teamID int64
+	db.DB.QueryRow(`SELECT home_team_id FROM matches WHERE id=?`, matchID).Scan(&teamID)
+
+	rOrig, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Original','Player',?,0,1)`, teamID)
+	if err != nil {
+		t.Fatalf("seed original player: %v", err)
+	}
+	originalID, _ := rOrig.LastInsertId()
+
+	rSub, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap, active) VALUES ('Sub','Player',?,0,1)`, teamID)
+	if err != nil {
+		t.Fatalf("seed sub player: %v", err)
+	}
+	subID, _ := rSub.LastInsertId()
+
+	if _, err := db.DB.Exec(
+		`INSERT INTO lineup_plans (season_id, team_id, week_number, player_id, is_sub, sub_for_id) VALUES (?,?,1,?,1,?)`,
+		seasonID, teamID, subID, originalID); err != nil {
+		t.Fatalf("seed lineup plan: %v", err)
+	}
+
+	if _, err := db.DB.Exec(
+		`INSERT INTO match_results (match_id, player_id, team_id, sets_won, sets_lost, games_won, games_lost, diff) VALUES (?,?,?,2,0,6,2,4)`,
+		matchID, subID, teamID); err != nil {
+		t.Fatalf("seed match_result: %v", err)
+	}
+
+	store := sqlite.NewWeekStore(db.DB)
+	stats, err := store.GetWeekPlayerStats(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var found *models.RecapPlayerStat
+	for i := range stats {
+		if stats[i].PlayerID == subID {
+			found = &stats[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("substitute player not found in week player stats")
+	}
+	if !found.IsSub {
+		t.Error("want is_sub=true for the substitute")
+	}
+	if found.SubForName != "Original Player" {
+		t.Errorf("want sub_for_name=%q, got %q", "Original Player", found.SubForName)
+	}
 }

@@ -2488,6 +2488,8 @@ All explicitly out of scope per PM decision, not oversights:
 - Substitute creation/lineup workflows (`lineup_plans.is_sub`/
   `sub_for_id` remain read-only in the write path -- unrelated,
   discovered during Weekly Summary discovery, not touched here).
+  **Update 2026-09-02:** implemented by Substitute Workflow Phase 1 -- see
+  that section below.
 - Payment/financial schema of any kind.
 - A real atomic bulk-process-without-closing backend endpoint (V1 uses
   the client-side loop above; worth reconsidering only if it becomes a
@@ -2523,7 +2525,218 @@ automatically") all rendered exactly as the frontend expects. Actual
 browser rendering of the new screen remains **NOT VERIFIED (no
 browser)** in this developer's tool session.
 
+## Substitute Workflow Phase 1 -- Admin Substitute Support (implemented 2026-09-02)
+
+### Goal
+
+Let a league admin replace a planned lineup player with a substitute for a
+specific match/week, and have that substitute used consistently in Match
+Entry, before approval/processing/week/season locks take over. This is a
+working-app V1 item -- last-minute substitutes are a normal part of a real
+league night, and score entry was not realistic without this.
+
+### What Phase 1 added
+
+`lineup_plans.is_sub`/`sub_for_id` already existed in the schema but were
+read-only in every write path (`SaveTeamLineup` hardcoded `is_sub=0`,
+never set `sub_for_id`) -- confirmed sufficient during discovery, so no
+schema change was made. A substitution replaces an existing lineup slot in
+place: the row's `player_id` becomes the substitute, `sub_for_id` records
+the original player, `is_sub` becomes `true`. There is no separate
+"substitute" row alongside the original -- doing it this way keeps exactly
+one row per slot, matching what Match Entry's lineup auto-fill already
+expects (exactly 3 rows per team/week).
+
+- Two new endpoints, both `clearanceAuth`-gated (league_admin/admin/
+  system_admin, the same role set every other admin mutation uses):
+  - `POST /api/lineup-plans/{id}/substitute` -- body
+    `{ substitute_player_id }`. `{id}` is the *lineup_plans row id* being
+    substituted, not a player id.
+  - `DELETE /api/lineup-plans/{id}/substitute` -- reverts the slot back to
+    its original player (`is_sub=false`, `sub_for_id=null`).
+- New `LineupStore` methods (`backend/domains/matches/lineup_store.go`,
+  SQLite impl `backend/storage/sqlite/lineup_store.go`): `GetLineupPlan`
+  (fetch one row by id), `FindMatchID` (look up the match for a
+  team/season/week, used for lock checks below), `SetSubstitute`,
+  `ClearSubstitute`.
+- `LineupService` (`backend/domains/matches/lineup_service.go`) gained a
+  second constructor dependency, `MatchLockChecker` -- a narrow,
+  purpose-built interface (`IsSeasonClosedForMatch`, `IsWeekClosed`,
+  `GetMatchApprovalState`) that `RoundStore` already satisfies
+  structurally. Callers pass the *same* `RoundStore` instance already
+  constructed for `RoundService` rather than building a second one
+  (`matches.NewLineupService(lineupStore, roundStore)` in `main.go` and
+  every test-server helper).
+- **Lock enforcement (per PM decision, all four required):** a
+  substitute change is rejected with `409 Conflict` when the team's match
+  for that season/week is season-closed, week-closed, approved, or
+  processed -- the exact same lock set `RoundService` enforces for score
+  edits, since a substitute swap changes who is credited for a match just
+  as much as a score edit would. When no match has been scheduled yet for
+  that team/week, there is nothing to lock against and the change is
+  allowed. Validation errors (`400`): missing `substitute_player_id`,
+  substitute same as the current player, clearing a slot that isn't
+  currently substituted. `409 SUB_ALREADY_IN_LINEUP` when the chosen
+  substitute is already in this team's lineup under a different slot
+  (mapped from the table's own `UNIQUE(season_id, team_id, week_number,
+  player_id)` constraint).
+- **Match Entry** (`web/domains/matches/match-entry-page-component.js`):
+  - Player resolution (existing round results and lineup-plan auto-fill)
+    now looks players up against the *full* player list instead of the
+    team-filtered roster arrays -- a substitute's `player_id` may not
+    carry the team's `team_id`, so the old team-filtered lookups would
+    have silently dropped them and broken auto-fill.
+  - The manual "Confirm Tonight's Lineup" picker's player dropdowns now
+    offer every player in the league (grouped "This Team" /
+    "Other Players (Substitute)"), not just the team's own roster, so a
+    true substitute can be picked there too.
+  - The scoresheet's roster table shows a small "Sub" button next to each
+    of the 3 home/away players when that slot has a known `lineup_plans`
+    row and scores are still editable. Clicking it opens a single shared
+    modal to pick the substitute (from the full player list) and calls
+    `POST .../substitute`, then reloads Match Entry so the scoresheet
+    picks up the new player_id, name, and handicap automatically. Once
+    substituted, the slot shows a "Sub for X" badge with an "Undo" link
+    (calls `DELETE .../substitute`) while scores remain editable.
+  - The Sub/Undo controls are only shown for slots resolved from a saved
+    `lineup_plans` row (the common case: a team already has a planned
+    lineup). A slot resolved only from already-scored round results (no
+    known `lineup_plans` row tracked for it) does not show a Sub control
+    in this phase -- see "What Phase 1 defers" below.
+- **Weekly Summary:** `GetWeekPlayerStats`
+  (`backend/storage/sqlite/week_store.go`) gained a `LEFT JOIN
+  lineup_plans` on the same season/team/week/player key the query already
+  groups by, plus a `LEFT JOIN players` to resolve `sub_for_id`'s name.
+  `models.RecapPlayerStat` gained `IsSub`/`SubForName` (omitempty). This
+  makes substitute status available on the existing Week Recap endpoint's
+  `player_stats` array without any larger redesign. **Not done:** the
+  Weekly Summary frontend does not currently render `player_stats` at all
+  (pre-existing -- it never has, since Weekly Summary Phase 1 only shows
+  match rows and handicap changes); adding a substitute-status *display*
+  would mean building a new player-stats table in that screen, which is
+  new UI construction, not "showing status when data is already
+  available." Left for a future phase if/when Weekly Summary gets a
+  per-player stats section.
+- **Player Overview:** verified, not changed. Season-scoped
+  `GetPlayerStats` (which Player Overview's stats section already calls)
+  joins `match_results` to a player purely by `player_id` with no team
+  filter, so a substitute's results from a match played for someone
+  else's team already count correctly toward their own totals -- added a
+  new regression test
+  (`TestRoundStore_GetPlayerStats_SubstitutePlayer_StatsCountTowardOwnTeam`)
+  to confirm this explicitly rather than relying on it being true by
+  accident. **Known, accepted limitation:** Player Overview's *schedule*
+  section resolves matches via the player's own team for the season
+  (`season_rosters`/direct `team_id`), so a one-off match they subbed
+  for a different team will not appear in their own schedule list. Fixing
+  this would mean walking a player's `lineup_plans`/`match_results` across
+  every team, not just their own -- exactly the "big player-history
+  redesign" this phase was told not to force. Documented, not fixed.
+
+### Routes and auth
+
+| Route | Method | Auth |
+|-------|--------|------|
+| `/api/lineup-plans/{id}/substitute` | POST | `clearanceAuth` (league_admin/admin/system_admin) |
+| `/api/lineup-plans/{id}/substitute` | DELETE | `clearanceAuth` |
+
+The three original `/api/lineup-plans` routes are unchanged (GET
+unprotected, POST/DELETE `clearanceAuth`-gated, same as before this
+phase).
+
+### Response shape
+
+```json
+// POST /api/lineup-plans/{id}/substitute -> models.LineupPlan
+{
+  "id": 1, "season_id": 1, "team_id": 1, "team_name": "Home Team",
+  "player_id": 2, "player_name": "Sub Player", "handicap": 3.0,
+  "week_number": 1, "is_sub": true, "sub_for_id": 1
+}
+```
+`DELETE .../substitute` returns the same shape with `player_id` reverted
+to the original, `is_sub: false`, `sub_for_id` omitted.
+
+### What Phase 1 defers
+
+All explicitly out of scope per PM decision, not oversights:
+
+- A Sub control for slots resolved only from already-scored round results
+  (no known `lineup_plans` row) -- retroactively substituting a played
+  match raises different questions (rewriting history vs. recording a
+  new entry) this phase does not answer.
+- A Weekly Summary UI section displaying the new `is_sub`/`sub_for_name`
+  fields (data is available on the API; no display surface exists yet).
+- Fixing Player Overview's schedule section to show a substitute's
+  one-off matches for other teams (documented limitation, not fixed).
+- Automated notifications, player-facing substitute requests, mobile
+  flow, full audit/history, substitute payments/fees, broader lineup
+  redesign, schedule regeneration, new standings formulas, new finance
+  behavior.
+- Live re-render of an already-loaded Match Entry lineup on identity/key
+  change -- not applicable here (this is an auth-role feature, not an
+  identity-gating one), noted only because it mirrors a limitation
+  already documented for Player Overview Phase 2's row-button gating.
+
+### Verification
+
+`go test ./... -count=1` and `go build ./...` pass, including: 12 new
+`LineupService` unit tests (`backend/domains/matches/lineup_service_test.go`,
+using a new `stubMatchLockChecker`) covering validation, all four lock
+checks (season closed, week closed, approved, processed), the
+no-match-scheduled-yet allow path, the UNIQUE-constraint-to-409 mapping,
+and clear-substitute delegation; 8 new SQLite store tests
+(`backend/storage/sqlite/lineup_store_test.go`) covering
+`GetLineupPlan`/`FindMatchID` found/not-found, `SetSubstitute` (updates
+the row, records the original player, rejects a duplicate-in-lineup
+substitute), and `ClearSubstitute` (reverts, rejects a slot that was
+never substituted); 13 new handler tests
+(`handlers/api_lineup_substitute_test.go`) covering 401/403/409/400
+across auth, all four locks, and league_admin/admin/system_admin
+success, plus set-then-clear round-tripping through real HTTP; 1 new
+store test for Weekly Summary's substitute-status join
+(`TestWeekStore_GetWeekPlayerStats_ShowsSubstituteStatus`); 1 new store
+test for the Player Overview stats verification above. `node --check`
+passes on both changed/new JS files
+(`web/domains/matches/match-entry-page-component.js`,
+`web/domains/matches/match-entry-api-service.js`). Manually verified end
+to end against a local server build: saved a real lineup through `POST
+/api/lineup-plans`, called the new substitute endpoint, confirmed `GET
+/api/lineup-plans` showed the substitute's `player_id`/`is_sub`/
+`sub_for_id` correctly, then cleared it and confirmed it reverted
+exactly to the original row. Actual browser rendering of the Match Entry
+Sub/Undo controls and the roster picker's "Other Players (Substitute)"
+group remain **NOT VERIFIED (no browser)** in this developer's tool
+session.
+
 ## Decision History
+
+### 2026-09-02 - Substitute Workflow Phase 1: admin substitute support
+
+**Status:** `accepted`
+
+`lineup_plans.is_sub`/`sub_for_id` (already in the schema, previously
+read-only) can now be set/cleared via two new `clearanceAuth`-gated
+endpoints, `POST`/`DELETE /api/lineup-plans/{id}/substitute`. A
+substitution replaces the slot's `player_id` in place (one row per slot,
+matching what Match Entry's auto-fill already expects) rather than
+adding a parallel row. Rejected with 409 when the team's match for that
+season/week is season-closed, week-closed, approved, or processed --
+the same lock set score edits respect, via a new narrow
+`MatchLockChecker` interface `RoundStore` already satisfies structurally
+(no second store built). Match Entry's player resolution now looks
+players up against the full player list instead of the team roster (a
+substitute may not carry the team's `team_id`), the manual lineup picker
+now offers every league player grouped by roster/substitute, and the
+scoresheet's roster table gained a Sub/Undo control per slot. Weekly
+Summary's `GetWeekPlayerStats` gained `is_sub`/`sub_for_name` fields
+(data only -- no new UI section, since Weekly Summary doesn't render
+`player_stats` at all yet). Player Overview's stats section was verified
+(not changed) to already count a substitute's results correctly; its
+schedule section still won't show a substitute's one-off match for
+another team, an accepted, documented limitation rather than the "big
+player-history redesign" this phase was told not to force. See
+"Substitute Workflow Phase 1" above for full detail.
 
 ### 2026-08-27 - Weekly Summary Phase 1: standalone weekly admin screen
 

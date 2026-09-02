@@ -207,6 +207,12 @@ func (n *noopLineupMgr) SaveTeamLineup(_ context.Context, _ matches.SaveLineupRe
 	return nil
 }
 func (n *noopLineupMgr) DeleteLineupPlan(_ context.Context, _ int64) error { return nil }
+func (n *noopLineupMgr) SetSubstitute(_ context.Context, _ matches.SetSubstituteRequest) (models.LineupPlan, error) {
+	return models.LineupPlan{}, nil
+}
+func (n *noopLineupMgr) ClearSubstitute(_ context.Context, _ int64) (models.LineupPlan, error) {
+	return models.LineupPlan{}, nil
+}
 
 // stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.
 // ResolveKey maps a cleartext key to a user; zero-value returns nil (no match).

@@ -235,3 +235,185 @@ func TestLineupStore_DeleteLineupPlan_NonExistentNoError(t *testing.T) {
 		t.Errorf("want no error deleting non-existent plan, got: %v", err)
 	}
 }
+
+// -- GetLineupPlan -----------------------------------------------------------
+
+func TestLineupStore_GetLineupPlan_ReturnsRow(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	pid := sseedPlayer(t, tid)
+	planID := lsseedPlan(t, sid, tid, pid, 1)
+
+	got, err := store.GetLineupPlan(ctx, planID)
+	if err != nil {
+		t.Fatalf("GetLineupPlan: %v", err)
+	}
+	if got.ID != planID || got.PlayerID != pid || got.SeasonID != sid || got.TeamID != tid {
+		t.Errorf("want matching row, got %+v", got)
+	}
+	if got.IsSub {
+		t.Error("want is_sub=false for a freshly-seeded plan")
+	}
+}
+
+func TestLineupStore_GetLineupPlan_NotFound(t *testing.T) {
+	store := newLineupStore(t)
+	_, err := store.GetLineupPlan(context.Background(), 9999)
+	if err == nil {
+		t.Fatal("want error for non-existent plan")
+	}
+}
+
+// -- FindMatchID -------------------------------------------------------------
+
+func TestLineupStore_FindMatchID_FoundAsHomeOrAway(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tidHome := sseedTeam(t, lid, "Home")
+	tidAway := sseedTeam(t, lid, "Away")
+	res, err := db.DB.Exec(`INSERT INTO matches (season_id, home_team_id, away_team_id, week_number, match_number) VALUES (?,?,?,1,1)`,
+		sid, tidHome, tidAway)
+	if err != nil {
+		t.Fatalf("insert match: %v", err)
+	}
+	wantMatchID, _ := res.LastInsertId()
+
+	gotHome, found, err := store.FindMatchID(ctx, sid, tidHome, 1)
+	if err != nil {
+		t.Fatalf("FindMatchID (home): %v", err)
+	}
+	if !found || gotHome != wantMatchID {
+		t.Errorf("want found=true matchID=%d, got found=%v matchID=%d", wantMatchID, found, gotHome)
+	}
+
+	gotAway, found, err := store.FindMatchID(ctx, sid, tidAway, 1)
+	if err != nil {
+		t.Fatalf("FindMatchID (away): %v", err)
+	}
+	if !found || gotAway != wantMatchID {
+		t.Errorf("want found=true matchID=%d, got found=%v matchID=%d", wantMatchID, found, gotAway)
+	}
+}
+
+func TestLineupStore_FindMatchID_NotFound(t *testing.T) {
+	store := newLineupStore(t)
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+
+	_, found, err := store.FindMatchID(context.Background(), sid, tid, 1)
+	if err != nil {
+		t.Fatalf("FindMatchID: %v", err)
+	}
+	if found {
+		t.Error("want found=false when no match is scheduled for this team/week")
+	}
+}
+
+// -- SetSubstitute / ClearSubstitute -------------------------------------------
+
+func TestLineupStore_SetSubstitute_UpdatesRowAndRecordsOriginal(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	original := sseedPlayer(t, tid)
+	sub := sseedPlayer(t, tid)
+	planID := lsseedPlan(t, sid, tid, original, 1)
+
+	got, err := store.SetSubstitute(ctx, matches.SetSubstituteRequest{
+		LineupPlanID:       planID,
+		SubstitutePlayerID: sub,
+		OriginalPlayerID:   original,
+	})
+	if err != nil {
+		t.Fatalf("SetSubstitute: %v", err)
+	}
+	if got.PlayerID != sub {
+		t.Errorf("want player_id=%d (substitute), got %d", sub, got.PlayerID)
+	}
+	if !got.IsSub {
+		t.Error("want is_sub=true after substitution")
+	}
+	if got.SubForID == nil || *got.SubForID != original {
+		t.Errorf("want sub_for_id=%d, got %v", original, got.SubForID)
+	}
+	// Same row id, season/team/week context preserved.
+	if got.ID != planID || got.SeasonID != sid || got.TeamID != tid || got.WeekNumber != 1 {
+		t.Errorf("want season/team/week context preserved, got %+v", got)
+	}
+}
+
+func TestLineupStore_SetSubstitute_DuplicatePlayerInLineup_ReturnsUniqueError(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	playerA := sseedPlayer(t, tid)
+	playerB := sseedPlayer(t, tid)
+	planA := lsseedPlan(t, sid, tid, playerA, 1)
+	lsseedPlan(t, sid, tid, playerB, 1) // playerB already has a slot this week
+
+	// Substituting playerB into playerA's slot collides with playerB's own
+	// existing row under the same (season_id, team_id, week_number, player_id)
+	// UNIQUE constraint.
+	_, err := store.SetSubstitute(ctx, matches.SetSubstituteRequest{
+		LineupPlanID:       planA,
+		SubstitutePlayerID: playerB,
+		OriginalPlayerID:   playerA,
+	})
+	if err == nil {
+		t.Fatal("want a UNIQUE constraint error when the substitute is already in this lineup")
+	}
+}
+
+func TestLineupStore_ClearSubstitute_RevertsToOriginalPlayer(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	original := sseedPlayer(t, tid)
+	sub := sseedPlayer(t, tid)
+	planID := lsseedPlan(t, sid, tid, original, 1)
+	if _, err := store.SetSubstitute(ctx, matches.SetSubstituteRequest{
+		LineupPlanID: planID, SubstitutePlayerID: sub, OriginalPlayerID: original,
+	}); err != nil {
+		t.Fatalf("SetSubstitute: %v", err)
+	}
+
+	got, err := store.ClearSubstitute(ctx, planID)
+	if err != nil {
+		t.Fatalf("ClearSubstitute: %v", err)
+	}
+	if got.PlayerID != original {
+		t.Errorf("want player_id=%d (reverted to original), got %d", original, got.PlayerID)
+	}
+	if got.IsSub {
+		t.Error("want is_sub=false after clearing")
+	}
+	if got.SubForID != nil {
+		t.Errorf("want sub_for_id=nil after clearing, got %v", got.SubForID)
+	}
+}
+
+func TestLineupStore_ClearSubstitute_NotCurrentlySubstituted_ReturnsError(t *testing.T) {
+	store := newLineupStore(t)
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	pid := sseedPlayer(t, tid)
+	planID := lsseedPlan(t, sid, tid, pid, 1)
+
+	_, err := store.ClearSubstitute(context.Background(), planID)
+	if err == nil {
+		t.Fatal("want error clearing a slot that was never substituted")
+	}
+}

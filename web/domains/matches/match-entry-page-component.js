@@ -19,6 +19,8 @@ import {
   processMatch as apiProcessMatch,
   unprocessMatch as apiUnprocessMatch,
   unapproveMatch as apiUnapproveMatch,
+  setLineupSubstitute,
+  clearLineupSubstitute,
 } from './match-entry-api-service.js';
 import { fmtDate } from '../../components/date-display.js';
 import { GAME_FORMAT_8BALL } from '../leagues/game-format-codes.js';
@@ -40,6 +42,23 @@ class MatchEntryPage extends HTMLElement {
   #awayTeam     = [];
   #games        = [];
   #seasonRules  = {};
+  // Substitute Workflow Phase 1: the lineup_plans row backing each of the 3
+  // home/away scoresheet slots, when known (null when the slot wasn't
+  // resolved from a saved lineup_plans row -- e.g. already-scored matches,
+  // or a fallback pick with no prior plan). Used to show "Sub for X" and to
+  // know which row id to call the substitute endpoint against.
+  #homeLineupPlans = [null, null, null];
+  #awayLineupPlans = [null, null, null];
+  // Most recently fetched lineup_plans rows per side (used by #confirmLineup
+  // to recover a slot's row id when the manually-confirmed player matches
+  // an already-planned one).
+  #homePlansCache = [];
+  #awayPlansCache = [];
+  // { side: 'home'|'away', index, lineupPlanId } for the open substitute modal.
+  #subContext = null;
+  // Mirrors #renderScoresheet's canEditScores for the roster table's
+  // Substitute/Undo controls, set at the top of each render.
+  #scoresheetEditable = false;
 
   connectedCallback() {
     this.innerHTML = `
@@ -56,6 +75,10 @@ class MatchEntryPage extends HTMLElement {
       </div>
       <div class="me-lineup d-none"></div>
       <div class="me-scoresheet d-none"></div>`;
+
+    this.#ensureSubstituteModal();
+    document.getElementById('me-sub-confirm-btn')
+      .addEventListener('click', () => this.#confirmSubstitute());
 
     this.addEventListener('change', e => {
       if (e.target.matches('.me-season-sel')) this.#loadMatches();
@@ -76,7 +99,11 @@ class MatchEntryPage extends HTMLElement {
       const unprocessBtn = e.target.closest('[data-action="unprocess-match"]');
       if (unprocessBtn) { this.#unprocessMatch(parseInt(unprocessBtn.dataset.matchId)); return; }
       const unapproveBtn = e.target.closest('[data-action="unapprove-match"]');
-      if (unapproveBtn) { this.#unapproveMatch(parseInt(unapproveBtn.dataset.matchId)); }
+      if (unapproveBtn) { this.#unapproveMatch(parseInt(unapproveBtn.dataset.matchId)); return; }
+      const subBtn = e.target.closest('[data-action="open-substitute"]');
+      if (subBtn) { this.#openSubstituteModal(subBtn.dataset.side, parseInt(subBtn.dataset.index, 10)); return; }
+      const undoSubBtn = e.target.closest('[data-action="clear-substitute"]');
+      if (undoSubBtn) { e.preventDefault(); this.#clearSubstitute(undoSubBtn.dataset.side, parseInt(undoSubBtn.dataset.index, 10)); }
     });
     this.addEventListener('input', e => {
       if (e.target.matches('.ss-score-inp')) this.#ssInpChange(e.target);
@@ -133,6 +160,8 @@ class MatchEntryPage extends HTMLElement {
     lineupDiv.classList.add('d-none');
     scoresheetDiv.classList.add('d-none');
     scoresheetDiv.innerHTML = '';
+    this.#homeLineupPlans = [null, null, null];
+    this.#awayLineupPlans = [null, null, null];
 
     let detail;
     try { detail = await fetchMatch(matchId); }
@@ -157,13 +186,15 @@ class MatchEntryPage extends HTMLElement {
     const awayPlayers = this.#allPlayers.filter(p => p.team_id == m.away_team_id);
 
     // 1. Existing round results take highest priority (already played).
+    // Resolved against the full player list, not the team roster -- a
+    // substitute's player_id may not carry this team's team_id.
     let existingRounds = [];
     try { existingRounds = await fetchRounds(matchId); } catch (_) {}
     if (existingRounds.length > 0) {
       const r1 = existingRounds.filter(r => r.round_number === 1).sort((a, b) => a.id - b.id);
       if (r1.length === 3) {
-        const hp = r1.map(r => homePlayers.find(p => p.id === r.home_player_id)).filter(Boolean);
-        const ap = r1.map(r => awayPlayers.find(p => p.id === r.away_player_id)).filter(Boolean);
+        const hp = r1.map(r => this.#allPlayers.find(p => p.id === r.home_player_id)).filter(Boolean);
+        const ap = r1.map(r => this.#allPlayers.find(p => p.id === r.away_player_id)).filter(Boolean);
         if (hp.length === 3 && ap.length === 3) {
           this.#homeTeam = hp;
           this.#awayTeam = ap;
@@ -174,6 +205,9 @@ class MatchEntryPage extends HTMLElement {
     }
 
     // 2. Lineup plans - week-specific, then fall back to default (week 0).
+    // Resolved against the full player list for the same reason as above --
+    // a substitute recorded in lineup_plans may not carry this team's
+    // team_id, so the team-filtered roster arrays would silently drop them.
     let weekPlans = [], defaultPlans = [];
     try { weekPlans    = await fetchLineupPlans(m.season_id, m.week_number); } catch (_) {}
     try { defaultPlans = await fetchLineupPlans(m.season_id, 0); } catch (_) {}
@@ -184,13 +218,17 @@ class MatchEntryPage extends HTMLElement {
     };
     const homePlans = resolvePlans(m.home_team_id);
     const awayPlans = resolvePlans(m.away_team_id);
+    this.#homePlansCache = homePlans;
+    this.#awayPlansCache = awayPlans;
 
     if (homePlans.length >= 3 && awayPlans.length >= 3) {
-      const hp = homePlans.slice(0, 3).map(lp => homePlayers.find(p => p.id === lp.player_id)).filter(Boolean);
-      const ap = awayPlans.slice(0, 3).map(lp => awayPlayers.find(p => p.id === lp.player_id)).filter(Boolean);
+      const hp = homePlans.slice(0, 3).map(lp => this.#allPlayers.find(p => p.id === lp.player_id)).filter(Boolean);
+      const ap = awayPlans.slice(0, 3).map(lp => this.#allPlayers.find(p => p.id === lp.player_id)).filter(Boolean);
       if (hp.length === 3 && ap.length === 3) {
         this.#homeTeam = hp;
         this.#awayTeam = ap;
+        this.#homeLineupPlans = homePlans.slice(0, 3);
+        this.#awayLineupPlans = awayPlans.slice(0, 3);
         this.#resetGames();
         this.#renderScoresheet([]);
         return;
@@ -205,11 +243,20 @@ class MatchEntryPage extends HTMLElement {
     const lineupDiv = this.querySelector('.me-lineup');
     lineupDiv.classList.remove('d-none');
 
-    const makeOpts = (players, plans, idx) => {
+    // Substitute Workflow Phase 1: the roster picker offers every player in
+    // the league, not just this team's own roster, so a substitute from
+    // another team can be selected here too -- grouped so the team's own
+    // players are still easy to find first.
+    const makeOpts = (rosterPlayers, plans, idx) => {
       const preselect = plans[idx]?.player_id;
-      return players.map(p =>
-        `<option value="${p.id}"${p.id == preselect ? ' selected' : ''}>${esc(p.name)} (${p.handicap >= 0 ? '+' : ''}${p.handicap})</option>`
-      ).join('');
+      const optRow = p => `<option value="${p.id}"${p.id == preselect ? ' selected' : ''}>${esc(p.name)} (${p.handicap >= 0 ? '+' : ''}${p.handicap})</option>`;
+      const rosterIds = new Set(rosterPlayers.map(p => p.id));
+      const others = this.#allPlayers.filter(p => !rosterIds.has(p.id));
+      let html = `<optgroup label="This Team">${rosterPlayers.map(optRow).join('')}</optgroup>`;
+      if (others.length > 0) {
+        html += `<optgroup label="Other Players (Substitute)">${others.map(optRow).join('')}</optgroup>`;
+      }
+      return html;
     };
 
     const hasHomePlans = homePlans.length > 0;
@@ -251,11 +298,12 @@ class MatchEntryPage extends HTMLElement {
   #confirmLineup() {
     const m = this.#currentMatch;
     if (!m) return;
-    const homePlayers = this.#allPlayers.filter(p => p.team_id == m.home_team_id);
-    const awayPlayers = this.#allPlayers.filter(p => p.team_id == m.away_team_id);
 
-    const hp = [1, 2, 3].map(i => homePlayers.find(p => p.id == this.querySelector(`#me-ph-${i}`)?.value)).filter(Boolean);
-    const ap = [1, 2, 3].map(i => awayPlayers.find(p => p.id == this.querySelector(`#me-pa-${i}`)?.value)).filter(Boolean);
+    // Resolved against the full player list (not the team roster) so a
+    // manually-picked substitute -- who may not carry this team's team_id --
+    // still resolves correctly.
+    const hp = [1, 2, 3].map(i => this.#allPlayers.find(p => p.id == this.querySelector(`#me-ph-${i}`)?.value)).filter(Boolean);
+    const ap = [1, 2, 3].map(i => this.#allPlayers.find(p => p.id == this.querySelector(`#me-pa-${i}`)?.value)).filter(Boolean);
 
     if (hp.length !== 3) { toast('Select all 3 home players', 'warning'); return; }
     if (ap.length !== 3) { toast('Select all 3 away players', 'warning'); return; }
@@ -264,6 +312,11 @@ class MatchEntryPage extends HTMLElement {
 
     this.#homeTeam = hp;
     this.#awayTeam = ap;
+    // Recover each slot's lineup_plans row id when the confirmed player
+    // matches what was already planned, so the roster table's Substitute
+    // control works immediately after a manual confirm too.
+    this.#homeLineupPlans = hp.map(p => this.#homePlansCache.find(lp => lp.player_id === p.id) ?? null);
+    this.#awayLineupPlans = ap.map(p => this.#awayPlansCache.find(lp => lp.player_id === p.id) ?? null);
     this.#resetGames();
     this.querySelector('.me-lineup').classList.add('d-none');
     this.#renderScoresheet([]);
@@ -273,6 +326,99 @@ class MatchEntryPage extends HTMLElement {
     this.#games = Array.from({ length: 9 }, () =>
       ({ g1w: '', g1lb: 0, g2w: '', g2lb: 0, g3w: '', g3lb: 0 })
     );
+  }
+
+  // -- Substitute Workflow Phase 1 -----------------------------------------
+
+  // Renders the roster table's per-slot substitute control: a "Sub" button
+  // when the slot has a known lineup_plans row and isn't currently
+  // substituted, a "Sub for X" badge with an Undo link when it is, or
+  // nothing when no lineup_plans row is known for this slot (e.g. an
+  // already-scored match) or scores are locked.
+  #subControlHtml(side, index, plan) {
+    if (!plan) return '';
+    if (plan.is_sub) {
+      const origName = this.#allPlayers.find(p => p.id === plan.sub_for_id)?.name || 'original player';
+      const undo = this.#scoresheetEditable
+        ? ` <a href="#" class="no-print" data-action="clear-substitute" data-side="${side}" data-index="${index}">Undo</a>`
+        : '';
+      return ` <span class="badge bg-warning text-dark no-print" style="font-size:.6rem">Sub for ${esc(origName)}</span>${undo}`;
+    }
+    if (!this.#scoresheetEditable) return '';
+    return ` <button class="btn btn-outline-secondary btn-sm py-0 no-print" style="font-size:.6rem"
+      data-action="open-substitute" data-side="${side}" data-index="${index}">Sub</button>`;
+  }
+
+  #ensureSubstituteModal() {
+    if (document.getElementById('me-sub-modal')) return;
+    const el = document.createElement('div');
+    el.innerHTML = `
+<div class="modal fade" id="me-sub-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Substitute Player</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-3">Substituting for: <strong id="me-sub-original-name"></strong></p>
+        <div class="mb-1">
+          <label class="form-label">Substitute Player</label>
+          <select class="form-select" id="me-sub-player-select"></select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="me-sub-confirm-btn">Confirm Substitute</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+    document.body.appendChild(el.firstElementChild);
+  }
+
+  #openSubstituteModal(side, index) {
+    const plans = side === 'home' ? this.#homeLineupPlans : this.#awayLineupPlans;
+    const plan = plans[index];
+    if (!plan) return;
+    const team = side === 'home' ? this.#homeTeam : this.#awayTeam;
+    const currentPlayer = team[index];
+    this.#subContext = { side, index, lineupPlanId: plan.id };
+    document.getElementById('me-sub-original-name').textContent = currentPlayer.name;
+    const sel = document.getElementById('me-sub-player-select');
+    sel.innerHTML = this.#allPlayers
+      .filter(p => p.id !== currentPlayer.id)
+      .map(p => `<option value="${p.id}">${esc(p.name)} (${p.handicap >= 0 ? '+' : ''}${p.handicap})</option>`)
+      .join('');
+    new bootstrap.Modal(document.getElementById('me-sub-modal')).show();
+  }
+
+  async #confirmSubstitute() {
+    const ctx = this.#subContext;
+    if (!ctx) return;
+    const subPlayerId = parseInt(document.getElementById('me-sub-player-select').value, 10);
+    if (!subPlayerId) { toast('Select a substitute player', 'warning'); return; }
+    try {
+      await setLineupSubstitute(ctx.lineupPlanId, subPlayerId);
+      bootstrap.Modal.getInstance(document.getElementById('me-sub-modal'))?.hide();
+      toast('Substitute recorded');
+      await this.#loadMatchEntry();
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  }
+
+  async #clearSubstitute(side, index) {
+    const plans = side === 'home' ? this.#homeLineupPlans : this.#awayLineupPlans;
+    const plan = plans[index];
+    if (!plan) return;
+    try {
+      await clearLineupSubstitute(plan.id);
+      toast('Substitute cleared');
+      await this.#loadMatchEntry();
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
   }
 
   #gameScores(winner, lb) {
@@ -354,6 +500,10 @@ class MatchEntryPage extends HTMLElement {
     const isApproved  = !!m.approved_at;
     const isProcessed = !!m.processed_at;
     const canEditScores = !locked && !isApproved && !isProcessed;
+    // Substitute Workflow Phase 1: substitute edits respect the same lock
+    // the backend enforces (season closed, week closed, approved, processed),
+    // so the Sub/Undo controls are shown under the same condition as Save.
+    this.#scoresheetEditable = canEditScores;
 
     const statusBadge = isProcessed
       ? '<span class="badge bg-primary ms-1"><i class="bi bi-gear-fill me-1"></i>Processed</span>'
@@ -449,12 +599,12 @@ class MatchEntryPage extends HTMLElement {
       html += `<tr>
         <td class="ss-slot-h">H${i + 1}</td>
         <td class="ss-pnum-col">${hp.player_number || ''}</td>
-        <td>${esc(hp.name)}</td>
+        <td>${esc(hp.name)}${this.#subControlHtml('home', i, this.#homeLineupPlans[i])}</td>
         <td class="ss-hc-roster">${fmtHC(hp.handicap)}</td>
         <td class="ss-roster-sep"></td>
         <td class="ss-slot-v">V${i + 1}</td>
         <td class="ss-pnum-col">${ap.player_number || ''}</td>
-        <td>${esc(ap.name)}</td>
+        <td>${esc(ap.name)}${this.#subControlHtml('away', i, this.#awayLineupPlans[i])}</td>
         <td class="ss-hc-roster">${fmtHC(ap.handicap)}</td>
       </tr>`;
     }

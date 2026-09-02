@@ -261,6 +261,55 @@ func TestRoundStore_GetPlayerStats_SeasonScope_WeekClosedGate(t *testing.T) {
 	}
 }
 
+// TestRoundStore_GetPlayerStats_SubstitutePlayer_StatsCountTowardOwnTeam is a
+// Substitute Workflow Phase 1 verification: a player's own regular team
+// resolves them into the season-scoped stats list as usual, and a
+// match_results row recorded under a *different* team_id (the team they
+// substituted for) still counts toward their totals, since the
+// match_results JOIN in this query is by player_id alone with no team
+// filter. Confirms Player Overview's stats section (which calls this same
+// season-scoped query) needs no change to correctly include a substitute's
+// results from a match played for someone else's team.
+func TestRoundStore_GetPlayerStats_SubstitutePlayer_StatsCountTowardOwnTeam(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, seasonID, homeTeamID, awayTeamID := seedRoundTestData(t)
+
+	// The substitute's own regular team is the away team.
+	res, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, team_id, handicap) VALUES ('Sub','Player',?,1.0)`, awayTeamID)
+	if err != nil {
+		t.Fatalf("insert substitute player: %v", err)
+	}
+	subPlayerID, _ := res.LastInsertId()
+
+	db.DB.Exec(`UPDATE matches SET completed=1, week_closed=1 WHERE id=?`, matchID)
+	// Substitute's match_results are recorded under the HOME team (the team
+	// they subbed for that night), not their own away team.
+	if _, err := db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,4,2,2)`,
+		matchID, subPlayerID, homeTeamID); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	stats, err := s.GetPlayerStats(context.Background(), matches.PlayerStatsRequest{SeasonID: seasonID})
+	if err != nil {
+		t.Fatalf("GetPlayerStats: %v", err)
+	}
+	var found *models.PlayerStat
+	for i := range stats {
+		if stats[i].PlayerID == subPlayerID {
+			found = &stats[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("substitute player not found in season-scoped stats")
+	}
+	if found.TeamName != "Away Team" {
+		t.Errorf("want team_name resolved to the substitute's own team %q, got %q", "Away Team", found.TeamName)
+	}
+	if found.GamesWon != 4 || found.GamesLost != 2 {
+		t.Errorf("want games_won=4 games_lost=2 from the substituted match, got %d/%d", found.GamesWon, found.GamesLost)
+	}
+}
+
 // TestRoundStore_GetPlayerStats_RosterOnlyPlayer_NullTeamID is a regression
 // test for the staging smoke-pass finding: a player assigned to a season
 // only via season_rosters (players.team_id left NULL, the target model)

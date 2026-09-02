@@ -51,7 +51,7 @@ func testServer(t *testing.T) *httptest.Server {
 	matchStore := sqlite.NewMatchStore(db.DB)
 	matchSvc := matches.NewMatchService(matchStore)
 	lineupStore := sqlite.NewLineupStore(db.DB)
-	lineupSvc := matches.NewLineupService(lineupStore)
+	lineupSvc := matches.NewLineupService(lineupStore, roundStore)
 	deps := handlers.Dependencies{HandicapSvc: hcSvc, WeekMgr: weekSvc, RoundMgr: roundSvc, RuleMgr: ruleSvc, LeagueMgr: leagueSvc, PlayerMgr: playerSvc, TeamMgr: teamSvc, SeasonMgr: seasonSvc, ScheduleMgr: scheduleSvc, MatchMgr: matchSvc, LineupMgr: lineupSvc}
 	handlers.Register(mux, dir, deps)
 	srv := httptest.NewServer(mux)

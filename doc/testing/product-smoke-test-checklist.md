@@ -1465,12 +1465,17 @@ Financial Phase 1 uses -- instead of staying an unprotected read.
   `TestWeekStore_GetWeekRecapData_ApprovalFieldsReflectMatchState`
   (mixed week: one approved-only match, one approved+processed+closed
   match, confirming both are scanned independently and correctly).
-- Known, deliberately out-of-scope note: substitute lineup rows
-  (`is_sub`/`sub_for_id`) cannot be created through the API today (the
-  write path hardcodes `is_sub=0`), so this screen -- like the rest of
-  the app -- has nothing sub-specific to display; this is a real,
+- Known, deliberately out-of-scope note (at the time): substitute lineup
+  rows (`is_sub`/`sub_for_id`) could not be created through the API
+  (the write path hardcoded `is_sub=0`), so this screen -- like the rest
+  of the app -- had nothing sub-specific to display; this was a real,
   pre-existing gap discovered during Weekly Summary discovery, not a
-  regression from this phase.
+  regression from this phase. **Update 2026-09-02:** substitute
+  creation now exists (Substitute Workflow Phase 1, see section 21
+  below); `GetWeekPlayerStats` now returns `is_sub`/`sub_for_name` per
+  player, but this screen still does not render `player_stats` in any
+  form, so there is still nothing displayed here -- see section 21 for
+  why that display work was left for a later phase.
 - Staging verification (2026-08-27, `http://league-staging.local`,
   deployed from `b93a177`): opened Weekly Summary in the in-app browser,
   confirmed the Fixture Scoresheet Season and five week options load,
@@ -1606,6 +1611,78 @@ Financial Phase 1 uses -- instead of staying an unprotected read.
 
 ---
 
+### 21. Substitute Workflow Phase 1 -- Admin Substitute Support (2026-09-02)
+
+- Browser: Match Entry's roster table and "Confirm Tonight's Lineup"
+  picker.
+  - [ ] **NOT VERIFIED (no browser)**: when a team already has a saved
+        lineup for the week, each of the 3 roster rows should show a
+        small "Sub" button (only while scores are still editable).
+        Clicking it opens a modal listing every league player; confirming
+        a different player updates that slot's name/handicap on the
+        scoresheet and shows a "Sub for X" badge with an "Undo" link.
+        **API-verified** against a local server build: saved a real
+        lineup through `POST /api/lineup-plans`, called `POST
+        /api/lineup-plans/{id}/substitute`, and confirmed a follow-up
+        `GET /api/lineup-plans` showed the substitute's `player_id`,
+        `is_sub:true`, and the original player's id as `sub_for_id`.
+        Calling `DELETE .../substitute` afterward reverted the row to
+        exactly its original state.
+  - [ ] **NOT VERIFIED (no browser)**: the manual "Confirm Tonight's
+        Lineup" picker's player dropdowns should list the team's own
+        roster first ("This Team") and every other league player second
+        ("Other Players (Substitute)"), so a true substitute (not
+        normally on this team) can be selected there too. **Confirmed at
+        the code level**: `makeOpts()` in
+        `match-entry-page-component.js` now builds both `<optgroup>`s
+        from `this.#allPlayers` instead of the team-filtered roster
+        array.
+  - [ ] **NOT VERIFIED (no browser)**: a substitute chosen through either
+        path should score correctly -- their real current handicap and
+        name should appear throughout the scoresheet, and saving the
+        scoresheet should record `match_results` under the substitute's
+        own `player_id`. **Confirmed at the code level and via the
+        existing `SaveRounds` behavior** (unchanged): the scoring path
+        already trusted whatever `player_id` a round submission listed;
+        the fix was making the *frontend* resolve a substitute's
+        `player_id` correctly (against the full player list, not the
+        team roster) rather than any backend scoring change.
+- New focused Go tests (all passing): 12 new `LineupService` unit tests
+  (`backend/domains/matches/lineup_service_test.go`) covering
+  validation, all four lock checks (season closed, week closed,
+  approved, processed), the no-match-scheduled-yet allow path, the
+  UNIQUE-constraint-to-409 mapping, and clear-substitute delegation; 8
+  new SQLite `LineupStore` tests
+  (`backend/storage/sqlite/lineup_store_test.go`) covering
+  `GetLineupPlan`/`FindMatchID` found/not-found, `SetSubstitute`, and
+  `ClearSubstitute`; 13 new handler tests
+  (`handlers/api_lineup_substitute_test.go`) covering 401/403/409/400
+  across auth and all four locks, league_admin/admin/system_admin
+  success, and a full set-then-clear round trip over real HTTP; 1 new
+  Weekly Summary store test confirming `is_sub`/`sub_for_name` populate
+  correctly (`TestWeekStore_GetWeekPlayerStats_ShowsSubstituteStatus`);
+  1 new Player Overview stats regression test confirming a substitute's
+  results count toward their own totals
+  (`TestRoundStore_GetPlayerStats_SubstitutePlayer_StatsCountTowardOwnTeam`).
+- `node --check` passes on both changed/new JS files:
+  `web/domains/matches/match-entry-page-component.js`,
+  `web/domains/matches/match-entry-api-service.js`.
+- Known, deliberately out-of-scope notes (not oversights):
+  - No Sub control for a slot resolved only from already-scored round
+    results (no known `lineup_plans` row for it) -- retroactively
+    substituting a played match raises different questions this phase
+    doesn't answer.
+  - Weekly Summary's `player_stats` (now carrying `is_sub`/
+    `sub_for_name`) is still not rendered in that screen at all --
+    pre-existing, not a regression; see Known Gaps row #15.
+  - Player Overview's schedule section still won't show a substitute's
+    one-off match for a different team -- accepted, documented
+    limitation, not the "big player-history redesign" this phase was
+    told not to force.
+- Staging verification: not yet done for this phase.
+
+---
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |
@@ -1624,15 +1701,18 @@ Financial Phase 1 uses -- instead of staying an unprotected read.
 | 12 | `GetPlayerStats`'s season-scoped query never scans/computes `WinPct` -- discovered 2026-08-27 during Player Overview Phase 1 discovery | ~~Medium~~ | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | **Not a live bug -- discovery-time misdiagnosis, corrected 2026-09-01.** The store's raw SQL genuinely omits `win_pct`, but `RoundService.GetPlayerStats` (`backend/domains/matches/round_service.go`) -- the method both `GET /api/player-stats` and `GET /api/players/{id}/overview` actually call -- has computed `WinPct = games_won/(games_won+games_lost)` since Matches Phase B3 (2026-07-01), before this row was ever opened. Real responses always had correct `win_pct`. Closed with a new end-to-end regression test, `TestPlayerStats_WinPctComputedEndToEnd`, since nothing previously verified this past the isolated service-level unit test. See `player-stats-winpct-roster-scope-fix` in `doc/roadmap.md`. |
 | 13 | The league-scoped variant of `GetPlayerStats` still drops season-roster-only players (`INNER JOIN teams t ON t.id = p.team_id` on the legacy column) -- only the season-scoped branch was fixed by `player-stats-roster-join-fix` (row #7) -- discovered 2026-08-27 during Player Overview Phase 1 discovery | ~~Medium~~ | `backend/storage/sqlite/round_store.go` `GetPlayerStats` (league-scoped branch) | **Fixed 2026-09-01** by `player-stats-winpct-roster-scope-fix`: the league-scoped query now includes players assigned via `season_rosters` or `lineup_plans` for any season in the league, not just a direct `players.team_id`, without duplicating rows for players eligible through more than one source. Verified via 4 new SQLite store tests for the league-scoped fix; the existing season-scoped roster tests (`TestRoundStore_GetPlayerStats_RosterOnlyPlayer_NullTeamID`, `TestRoundStore_GetPlayerStats_SeasonRosterTeamOverridesStaleTeamID`) remain passing unchanged. See `doc/roadmap.md` for full detail. |
 | 14 | Initial dashboard bootstrap logs `document.querySelector(...)?.refresh is not a function` in the browser console, likely because `app.js` can call `dashboard-page.refresh()` before the module-defined custom element has upgraded; dashboard content still populated during the 2026-08-27 staging pass | Low | `web/app.js` bootstrap/module load ordering | Open |
-| 15 | `lineup_plans.is_sub`/`sub_for_id` are readable but cannot be set through any write path (`SaveTeamLineup` hardcodes `is_sub=0`, never sets `sub_for_id`) -- no substitute workflow is actually creatable today despite the schema/model supporting it -- discovered 2026-08-27 during Weekly Summary Phase 1 discovery | Low | `backend/storage/sqlite/lineup_store.go` `SaveTeamLineup` | Open -- explicitly deferred, not bundled into Weekly Summary Phase 1 |
+| 15 | `lineup_plans.is_sub`/`sub_for_id` are readable but cannot be set through any write path (`SaveTeamLineup` hardcodes `is_sub=0`, never sets `sub_for_id`) -- no substitute workflow is actually creatable today despite the schema/model supporting it -- discovered 2026-08-27 during Weekly Summary Phase 1 discovery | ~~Low~~ | `backend/storage/sqlite/lineup_store.go` `SaveTeamLineup` | **Fixed 2026-09-02** by Substitute Workflow Phase 1: new `POST`/`DELETE /api/lineup-plans/{id}/substitute` endpoints set/clear `is_sub`/`sub_for_id` in place, gated by `clearanceAuth` and the same season/week/approval/processed locks score edits respect. See section 21 above and `doc/domains/matches/README.md`. |
+| 16 | No Sub control for a lineup slot resolved only from already-scored round results (no known `lineup_plans` row for it) -- retroactively substituting a played match raises different questions this phase doesn't answer -- discovered 2026-09-02 during Substitute Workflow Phase 1 | Low (known/tracked) | `web/domains/matches/match-entry-page-component.js` | Open -- explicitly deferred, not bundled into Substitute Workflow Phase 1 |
+| 17 | Weekly Summary's `player_stats` array (now carrying `is_sub`/`sub_for_name` as of Substitute Workflow Phase 1) is still not rendered in that screen at all -- pre-existing since Weekly Summary Phase 1, not a regression -- discovered 2026-09-02 | Low (known/tracked) | `web/domains/weekly-summary/weekly-summary-page-component.js` | Open -- explicitly deferred, not bundled into Substitute Workflow Phase 1 |
+| 18 | Player Overview's schedule section won't show a substitute's one-off match for a different team (schedule resolves via the player's own team for the season, not the team they subbed for) -- discovered 2026-09-02 during Substitute Workflow Phase 1 | Low (known/tracked, accepted) | `handlers/api_player_overview_handler.go` | Open -- explicitly accepted as a limitation, not the "big player-history redesign" this phase was told not to force |
 
 ## Recommended Next Branches
 
 `api-client-bodyless-post-fix`, `player-stats-roster-join-fix`,
-`handicap-preview-parity`, and `player-stats-winpct-roster-scope-fix`
-are all done (see the Critical Blocker section above and Known Gaps
-rows #6/#7/#8/#12/#13) -- no longer listed here as pending branches.
-Remaining, in priority order:
+`handicap-preview-parity`, `player-stats-winpct-roster-scope-fix`, and
+`substitute-workflow-phase-1` are all done (see the Critical Blocker
+section above and Known Gaps rows #6/#7/#8/#12/#13/#15) -- no longer
+listed here as pending branches. Remaining, in priority order:
 
 1. A friendlier error for the season-teams name-collision 500 (#10), fixing
    the rules-update response echo (#11), and deciding whether "Generate
