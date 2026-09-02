@@ -63,8 +63,13 @@ These items should stay small enough to review and ship independently.
     (not yet re-verified against staging). The Week Recap / Handicap
     Recommendations eligibility parity gap is also fixed as of 2026-08-24
     (`handicap-preview-parity`) -- both paths now share one computation and
-    eligibility gate. See Completed / Largely Completed below for all
-    entries and `doc/testing/product-smoke-test-checklist.md` for full
+    eligibility gate. **Player Stats accuracy fix complete 2026-09-01**
+    (`player-stats-winpct-roster-scope-fix`) -- see Completed / Largely
+    Completed below: the league-scoped roster/lineup gap is fixed, and the
+    `WinPct`-always-zero claim in the two Known Gaps rows below turned out
+    to be a discovery-time misdiagnosis, corrected as part of this fix (see
+    that entry for detail). See Completed / Largely Completed below for
+    all entries and `doc/testing/product-smoke-test-checklist.md` for full
     detail on the remaining open findings (the generated-schedule undo gap
     and two low-severity rough edges).
 
@@ -645,8 +650,11 @@ follow-up.
   only falls back to `players.team_id` when they have no roster row for
   that season -- so a stale or missing `players.team_id` no longer excludes
   or misattributes a player. The league-scoped variant of `GetPlayerStats`
-  is unchanged; `season_rosters` has no league-only concept to fall back
-  to there. Verified with two new SQLite store tests: one reproducing the
+  was left unchanged at this point; `season_rosters` has no league-only
+  concept to fall back to directly, so that branch needed its own fix.
+  **Update 2026-09-01:** fixed by `player-stats-winpct-roster-scope-fix`
+  -- see Completed / Largely Completed below. Verified with two new SQLite
+  store tests at the time of this original fix: one reproducing the
   exact reported shape (a `players.team_id IS NULL` player present only in
   `season_rosters`, now correctly included with the right team name and
   stats) and one confirming the season roster wins when it disagrees with
@@ -847,11 +855,23 @@ follow-up.
   per PM decision: real player login/self-service portal, payment
   entry/history, payout calculations, communication/notifications,
   mobile-specific layout, handicap history/trend, and multi-season
-  views. Two incidental gaps found during discovery were deliberately
-  not bundled into this phase: `GetPlayerStats`'s `WinPct` field is
-  never computed (always `0.0` in every response, including this one),
-  and the league-scoped variant of that same query still drops
-  season-roster-only players. Verified with `go test ./...` and
+  views. Two incidental gaps were flagged during discovery as
+  deliberately not bundled into this phase: `GetPlayerStats`'s `WinPct`
+  field appeared never computed, and the league-scoped variant of that
+  same query still dropped season-roster-only players. **Update
+  2026-09-01:** the league-scoped gap was real and is now fixed (see
+  `player-stats-winpct-roster-scope-fix` in Completed / Largely
+  Completed below); the `WinPct` gap turned out to be a discovery-time
+  misdiagnosis -- `RoundStore.GetPlayerStats`'s raw SQL never selects a
+  `win_pct` column, but `RoundService.GetPlayerStats` (the method both
+  this endpoint and `GET /api/player-stats` actually call, since
+  handlers are wired to the service, not the store) has computed
+  `WinPct = games_won/(games_won+games_lost)` as a post-processing step
+  since Matches Phase B3 (2026-07-01) -- well before this discovery. So
+  `win_pct` was already correct in every real response; only a
+  from-scratch look at the store's SQL suggested otherwise. See that
+  entry for the new end-to-end regression test that closes this out
+  for good. Verified with `go test ./...` and
   `go build ./...` (five new focused tests: explicit season_id, omitted
   season_id defaulting to active season, missing player 404, a
   not-rostered player falling back to their direct team, and a player
@@ -1010,6 +1030,67 @@ follow-up.
   card and the corrected nav/row-button gating remain **NOT VERIFIED
   (no browser)**. See `doc/domains/players/README.md`'s "Player
   Overview Phase 2 Implementation" section for full detail.
+- Player Stats accuracy fix: WinPct and league roster scope (2026-09-01,
+  `player-stats-winpct-roster-scope-fix`). Closes out Known Gaps rows
+  #12 and #13 in `doc/testing/product-smoke-test-checklist.md`.
+  - **`WinPct` ("always 0") turned out to be a misdiagnosis, not a live
+    bug.** `RoundStore.GetPlayerStats`'s raw SQL
+    (`backend/storage/sqlite/round_store.go`) genuinely never selects a
+    `win_pct` column -- but `RoundService.GetPlayerStats`
+    (`backend/domains/matches/round_service.go`), the method both `GET
+    /api/player-stats` and `GET /api/players/{id}/overview` actually
+    call (handlers are wired to the service, not the store directly),
+    has computed `WinPct = games_won/(games_won+games_lost)` as a
+    post-processing step since Matches Phase B3 (2026-07-01) -- more
+    than a month before the 2026-08-27 discovery that flagged this as
+    an open gap. Confirmed via a new full-HTTP-round-trip regression
+    test, `TestPlayerStats_WinPctComputedEndToEnd`
+    (`handlers/api_weeks_test.go`), which closes a real testing gap
+    (until now nothing exercised `win_pct` past the isolated
+    `RoundService`-level unit test) even though no code change was
+    needed to fix a live bug. No standings formula touched.
+  - **League-scoped `GetPlayerStats` roster/lineup gap was real, now
+    fixed.** The `req.LeagueID != 0` branch previously required
+    `JOIN teams t ON t.id = p.team_id AND t.league_id = ?` -- an INNER
+    JOIN on the legacy column that silently dropped any player
+    assigned to a team only via `season_rosters` or `lineup_plans`
+    (NULL or stale `players.team_id`). Fixed with a `league_players`
+    CTE that computes eligible player IDs as the `UNION` (deduplicating
+    automatically) of three sources -- direct `players.team_id` in the
+    league (existing, preserved), any `season_rosters` row for a season
+    in that league, or any `lineup_plans` row for a season in that
+    league (covers a substitute never added to `season_rosters`) --
+    joined against `players` before `match_results` is ever touched, so
+    a player matching multiple sources still produces exactly one
+    aggregated row rather than inflated sums. Team display name uses
+    the same three-source precedence, each resolved as an independent
+    scalar subquery (direct team first, then the most recent -- highest
+    `season_id`, then `id` -- `season_rosters` team, then the most
+    recent `lineup_plans` team) rather than a join, for the same
+    no-row-multiplication reason. The season-scoped branch and the
+    standings computation were not touched. Result shape
+    (`models.PlayerStat`) unchanged.
+  - Did not share one SQL/helper path between the season-scoped and
+    league-scoped branches: season scope resolves against one known
+    `season_id`, while league scope has no single season to resolve
+    against and must aggregate across every season in the league, so
+    the two queries stayed genuinely different shapes rather than
+    forcing an artificial shared abstraction.
+  - Verified with `go test ./... -count=1` (4 new SQLite store tests
+    for the league-scoped fix: direct-team player still appears,
+    season_rosters-only player appears, lineup_plans-only substitute
+    appears, and no duplicate row for a player eligible via both
+    team_id and season_rosters; the two pre-existing season-scoped
+    roster tests -- `TestRoundStore_GetPlayerStats_RosterOnlyPlayer_NullTeamID`
+    and `TestRoundStore_GetPlayerStats_SeasonRosterTeamOverridesStaleTeamID`
+    -- continue to pass unchanged; plus 1 new end-to-end handler test
+    for `WinPct`) and `go build ./...`. No JS changed -- backend/SQL
+    only. Manual verification was done via the automated SQLite store
+    tests (which exercise the exact same query the running server
+    uses) rather than a live curl walkthrough, since reproducing a
+    league-scoped roster-only player through the full API requires a
+    multi-step season/roster bootstrap the store tests already cover
+    more directly and deterministically.
 
 ## Open Questions To Resolve
 

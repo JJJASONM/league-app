@@ -2495,7 +2495,12 @@ All explicitly out of scope per PM decision, not oversights:
 - Auth changes -- Week Recap remains unprotected, same as before.
 - `GetPlayerStats`'s `WinPct`-always-zero bug and the league-scoped
   roster-only gap (both already tracked as separate follow-ups from
-  Player Overview Phase 1 discovery, unrelated to this phase).
+  Player Overview Phase 1 discovery, unrelated to this phase). **Update
+  2026-09-01:** both closed by `player-stats-winpct-roster-scope-fix`
+  -- `WinPct` was a discovery-time misdiagnosis (already computed
+  correctly by `RoundService.GetPlayerStats`), and the league-scoped
+  roster/lineup gap was real and is now fixed. See `doc/roadmap.md` for
+  full detail.
 - Schedule undo and other low-severity polish items.
 
 ### Verification

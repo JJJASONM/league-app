@@ -383,6 +383,62 @@ func TestPlayerStats_IncludeClosedMatch(t *testing.T) {
 	}
 }
 
+// TestPlayerStats_WinPctComputedEndToEnd is a full-HTTP regression test for
+// the smoke checklist's "win_pct always 0" gap. RoundStore.GetPlayerStats
+// never selects a win_pct column -- WinPct is computed afterward by
+// RoundService.GetPlayerStats (games_won / (games_won+games_lost)), the same
+// method GET /api/player-stats actually calls. This test hits the real HTTP
+// route end to end, confirming the gap is already closed in production
+// wiring, not just at the RoundService unit-test level
+// (TestGetPlayerStats_WinPctComputed in round_service_test.go covers the
+// computation in isolation; this covers the whole request path).
+func TestPlayerStats_WinPctComputedEndToEnd(t *testing.T) {
+	f := weekTestSeed(t)
+	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
+	if _, err := db.DB.Exec(`
+		INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff)
+		VALUES (?,?,?,3,1,2)`, f.matchID, f.playerA, f.teamA); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	closeReq, _ := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/seasons/%d/weeks/1/close", f.srv.URL, f.sid),
+		strings.NewReader("{}"))
+	closeReq.Header.Set("Content-Type", "application/json")
+	closeResp, err := http.DefaultClient.Do(closeReq)
+	if err != nil {
+		t.Fatalf("close request: %v", err)
+	}
+	if closeResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(closeResp.Body)
+		t.Fatalf("close week failed: %d: %s", closeResp.StatusCode, body)
+	}
+	closeResp.Body.Close()
+
+	resp, err := http.Get(fmt.Sprintf("%s/api/player-stats?season_id=%d", f.srv.URL, f.sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var stats []map[string]any
+	json.NewDecoder(resp.Body).Decode(&stats)
+	var found bool
+	for _, s := range stats {
+		pid, _ := s["player_id"].(float64)
+		if int64(pid) != f.playerA {
+			continue
+		}
+		found = true
+		wp, _ := s["win_pct"].(float64)
+		if wp != 0.75 {
+			t.Errorf("want win_pct=0.75 (3 games_won / 4 total), got %v", wp)
+		}
+	}
+	if !found {
+		t.Fatal("player A not found in player-stats response")
+	}
+}
+
 func TestSaveRounds_PopulatesSets(t *testing.T) {
 	f := weekTestSeed(t)
 	// Disable roster gate so saveRounds reaches sets logic (teams_managed=1 by default via API).

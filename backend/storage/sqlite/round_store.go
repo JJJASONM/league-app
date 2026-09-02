@@ -276,8 +276,12 @@ func (s *RoundStore) GetStandingsData(ctx context.Context, seasonID int64) (matc
 // GetPlayerStats returns aggregated match_results for the given season or league scope.
 // Returns nil when neither SeasonID nor LeagueID is set (caller normalises to empty slice).
 // SeasonID scope includes players present in that season's season_rosters even when
-// players.team_id is NULL; LeagueID scope is unchanged and still resolves team only via
-// the current players.team_id (season_rosters has no league-only concept to fall back to).
+// players.team_id is NULL. LeagueID scope includes players assigned via season_rosters
+// or lineup_plans for any season in that league, even when players.team_id is NULL or
+// belongs to a different league -- see the league-scoped case below for detail; team
+// display name resolution intentionally mirrors the season-scoped case's precedence
+// (direct team_id first, then roster/lineup team) but cannot share its exact SQL since
+// league scope has no single season_id to resolve against.
 func (s *RoundStore) GetPlayerStats(ctx context.Context, req matches.PlayerStatsRequest) ([]models.PlayerStat, error) {
 	var query string
 	var args []any
@@ -310,16 +314,54 @@ func (s *RoundStore) GetPlayerStats(ctx context.Context, req matches.PlayerStats
 			GROUP BY p.id ORDER BY SUM(mr.sets_won) DESC, SUM(mr.games_won) DESC`
 		args = []any{req.SeasonID, req.SeasonID, req.SeasonID}
 	case req.LeagueID != 0:
+		// league_players is deduplicated (plain UNION) to exactly one row per
+		// eligible player_id before any join touches match_results -- joining
+		// season_rosters/lineup_plans directly (both can have many rows per
+		// player across a league's seasons) would otherwise multiply
+		// match_results rows and inflate the SUM(...) aggregates. A player is
+		// eligible via any of three sources: a direct players.team_id in this
+		// league (existing behavior, preserved), a season_rosters row for any
+		// season in this league, or a lineup_plans row for any season in this
+		// league (covers a substitute who was never added to season_rosters).
+		// Team display name uses the same precedence, each resolved as an
+		// independent scalar subquery (not a join) for the same
+		// no-row-multiplication reason: direct team_id first, else the most
+		// recent (highest season_id, then id) season_rosters team, else the
+		// most recent lineup_plans team.
 		query = `
+			WITH league_players AS (
+				SELECT p.id AS player_id FROM players p
+				JOIN teams t ON t.id = p.team_id AND t.league_id = ?
+				UNION
+				SELECT sr.player_id FROM season_rosters sr
+				JOIN seasons se ON se.id = sr.season_id WHERE se.league_id = ?
+				UNION
+				SELECT lp.player_id FROM lineup_plans lp
+				JOIN seasons se ON se.id = lp.season_id WHERE se.league_id = ?
+			)
 			SELECT p.id, COALESCE(p.player_number,''), p.first_name || ' ' || p.last_name,
-			       COALESCE(t.name,''), p.handicap,
+			       COALESCE(
+			           (SELECT t.name FROM teams t WHERE t.id = p.team_id AND t.league_id = ?),
+			           (SELECT t.name FROM teams t
+			            JOIN season_rosters sr ON sr.team_id = t.id
+			            JOIN seasons se ON se.id = sr.season_id
+			            WHERE se.league_id = ? AND sr.player_id = p.id
+			            ORDER BY sr.season_id DESC, sr.id DESC LIMIT 1),
+			           (SELECT t.name FROM teams t
+			            JOIN lineup_plans lp ON lp.team_id = t.id
+			            JOIN seasons se ON se.id = lp.season_id
+			            WHERE se.league_id = ? AND lp.player_id = p.id
+			            ORDER BY lp.season_id DESC, lp.id DESC LIMIT 1),
+			           ''
+			       ),
+			       p.handicap,
 			       COALESCE(SUM(mr.sets_won),0), COALESCE(SUM(mr.sets_lost),0),
 			       COALESCE(SUM(mr.games_won),0), COALESCE(SUM(mr.games_lost),0)
 			FROM players p
-			JOIN teams t ON t.id = p.team_id AND t.league_id = ?
+			JOIN league_players lps ON lps.player_id = p.id
 			LEFT JOIN match_results mr ON mr.player_id = p.id
 			GROUP BY p.id ORDER BY SUM(mr.sets_won) DESC, SUM(mr.games_won) DESC`
-		args = []any{req.LeagueID}
+		args = []any{req.LeagueID, req.LeagueID, req.LeagueID, req.LeagueID, req.LeagueID, req.LeagueID}
 	default:
 		return nil, nil
 	}

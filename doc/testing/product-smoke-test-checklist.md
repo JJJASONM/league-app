@@ -937,6 +937,16 @@ nothing to verify in the browser for this feature.
   gap was found. Not re-verified against the actual staging environment
   this run -- that would need a deploy.
 
+  **Follow-up fix (2026-09-01, `player-stats-winpct-roster-scope-fix`):**
+  the league-scoped variant of this same query (`GET
+  /api/player-stats?league_id=`) had the identical gap -- roster-only
+  players were dropped there too -- and is now fixed the same way,
+  extended to also cover `lineup_plans`-only substitutes. Separately,
+  the "`WinPct` never computed" gap opened alongside this one (Known
+  Gaps row #12) turned out to already be fixed at the service layer and
+  was never a live bug; see that row and `doc/roadmap.md` for full
+  detail on both.
+
 ### 13. Handicap Review / Apply
 
 - Browser: Handicap nav.
@@ -1242,11 +1252,15 @@ with every prior staging pass's bootstrap-user handling.
   no-team-at-all -> `team: null` and empty schedule/stats, and every
   case asserting `money.tracked=false` with a non-empty explanatory
   message.
-- Known, deliberately out-of-scope note: `overview.stats.win_pct` will
-  always read `0` here too, since it inherits the pre-existing
-  `GetPlayerStats` `WinPct`-never-computed gap (see Known Gaps Summary
-  below) -- not a regression introduced by this phase, just inherited
-  from the underlying query this endpoint reuses.
+- **Correction, 2026-09-01:** the note originally here claimed
+  `overview.stats.win_pct` always reads `0` because of a
+  `GetPlayerStats` `WinPct`-never-computed gap. That gap was a
+  discovery-time misdiagnosis, not a live bug -- `RoundService`
+  (the method this endpoint's `RoundManager.GetPlayerStats` call
+  actually resolves to) has computed `WinPct` correctly since before
+  this screen existed. `overview.stats.win_pct` was already correct in
+  every real response. See Known Gaps row #12 and
+  `player-stats-winpct-roster-scope-fix` in `doc/roadmap.md`.
 - Staging verification (2026-08-27, `http://league-staging.local`,
   deployed from `dc2940a`): opened the app in the in-app browser, confirmed
   the Player Overview nav entry is visible without admin auth, opened the
@@ -1607,17 +1621,18 @@ Financial Phase 1 uses -- instead of staying an unprotected read.
 | 9 | No way to cleanly undo a generated schedule (`Generate Schedule` has no matching `DELETE`) short of deleting the whole season/league -- discovered 2026-08-23 | Low | `handlers/api_match_routes.go` (no `DELETE /api/matches/{id}`) | Open |
 | 10 | `POST /api/seasons/{id}/teams` with `name` returns a raw 500 with a leaked SQL message instead of a friendly 409 when a same-named standalone team already exists in the league -- discovered 2026-08-23 | Low | `backend/domains/seasons` `AddTeam` | Open |
 | 11 | `PUT /api/seasons/{id}/rules/{rid}` response body echoes `season_id:0, rule_key:""` instead of the real values, even though the stored row is correct -- discovered 2026-08-23 | Low | `handlers` season-rules update handler | Open |
-| 12 | `GetPlayerStats`'s season-scoped query never scans/computes `WinPct` -- every `GET /api/player-stats` and `GET /api/players/{id}/overview` response has `win_pct:0` regardless of real results; Standings' Win% column renders this directly -- discovered 2026-08-27 during Player Overview Phase 1 discovery | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | Open -- explicitly deferred as a separate follow-up, not bundled into Player Overview Phase 1 |
-| 13 | The league-scoped variant of `GetPlayerStats` still drops season-roster-only players (`INNER JOIN teams t ON t.id = p.team_id` on the legacy column) -- only the season-scoped branch was fixed by `player-stats-roster-join-fix` (row #7) -- discovered 2026-08-27 during Player Overview Phase 1 discovery | Medium | `backend/storage/sqlite/round_store.go` `GetPlayerStats` (league-scoped branch) | Open -- explicitly deferred as a separate follow-up, not bundled into Player Overview Phase 1 |
+| 12 | `GetPlayerStats`'s season-scoped query never scans/computes `WinPct` -- discovered 2026-08-27 during Player Overview Phase 1 discovery | ~~Medium~~ | `backend/storage/sqlite/round_store.go` `GetPlayerStats` | **Not a live bug -- discovery-time misdiagnosis, corrected 2026-09-01.** The store's raw SQL genuinely omits `win_pct`, but `RoundService.GetPlayerStats` (`backend/domains/matches/round_service.go`) -- the method both `GET /api/player-stats` and `GET /api/players/{id}/overview` actually call -- has computed `WinPct = games_won/(games_won+games_lost)` since Matches Phase B3 (2026-07-01), before this row was ever opened. Real responses always had correct `win_pct`. Closed with a new end-to-end regression test, `TestPlayerStats_WinPctComputedEndToEnd`, since nothing previously verified this past the isolated service-level unit test. See `player-stats-winpct-roster-scope-fix` in `doc/roadmap.md`. |
+| 13 | The league-scoped variant of `GetPlayerStats` still drops season-roster-only players (`INNER JOIN teams t ON t.id = p.team_id` on the legacy column) -- only the season-scoped branch was fixed by `player-stats-roster-join-fix` (row #7) -- discovered 2026-08-27 during Player Overview Phase 1 discovery | ~~Medium~~ | `backend/storage/sqlite/round_store.go` `GetPlayerStats` (league-scoped branch) | **Fixed 2026-09-01** by `player-stats-winpct-roster-scope-fix`: the league-scoped query now includes players assigned via `season_rosters` or `lineup_plans` for any season in the league, not just a direct `players.team_id`, without duplicating rows for players eligible through more than one source. Verified via 4 new SQLite store tests for the league-scoped fix; the existing season-scoped roster tests (`TestRoundStore_GetPlayerStats_RosterOnlyPlayer_NullTeamID`, `TestRoundStore_GetPlayerStats_SeasonRosterTeamOverridesStaleTeamID`) remain passing unchanged. See `doc/roadmap.md` for full detail. |
 | 14 | Initial dashboard bootstrap logs `document.querySelector(...)?.refresh is not a function` in the browser console, likely because `app.js` can call `dashboard-page.refresh()` before the module-defined custom element has upgraded; dashboard content still populated during the 2026-08-27 staging pass | Low | `web/app.js` bootstrap/module load ordering | Open |
 | 15 | `lineup_plans.is_sub`/`sub_for_id` are readable but cannot be set through any write path (`SaveTeamLineup` hardcodes `is_sub=0`, never sets `sub_for_id`) -- no substitute workflow is actually creatable today despite the schema/model supporting it -- discovered 2026-08-27 during Weekly Summary Phase 1 discovery | Low | `backend/storage/sqlite/lineup_store.go` `SaveTeamLineup` | Open -- explicitly deferred, not bundled into Weekly Summary Phase 1 |
 
 ## Recommended Next Branches
 
-`api-client-bodyless-post-fix`, `player-stats-roster-join-fix`, and
-`handicap-preview-parity` are all done (see the Critical Blocker section
-above and Known Gaps rows #6/#7/#8) -- no longer listed here as pending
-branches. Remaining, in priority order:
+`api-client-bodyless-post-fix`, `player-stats-roster-join-fix`,
+`handicap-preview-parity`, and `player-stats-winpct-roster-scope-fix`
+are all done (see the Critical Blocker section above and Known Gaps
+rows #6/#7/#8/#12/#13) -- no longer listed here as pending branches.
+Remaining, in priority order:
 
 1. A friendlier error for the season-teams name-collision 500 (#10), fixing
    the rules-update response echo (#11), and deciding whether "Generate

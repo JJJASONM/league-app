@@ -231,15 +231,27 @@ All explicitly out of scope per PM decision, not oversights:
   codebase; current handicap value only for Phase 1).
 - Multi-season player view or a season selector on this screen (active
   season only for Phase 1).
-- Two incidental gaps found during discovery, explicitly deferred to
-  separate follow-ups rather than bundled here:
-  - `GetPlayerStats`'s `WinPct` field is never scanned/computed in the
-    season-scoped query (`backend/storage/sqlite/round_store.go`) --
-    always `0.0` in every response, including this endpoint's `stats`.
-  - The league-scoped variant of the same query still drops
+- Two incidental gaps were flagged during discovery as deferred to
+  separate follow-ups rather than bundled here. **Update 2026-09-01
+  (`player-stats-winpct-roster-scope-fix`):** both are now closed --
+  see `doc/roadmap.md` for full detail:
+  - `GetPlayerStats`'s `WinPct` field appeared never scanned/computed in
+    the season-scoped query (`backend/storage/sqlite/round_store.go`).
+    This turned out to be a discovery-time misdiagnosis, not a live
+    bug: `RoundService.GetPlayerStats`
+    (`backend/domains/matches/round_service.go`) -- the method this
+    endpoint's `roundMgr.GetPlayerStats` call actually resolves to --
+    has computed `WinPct` correctly since before this screen existed.
+    `stats.win_pct` on this endpoint was already correct in every real
+    response.
+  - The league-scoped variant of the same query really did drop
     season-roster-only players (an `INNER JOIN teams` on the legacy
     `players.team_id`); only the season-scoped branch was fixed
-    2026-08-23.
+    2026-08-23. Now fixed to also include players assigned via
+    `season_rosters` or `lineup_plans` for any season in the league.
+    Does not affect this endpoint directly (Player Overview only calls
+    the season-scoped path), but closes the gap for `GET
+    /api/player-stats?league_id=`.
 
 ### Verification
 
@@ -520,8 +532,10 @@ entry/payouts, handicap history, and multi-season views are all
 explicitly deferred, not oversights. Two incidental gaps found during
 discovery (`GetPlayerStats`'s `WinPct` always zero; the league-scoped
 stats query still dropping roster-only players) were deliberately not
-bundled into this phase. See "Player Overview Phase 1 Implementation"
-above for full detail.
+bundled into this phase. Both were closed out 2026-09-01 by
+`player-stats-winpct-roster-scope-fix` -- the `WinPct` one turned out
+to be a misdiagnosis, not a live bug. See "Player Overview Phase 1
+Implementation" above for full detail.
 
 ### 2026-08-29 - Player Overview Phase 2: real dues status
 

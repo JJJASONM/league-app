@@ -354,6 +354,191 @@ func TestRoundStore_GetPlayerStats_SeasonRosterTeamOverridesStaleTeamID(t *testi
 	t.Fatal("player not found in stats")
 }
 
+// TestRoundStore_GetPlayerStats_LeagueScope_DirectTeamPlayerStillAppears is a
+// regression guard for the league-scoped roster/lineup fix below -- a player
+// resolved purely through the existing players.team_id path must keep
+// appearing exactly as before.
+func TestRoundStore_GetPlayerStats_LeagueScope_DirectTeamPlayerStillAppears(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, homePlayerID, _, _, homeTeamID, _ := seedRoundTestData(t)
+	var leagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM teams WHERE id=?`, homeTeamID).Scan(&leagueID); err != nil {
+		t.Fatalf("look up league id: %v", err)
+	}
+
+	db.DB.Exec(`UPDATE matches SET completed=1, week_closed=1 WHERE id=?`, matchID)
+	if _, err := db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,2,0,2)`,
+		matchID, homePlayerID, homeTeamID); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	stats, err := s.GetPlayerStats(context.Background(), matches.PlayerStatsRequest{LeagueID: leagueID})
+	if err != nil {
+		t.Fatalf("GetPlayerStats: %v", err)
+	}
+	for _, st := range stats {
+		if st.PlayerID == homePlayerID {
+			if st.TeamName != "Home Team" {
+				t.Errorf("want team name %q via direct team_id, got %q", "Home Team", st.TeamName)
+			}
+			if st.GamesWon != 2 {
+				t.Errorf("want games_won=2, got %d", st.GamesWon)
+			}
+			return
+		}
+	}
+	t.Fatal("direct-team player not found in league-scoped stats")
+}
+
+// TestRoundStore_GetPlayerStats_LeagueScope_RosterOnlyPlayerViaSeasonRosters
+// is a regression test for the smoke checklist's row #13 gap: a player with
+// NULL players.team_id, assigned only via season_rosters for a season in
+// this league, must appear in league-scoped player stats.
+func TestRoundStore_GetPlayerStats_LeagueScope_RosterOnlyPlayerViaSeasonRosters(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+	var leagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM teams WHERE id=?`, homeTeamID).Scan(&leagueID); err != nil {
+		t.Fatalf("look up league id: %v", err)
+	}
+
+	res, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('Casey','Roster',0)`)
+	if err != nil {
+		t.Fatalf("insert roster-only player: %v", err)
+	}
+	rosterPlayerID, _ := res.LastInsertId()
+
+	if _, err := db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Home Team')`,
+		seasonID, homeTeamID); err != nil {
+		t.Fatalf("insert season_teams: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+		seasonID, homeTeamID, rosterPlayerID); err != nil {
+		t.Fatalf("insert season_rosters: %v", err)
+	}
+
+	db.DB.Exec(`UPDATE matches SET completed=1, week_closed=1 WHERE id=?`, matchID)
+	if _, err := db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,3,1,2)`,
+		matchID, rosterPlayerID, homeTeamID); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	stats, err := s.GetPlayerStats(context.Background(), matches.PlayerStatsRequest{LeagueID: leagueID})
+	if err != nil {
+		t.Fatalf("GetPlayerStats: %v", err)
+	}
+	var found *models.PlayerStat
+	for i := range stats {
+		if stats[i].PlayerID == rosterPlayerID {
+			found = &stats[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("season_rosters-only player (NULL players.team_id) not found in league-scoped stats")
+	}
+	if found.TeamName != "Home Team" {
+		t.Errorf("want team name resolved via season_rosters = %q, got %q", "Home Team", found.TeamName)
+	}
+	if found.GamesWon != 3 || found.GamesLost != 1 {
+		t.Errorf("want games_won=3 games_lost=1, got %d/%d", found.GamesWon, found.GamesLost)
+	}
+}
+
+// TestRoundStore_GetPlayerStats_LeagueScope_RosterOnlyPlayerViaLineupPlans
+// covers a substitute who was never added to season_rosters at all -- only a
+// lineup_plans row places them on a team for a given week. This must also
+// keep them from being silently dropped from league-scoped stats.
+func TestRoundStore_GetPlayerStats_LeagueScope_RosterOnlyPlayerViaLineupPlans(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+	var leagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM teams WHERE id=?`, homeTeamID).Scan(&leagueID); err != nil {
+		t.Fatalf("look up league id: %v", err)
+	}
+
+	res, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('Sam','Sub',0)`)
+	if err != nil {
+		t.Fatalf("insert sub player: %v", err)
+	}
+	subPlayerID, _ := res.LastInsertId()
+
+	if _, err := db.DB.Exec(`INSERT INTO lineup_plans (team_id, player_id, week_number, season_id, is_sub) VALUES (?,?,1,?,1)`,
+		homeTeamID, subPlayerID, seasonID); err != nil {
+		t.Fatalf("insert lineup_plans: %v", err)
+	}
+
+	db.DB.Exec(`UPDATE matches SET completed=1, week_closed=1 WHERE id=?`, matchID)
+	if _, err := db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,1,2,-1)`,
+		matchID, subPlayerID, homeTeamID); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	stats, err := s.GetPlayerStats(context.Background(), matches.PlayerStatsRequest{LeagueID: leagueID})
+	if err != nil {
+		t.Fatalf("GetPlayerStats: %v", err)
+	}
+	var found *models.PlayerStat
+	for i := range stats {
+		if stats[i].PlayerID == subPlayerID {
+			found = &stats[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("lineup_plans-only sub not found in league-scoped stats")
+	}
+	if found.TeamName != "Home Team" {
+		t.Errorf("want team name resolved via lineup_plans = %q, got %q", "Home Team", found.TeamName)
+	}
+	if found.GamesWon != 1 || found.GamesLost != 2 {
+		t.Errorf("want games_won=1 games_lost=2, got %d/%d", found.GamesWon, found.GamesLost)
+	}
+}
+
+// TestRoundStore_GetPlayerStats_LeagueScope_NoDuplicateWithBothTeamIDAndRoster
+// confirms a player eligible through more than one source at once (a direct
+// players.team_id in the league AND a season_rosters row) appears exactly
+// once, not once per matching source -- the risk the league_players CTE's
+// UNION (not UNION ALL) dedup is specifically there to prevent.
+func TestRoundStore_GetPlayerStats_LeagueScope_NoDuplicateWithBothTeamIDAndRoster(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, homePlayerID, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+	var leagueID int64
+	if err := db.DB.QueryRow(`SELECT league_id FROM teams WHERE id=?`, homeTeamID).Scan(&leagueID); err != nil {
+		t.Fatalf("look up league id: %v", err)
+	}
+
+	// homePlayerID already has a direct players.team_id (from seedRoundTestData).
+	// Also give them a season_rosters row for the same team/season.
+	if _, err := db.DB.Exec(`INSERT INTO season_teams (season_id, team_id, season_name) VALUES (?,?,'Home Team')`,
+		seasonID, homeTeamID); err != nil {
+		t.Fatalf("insert season_teams: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO season_rosters (season_id, team_id, player_id) VALUES (?,?,?)`,
+		seasonID, homeTeamID, homePlayerID); err != nil {
+		t.Fatalf("insert season_rosters: %v", err)
+	}
+
+	db.DB.Exec(`UPDATE matches SET completed=1, week_closed=1 WHERE id=?`, matchID)
+	if _, err := db.DB.Exec(`INSERT INTO match_results (match_id, player_id, team_id, games_won, games_lost, diff) VALUES (?,?,?,2,0,2)`,
+		matchID, homePlayerID, homeTeamID); err != nil {
+		t.Fatalf("insert match_results: %v", err)
+	}
+
+	stats, err := s.GetPlayerStats(context.Background(), matches.PlayerStatsRequest{LeagueID: leagueID})
+	if err != nil {
+		t.Fatalf("GetPlayerStats: %v", err)
+	}
+	count := 0
+	for _, st := range stats {
+		if st.PlayerID == homePlayerID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("want exactly 1 row for a player eligible via both team_id and season_rosters, got %d", count)
+	}
+}
+
 // ─── SubmitMatchResults ───────────────────────────────────────────────────────
 
 func TestRoundStore_SubmitMatchResults_ReplacesAndCompletes(t *testing.T) {
