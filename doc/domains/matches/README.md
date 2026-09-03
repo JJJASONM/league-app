@@ -2579,7 +2579,20 @@ expects (exactly 3 rows per team/week).
   currently substituted. `409 SUB_ALREADY_IN_LINEUP` when the chosen
   substitute is already in this team's lineup under a different slot
   (mapped from the table's own `UNIQUE(season_id, team_id, week_number,
-  player_id)` constraint).
+  player_id)` constraint). **Update 2026-09-02 (same-match duplicate-player
+  guard):** `409 SUB_PLAYER_ALREADY_IN_MATCH` ("that player is already in
+  this match") when the chosen substitute already has a `lineup_plans` row
+  for the same season/week under *either* the match's home or away
+  `team_id` -- fixes a staging finding where a player could be selected as
+  a substitute on one team while already a starter on the other, resulting
+  in the same player occupying two slots in one match. Checked via a new
+  `LineupStore.PlayerInMatchLineup` method, using the match's home/away
+  team IDs resolved from `MatchLockChecker.LoadMatchContext` (a new method
+  added to that interface -- `RoundStore` already satisfied it
+  structurally, so no new wiring was needed). Not applied to
+  `ClearSubstitute`: reverting a slot to the player who already held it
+  cannot introduce a new duplicate that wasn't already possible before the
+  substitution existed.
 - **Match Entry** (`web/domains/matches/match-entry-page-component.js`):
   - Player resolution (existing round results and lineup-plan auto-fill)
     now looks players up against the *full* player list instead of the
@@ -2593,11 +2606,17 @@ expects (exactly 3 rows per team/week).
   - The scoresheet's roster table shows a small "Sub" button next to each
     of the 3 home/away players when that slot has a known `lineup_plans`
     row and scores are still editable. Clicking it opens a single shared
-    modal to pick the substitute (from the full player list) and calls
-    `POST .../substitute`, then reloads Match Entry so the scoresheet
-    picks up the new player_id, name, and handicap automatically. Once
+    modal to pick the substitute (from the full player list, *not*
+    grouped -- the "This Team" / "Other Players (Substitute)" `<optgroup>`s
+    belong only to the manual picker described above) and calls `POST
+    .../substitute`, then reloads Match Entry so the scoresheet picks up
+    the new player_id, name, and handicap automatically. Once
     substituted, the slot shows a "Sub for X" badge with an "Undo" link
     (calls `DELETE .../substitute`) while scores remain editable.
+    **Update 2026-09-02:** the modal's player list now also excludes
+    every player already occupying one of the match's 6 slots (both
+    teams), not just the current slot's own player -- see the same-match
+    duplicate-player guard note above.
   - The Sub/Undo controls are only shown for slots resolved from a saved
     `lineup_plans` row (the common case: a team already has a planned
     lineup). A slot resolved only from already-scored round results (no
@@ -2710,6 +2729,34 @@ group remain **NOT VERIFIED (no browser)** in this developer's tool
 session.
 
 ## Decision History
+
+### 2026-09-02 - Substitute Workflow same-match duplicate-player guard
+
+**Status:** `accepted`
+
+Fixes a staging finding from PM's browser verification of Substitute
+Workflow Phase 1: a player could be selected as a substitute on one team
+while already a starter on the other team in the same match, resulting
+in the same player occupying two slots in one match at once (observed on
+staging with a real fixture; PM's Undo immediately reverted the bad
+state, no lasting data corruption). `LineupService.SetSubstitute` now
+rejects with `409 SUB_PLAYER_ALREADY_IN_MATCH` ("that player is already
+in this match") when the candidate substitute already has a
+`lineup_plans` row for the same season/week under either the match's
+home or away `team_id`, via a new `LineupStore.PlayerInMatchLineup`
+method and a new `LoadMatchContext` method on `MatchLockChecker`
+(`RoundStore` already satisfied it structurally). The frontend
+substitute modal now excludes every player already in one of the
+match's 6 slots, not just the current slot's own player, as a
+client-side convenience on top of the authoritative backend check. A
+substitute may still come from any team or league in general -- only
+already being in *this specific match* is blocked. Also corrected a doc
+inaccuracy found while fixing this: the smoke checklist had wrongly
+implied the substitute modal (not just the separate manual "Confirm
+Tonight's Lineup" picker) has "This Team" / "Other Players (Substitute)"
+grouping -- it does not; corrected in place rather than adding grouping
+to the modal, per this branch's scope guard. See "Substitute Workflow
+Phase 1" above for full detail.
 
 ### 2026-09-02 - Substitute Workflow Phase 1: admin substitute support
 

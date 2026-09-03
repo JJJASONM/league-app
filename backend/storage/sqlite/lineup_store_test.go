@@ -417,3 +417,74 @@ func TestLineupStore_ClearSubstitute_NotCurrentlySubstituted_ReturnsError(t *tes
 		t.Fatal("want error clearing a slot that was never substituted")
 	}
 }
+
+// -- PlayerInMatchLineup -------------------------------------------------------
+
+// TestLineupStore_PlayerInMatchLineup_TrueWhenOnOtherTeam is a regression
+// test for the staging finding: a player already on the *away* team's
+// lineup must be detected when substituting into a *home* team slot for the
+// same match, not just when checking the home team's own rows.
+func TestLineupStore_PlayerInMatchLineup_TrueWhenOnOtherTeam(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	homeTeam := sseedTeam(t, lid, "Home")
+	awayTeam := sseedTeam(t, lid, "Away")
+	homePlayer := sseedPlayer(t, homeTeam)
+	awayPlayer := sseedPlayer(t, awayTeam)
+	homePlanID := lsseedPlan(t, sid, homeTeam, homePlayer, 1)
+	lsseedPlan(t, sid, awayTeam, awayPlayer, 1)
+
+	inMatch, err := store.PlayerInMatchLineup(ctx, sid, 1, homeTeam, awayTeam, homePlanID, awayPlayer)
+	if err != nil {
+		t.Fatalf("PlayerInMatchLineup: %v", err)
+	}
+	if !inMatch {
+		t.Error("want true: awayPlayer already occupies a slot in this match (on the away side)")
+	}
+}
+
+func TestLineupStore_PlayerInMatchLineup_FalseWhenNotInMatch(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	homeTeam := sseedTeam(t, lid, "Home")
+	awayTeam := sseedTeam(t, lid, "Away")
+	homePlayer := sseedPlayer(t, homeTeam)
+	homePlanID := lsseedPlan(t, sid, homeTeam, homePlayer, 1)
+
+	// otherPlayer is on neither team's lineup for this match.
+	otherPlayer := sseedPlayer(t, awayTeam)
+
+	inMatch, err := store.PlayerInMatchLineup(ctx, sid, 1, homeTeam, awayTeam, homePlanID, otherPlayer)
+	if err != nil {
+		t.Fatalf("PlayerInMatchLineup: %v", err)
+	}
+	if inMatch {
+		t.Error("want false: otherPlayer is not in any lineup slot for this match")
+	}
+}
+
+func TestLineupStore_PlayerInMatchLineup_ExcludesOwnSlot(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	homeTeam := sseedTeam(t, lid, "Home")
+	awayTeam := sseedTeam(t, lid, "Away")
+	homePlayer := sseedPlayer(t, homeTeam)
+	homePlanID := lsseedPlan(t, sid, homeTeam, homePlayer, 1)
+
+	// Checking homePlayer against their own slot (excluded by id) must not
+	// count as "already in the match" -- otherwise SUB_SAME_PLAYER-style
+	// self-checks would always false-positive.
+	inMatch, err := store.PlayerInMatchLineup(ctx, sid, 1, homeTeam, awayTeam, homePlanID, homePlayer)
+	if err != nil {
+		t.Fatalf("PlayerInMatchLineup: %v", err)
+	}
+	if inMatch {
+		t.Error("want false: the excluded slot's own player must not count as a duplicate")
+	}
+}

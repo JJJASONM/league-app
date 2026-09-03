@@ -253,6 +253,49 @@ func TestLineupSubstitute_SystemAdmin_Succeeds(t *testing.T) {
 	}
 }
 
+// TestLineupSubstitute_PlayerAlreadyInMatch_Returns409 is a regression test
+// for the staging finding: selecting a substitute who is already playing on
+// the *other* team in the same match must be rejected, end to end over real
+// HTTP, not just at the service layer.
+func TestLineupSubstitute_PlayerAlreadyInMatch_Returns409(t *testing.T) {
+	srv, authStore := testServerWithApplyAuth(t)
+	f := lineupSubSeed(t)
+	_, key, err := authStore.CreateApplyUser(context.Background(), "sub-dup-match", "league_admin")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// f.sub already has team_id = f.teamID (the home team) from lineupSubSeed,
+	// but is not yet in any lineup_plans row. Give them one on the *away*
+	// side of the same match, then try to substitute them into the home slot.
+	var awayTeamID int64
+	if err := db.DB.QueryRow(`SELECT away_team_id FROM matches WHERE id=?`, f.matchID).Scan(&awayTeamID); err != nil {
+		t.Fatalf("look up away team: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lineup_plans (season_id, team_id, week_number, player_id, is_sub) VALUES (?,?,1,?,0)`,
+		f.seasonID, awayTeamID, f.sub); err != nil {
+		t.Fatalf("seed away-side lineup row for the would-be substitute: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, lineupSubURL(srv.URL, f.planID),
+		strings.NewReader(fmt.Sprintf(`{"substitute_player_id":%d}`, f.sub)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("want 409 (substitute already in this match), got %d", resp.StatusCode)
+	}
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["error"] != "that player is already in this match" {
+		t.Errorf("want error message %q, got %v", "that player is already in this match", body["error"])
+	}
+}
+
 // -- Lock enforcement ------------------------------------------------------
 
 func TestLineupSubstitute_SeasonClosed_Returns409(t *testing.T) {

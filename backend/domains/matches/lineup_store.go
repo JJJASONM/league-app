@@ -56,6 +56,14 @@ type LineupStore interface {
 	// lineup under a different slot.
 	SetSubstitute(ctx context.Context, req SetSubstituteRequest) (models.LineupPlan, error)
 
+	// PlayerInMatchLineup returns true when playerID already has a
+	// lineup_plans row for seasonID/weekNumber under either homeTeamID or
+	// awayTeamID, other than excludePlanID (the slot currently being
+	// substituted). Used to reject a substitute who is already in the same
+	// scheduled match on either side, even though they are otherwise
+	// allowed to come from any team/league.
+	PlayerInMatchLineup(ctx context.Context, seasonID, weekNumber, homeTeamID, awayTeamID, excludePlanID, playerID int64) (bool, error)
+
 	// ClearSubstitute reverts a substituted slot back to its original
 	// player (is_sub=false, sub_for_id=NULL). Returns domainerr.InvalidInput
 	// when the slot is not currently substituted.

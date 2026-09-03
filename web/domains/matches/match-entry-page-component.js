@@ -385,9 +385,16 @@ class MatchEntryPage extends HTMLElement {
     const currentPlayer = team[index];
     this.#subContext = { side, index, lineupPlanId: plan.id };
     document.getElementById('me-sub-original-name').textContent = currentPlayer.name;
+    // Exclude every player already occupying one of the match's 6 slots
+    // (both teams), including the current slot's own player -- picking a
+    // player already in this match (on either side) would put them in two
+    // slots at once. The backend enforces this too (POST .../substitute
+    // returns 409 "that player is already in this match"); this filter
+    // just keeps the picker from offering an obviously-invalid choice.
+    const inMatchIds = new Set([...this.#homeTeam, ...this.#awayTeam].map(p => p.id));
     const sel = document.getElementById('me-sub-player-select');
     sel.innerHTML = this.#allPlayers
-      .filter(p => p.id !== currentPlayer.id)
+      .filter(p => !inMatchIds.has(p.id))
       .map(p => `<option value="${p.id}">${esc(p.name)} (${p.handicap >= 0 ? '+' : ''}${p.handicap})</option>`)
       .join('');
     new bootstrap.Modal(document.getElementById('me-sub-modal')).show();

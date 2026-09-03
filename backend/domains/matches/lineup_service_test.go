@@ -32,6 +32,12 @@ type stubLineupStore struct {
 	clearSubResult models.LineupPlan
 	clearSubErr    error
 	lastClearSubID int64
+
+	playerInMatch     bool
+	playerInMatchErr  error
+	lastPlayerInMatch struct {
+		seasonID, weekNumber, homeTeamID, awayTeamID, excludePlanID, playerID int64
+	}
 }
 
 func (s *stubLineupStore) ListLineupPlans(_ context.Context, req matches.ListLineupPlansRequest) ([]models.LineupPlan, error) {
@@ -67,6 +73,16 @@ func (s *stubLineupStore) ClearSubstitute(_ context.Context, id int64) (models.L
 	return s.clearSubResult, s.clearSubErr
 }
 
+func (s *stubLineupStore) PlayerInMatchLineup(_ context.Context, seasonID, weekNumber, homeTeamID, awayTeamID, excludePlanID, playerID int64) (bool, error) {
+	s.lastPlayerInMatch.seasonID = seasonID
+	s.lastPlayerInMatch.weekNumber = weekNumber
+	s.lastPlayerInMatch.homeTeamID = homeTeamID
+	s.lastPlayerInMatch.awayTeamID = awayTeamID
+	s.lastPlayerInMatch.excludePlanID = excludePlanID
+	s.lastPlayerInMatch.playerID = playerID
+	return s.playerInMatch, s.playerInMatchErr
+}
+
 // stubMatchLockChecker is a stub matches.MatchLockChecker. All fields default
 // to "nothing is locked," matching the common case of a match that hasn't
 // been approved/processed/closed.
@@ -77,6 +93,8 @@ type stubMatchLockChecker struct {
 	weekClosedErr   error
 	approvalState   matches.MatchApprovalState
 	approvalErr     error
+	matchContext    matches.MatchContext
+	matchContextErr error
 }
 
 func (s *stubMatchLockChecker) IsSeasonClosedForMatch(_ context.Context, _ int64) (bool, error) {
@@ -89,6 +107,10 @@ func (s *stubMatchLockChecker) IsWeekClosed(_ context.Context, _ int64) (bool, e
 
 func (s *stubMatchLockChecker) GetMatchApprovalState(_ context.Context, _ int64) (matches.MatchApprovalState, error) {
 	return s.approvalState, s.approvalErr
+}
+
+func (s *stubMatchLockChecker) LoadMatchContext(_ context.Context, _ int64) (matches.MatchContext, error) {
+	return s.matchContext, s.matchContextErr
 }
 
 // newLineupSvc builds a LineupService with a permissive default lock checker
@@ -325,6 +347,64 @@ func TestLineupService_SetSubstitute_NoMatchScheduled_AllowsChange(t *testing.T)
 	}
 	if stub.lastSetSubReq.SubstitutePlayerID != 6 {
 		t.Errorf("want SubstitutePlayerID=6 passed to store, got %d", stub.lastSetSubReq.SubstitutePlayerID)
+	}
+}
+
+// TestLineupService_SetSubstitute_PlayerAlreadyInMatch_ReturnsConflict is a
+// regression test for the staging finding: a substitute could be chosen who
+// was already playing on the *other* team in the same match. The guard must
+// check both home and away team lineups for the match, not just the slot's
+// own team.
+func TestLineupService_SetSubstitute_PlayerAlreadyInMatch_ReturnsConflict(t *testing.T) {
+	store := &stubLineupStore{
+		getPlanResult:  models.LineupPlan{ID: 1, PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		findMatchID:    99,
+		findMatchFound: true,
+		playerInMatch:  true,
+	}
+	svc := matches.NewLineupService(store, &stubMatchLockChecker{
+		matchContext: matches.MatchContext{SeasonID: 1, HomeTeamID: 2, AwayTeamID: 7},
+	})
+	_, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 44})
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "SUB_PLAYER_ALREADY_IN_MATCH" || de.Category != domainerr.Conflict {
+		t.Fatalf("want SUB_PLAYER_ALREADY_IN_MATCH Conflict, got %v", err)
+	}
+	// Confirms the guard checks both sides of the match, not just the
+	// slot's own team.
+	if store.lastPlayerInMatch.homeTeamID != 2 || store.lastPlayerInMatch.awayTeamID != 7 {
+		t.Errorf("want home/away team IDs passed through (2/7), got %d/%d",
+			store.lastPlayerInMatch.homeTeamID, store.lastPlayerInMatch.awayTeamID)
+	}
+	if store.lastPlayerInMatch.excludePlanID != 1 {
+		t.Errorf("want the slot's own id (1) excluded from the duplicate check, got %d", store.lastPlayerInMatch.excludePlanID)
+	}
+	if store.lastPlayerInMatch.playerID != 44 {
+		t.Errorf("want the candidate substitute's id (44) checked, got %d", store.lastPlayerInMatch.playerID)
+	}
+}
+
+// TestLineupService_SetSubstitute_PlayerNotInMatch_AllowsChange confirms a
+// substitute who is not already in this match (even though they're on some
+// other team generally) is still allowed -- the guard must not reject every
+// external player, only ones already in this specific match.
+func TestLineupService_SetSubstitute_PlayerNotInMatch_AllowsChange(t *testing.T) {
+	store := &stubLineupStore{
+		getPlanResult:  models.LineupPlan{ID: 1, PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		findMatchID:    99,
+		findMatchFound: true,
+		playerInMatch:  false,
+		setSubResult:   models.LineupPlan{ID: 1, PlayerID: 44, IsSub: true, SubForID: int64Ptr(5)},
+	}
+	svc := matches.NewLineupService(store, &stubMatchLockChecker{
+		matchContext: matches.MatchContext{SeasonID: 1, HomeTeamID: 2, AwayTeamID: 7},
+	})
+	got, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 44})
+	if err != nil {
+		t.Fatalf("SetSubstitute: %v", err)
+	}
+	if got.PlayerID != 44 || !got.IsSub {
+		t.Errorf("want substitute applied, got %+v", got)
 	}
 }
 

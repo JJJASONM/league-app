@@ -1782,11 +1782,95 @@ handling.
 - **NOT VERIFIED (no browser), still required before this phase is
   browser-complete:** the actual Match Entry screen rendering -- the
   "Sub" button appearing on an editable roster row, the substitute
-  modal opening and listing "This Team" / "Other Players (Substitute)"
-  groups, the "Sub for X" badge and "Undo" link rendering after a
-  substitution, and the scoresheet visually reflecting the substitute's
-  name/handicap. All of the underlying data this UI reads was confirmed
-  correct at the API level above.
+  modal opening with the match's other five players excluded from its
+  list (see the "same-match duplicate-player guard" correction below;
+  the "This Team" / "Other Players (Substitute)" grouping belongs to the
+  separate manual "Confirm Tonight's Lineup" picker, not this modal --
+  corrected here after an earlier draft of this doc wrongly attributed
+  that grouping to the substitute modal), the "Sub for X" badge and
+  "Undo" link rendering after a substitution, and the scoresheet
+  visually reflecting the substitute's name/handicap. All of the
+  underlying data this UI reads was confirmed correct at the API level
+  above.
+
+#### Correction: same-match duplicate-player guard (2026-09-02)
+
+**Browser finding (PM, staging):** during browser verification of
+Substitute Workflow Phase 1, the substitute modal allowed replacing Home
+H1 with a player who was already Visitor V1 in the *same match*.
+Concretely: League "Fixture Scoresheet League", season 6 ("Fixture
+Scoresheet Season"), match 31 (`[W1] Fixture Breakers vs Fixture
+Bankers`), lineup_plans row 1 (Home H1, originally Avery Slate).
+Selecting Devon Reed (player_id 44) as the substitute succeeded even
+though Devon Reed was already Visitor V1 via lineup_plans row 4. Match
+Entry reloaded showing Devon Reed on both teams in the same match. PM
+immediately clicked Undo; a follow-up API check confirmed all week-1
+lineup_plans rows reverted to `is_sub:false` with their original
+`player_id`s -- no lasting data corruption, but the bad state was
+reachable and briefly persisted.
+
+**Root cause:** neither the substitute modal nor the backend checked
+whether the chosen substitute already occupied a different slot in the
+*same scheduled match*. The Phase 1 design deliberately allowed a
+substitute to come from any team/league (no roster-membership check),
+but never restricted it to "not already in this specific match" on
+either side.
+
+**Fix (branch `substitute-workflow-same-match-guard`):**
+- Backend: `LineupService.SetSubstitute` now checks, whenever a match is
+  scheduled for the slot's season/team/week, whether the candidate
+  substitute already has a `lineup_plans` row for that same
+  season/week under *either* the match's home or away `team_id`
+  (excluding the slot being substituted). A new
+  `LineupStore.PlayerInMatchLineup` method backs this (one `SELECT
+  EXISTS` scoped by `season_id`, `week_number`, and `team_id IN
+  (home, away)`). Violations return `409 Conflict`,
+  `{"error": "that player is already in this match"}`
+  (`SUB_PLAYER_ALREADY_IN_MATCH`). The existing same-team
+  `SUB_ALREADY_IN_LINEUP` conflict (from the table's own `UNIQUE`
+  constraint) is unchanged and still applies. All four existing locks
+  (season closed, week closed, approved, processed) are unchanged.
+  `ClearSubstitute` was deliberately not given this check -- reverting a
+  slot to the player who already held it cannot introduce a new
+  duplicate that wasn't already possible before the substitution
+  existed.
+- Frontend: `#openSubstituteModal` now excludes every player already
+  occupying one of the match's 6 slots (both teams) from the picker,
+  not just the current slot's own player -- so the exact browser
+  sequence PM hit can no longer even be attempted through the UI. This
+  is a client-side convenience on top of the authoritative backend
+  check, not a replacement for it.
+- Docs correction: the "NOT VERIFIED (no browser)" item above previously
+  (incorrectly) implied the substitute modal has "This Team" / "Other
+  Players (Substitute)" `<optgroup>`s -- it does not and still does not;
+  that grouping only exists on the separate manual "Confirm Tonight's
+  Lineup" picker. Corrected in place above rather than adding grouping
+  to the modal, per the scope guard for this branch (fix the
+  duplicate-player hole and directly-related wording only).
+- Tests added: `TestLineupService_SetSubstitute_PlayerAlreadyInMatch_ReturnsConflict`
+  and `TestLineupService_SetSubstitute_PlayerNotInMatch_AllowsChange`
+  (`backend/domains/matches/lineup_service_test.go`);
+  `TestLineupStore_PlayerInMatchLineup_TrueWhenOnOtherTeam`,
+  `TestLineupStore_PlayerInMatchLineup_FalseWhenNotInMatch`, and
+  `TestLineupStore_PlayerInMatchLineup_ExcludesOwnSlot`
+  (`backend/storage/sqlite/lineup_store_test.go`);
+  `TestLineupSubstitute_PlayerAlreadyInMatch_Returns409`
+  (`handlers/api_lineup_substitute_test.go`, full HTTP round trip:
+  seeds a player already on the away side of a match, then confirms
+  substituting them into a home slot returns 409 with the exact error
+  message). All pre-existing Substitute Workflow tests continue to
+  pass unchanged. The frontend exclusion filter was verified with a
+  focused, throwaway Node script exercising the extracted filter logic
+  against a 6-player match plus 2 outside players (no JS test runner
+  exists in this repo, consistent with every other frontend change in
+  this codebase) -- not committed, since it isn't a permanent test
+  file.
+- **NOT VERIFIED (no browser):** that the modal visually omits the five
+  other in-match players when opened on real staging, and that
+  attempting the exact original repro (Devon Reed into Home H1 while
+  already Visitor V1) is now blocked in the browser. The backend 409 and
+  the frontend filter logic are both confirmed correct above; only the
+  live rendering/click-through remains unverified.
 
 ---
 

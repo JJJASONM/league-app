@@ -147,6 +147,23 @@ func (s *LineupStore) SetSubstitute(ctx context.Context, req matches.SetSubstitu
 	return s.GetLineupPlan(ctx, req.LineupPlanID)
 }
 
+// PlayerInMatchLineup returns true when playerID already has a lineup_plans
+// row for seasonID/weekNumber under either homeTeamID or awayTeamID, other
+// than excludePlanID (the slot currently being substituted).
+func (s *LineupStore) PlayerInMatchLineup(ctx context.Context, seasonID, weekNumber, homeTeamID, awayTeamID, excludePlanID, playerID int64) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM lineup_plans
+			WHERE season_id = ? AND week_number = ? AND team_id IN (?, ?)
+			  AND player_id = ? AND id != ?
+		)`, seasonID, weekNumber, homeTeamID, awayTeamID, playerID, excludePlanID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("player in match lineup: %w", err)
+	}
+	return exists == 1, nil
+}
+
 // ClearSubstitute reverts a substituted slot back to its original player
 // (is_sub=0, sub_for_id=NULL). Returns domainerr.InvalidInput when the slot
 // is not currently substituted.
