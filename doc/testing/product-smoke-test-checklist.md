@@ -1865,12 +1865,57 @@ either side.
   exists in this repo, consistent with every other frontend change in
   this codebase) -- not committed, since it isn't a permanent test
   file.
-- **NOT VERIFIED (no browser):** that the modal visually omits the five
-  other in-match players when opened on real staging, and that
-  attempting the exact original repro (Devon Reed into Home H1 while
-  already Visitor V1) is now blocked in the browser. The backend 409 and
-  the frontend filter logic are both confirmed correct above; only the
-  live rendering/click-through remains unverified.
+- **NOT VERIFIED (no browser) at the time this correction was written:**
+  that the modal visually omits the five other in-match players when
+  opened on real staging, and that attempting the exact original repro
+  (Devon Reed into Home H1 while already Visitor V1) is now blocked in
+  the browser. The backend 409 and the frontend filter logic were
+  confirmed correct above at the code level; the live rendering/
+  click-through needed a real browser pass. **Now closed -- see the
+  staging verification subsection immediately below.**
+
+#### Staging verification (2026-09-03)
+
+**Result: PASS.** Verified on `main`/`origin/main` at `61bd12c`
+("Substitutes: prevent same-match duplicate player selection"). This
+closes the "NOT VERIFIED (no browser)" item directly above.
+
+- **API verification:** the exact original repro was attempted directly
+  against staging -- `POST /api/lineup-plans/1/substitute` with
+  `substitute_player_id: 44` (Devon Reed, the same lineup_plans row and
+  player from the original finding above) -- and correctly returned
+  `409 Conflict`, `{"error":"that player is already in this match"}`.
+  A follow-up lineup check confirmed zero rows changed
+  (`CHANGED_ROWS=0`): the rejected request left the real fixture lineup
+  untouched.
+- **Browser verification:** opened Match Entry on staging for the
+  Fixture Scoresheet Season, selected `[W1] Fixture Breakers vs Fixture
+  Bankers`, and opened the Home H1 substitute modal for Avery Slate.
+  The modal's option list contained exactly the 6 players *not*
+  currently in this match (Gray Lumen, Indigo North, Jules Pike, Harper
+  Quill, Kai Ridge, Lena Stone) and correctly excluded all 6 players
+  who *are* currently in this match (Avery Slate, Blair Flint, Casey
+  Vale, Devon Reed, Emery Frost, Finley Moss). The exact previous bad
+  browser path -- selecting Devon Reed into Home H1 while Devon was
+  already Visitor V1 -- is confirmed no longer reachable through the
+  modal. This closes both outstanding NOT VERIFIED items: the modal's
+  live exclusion rendering, and the original repro being blocked in the
+  browser.
+- **Non-regression check:** while setting up this pass, PM tried a
+  substitute from the *other* week-1 match (a different scheduled
+  match, same week). That substitution succeeded -- expected, since the
+  guard only blocks a player already in the *same* match, not every
+  other player in the week. PM immediately cleared it with `DELETE
+  .../substitute` and confirmed all week-1 lineup rows were restored
+  with no remaining `is_sub`/`sub_for_id` rows. Confirms the fix is
+  correctly scoped to "same match," not overly broad.
+- **Cleanup:** temporary local API key file removed. A disposable
+  staging `league_admin` verification user (id 16, username
+  `sub-same-match-verify-20260903-172202`) remains -- no delete-user
+  endpoint exists, consistent with every prior staging pass's
+  bootstrap-user handling. Standing exclusions
+  (`architecture-diagram.md`, `architecture-review.md`,
+  `backend/storage/postgres/`) untouched.
 
 ---
 
