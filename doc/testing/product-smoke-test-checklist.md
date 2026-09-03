@@ -1679,7 +1679,114 @@ Financial Phase 1 uses -- instead of staying an unprotected read.
     one-off match for a different team -- accepted, documented
     limitation, not the "big player-history redesign" this phase was
     told not to force.
-- Staging verification: not yet done for this phase.
+
+#### Staging verification (2026-09-02)
+
+**Result: PASS (API-level).** Verified on `http://league-staging.local`,
+source commit `1b0ac5b`. No browser available in this developer's tool
+session, so all checks below are direct API calls against the live
+staging server -- see "NOT VERIFIED (no browser)" items at the end for
+what a browser pass still needs to confirm.
+
+**Fixture used:** a fresh, fully disposable league (not the shared
+Fixture Scoresheet League), created and torn down entirely within this
+pass rather than reusing shared staging data -- season/week/match/lock
+testing includes closing a week and closing a season, which are not
+safely reversible-by-inspection operations to run against data other
+staging passes depend on. Exact IDs (all deleted by the end of this
+pass): league id 6 ("Substitute Verify League 20260902"), season id 9
+("Substitute Verify Season"), home team id 23 ("Verify Home", season
+team id 57), away team id 24 ("Verify Away", season team id 58), home
+roster players 62/63/64 (handicaps 1/2/3), away roster players 65/66/67
+(handicaps 1/2/3), substitute player 68 ("Sub Verify", handicap 4.5, on
+the Away team's direct roster but not the Home team's), match id 42
+(week 1, home 23 vs away 24), lineup_plans row id 67 (Home slot 1,
+originally player 62). A disposable `league_admin` personal-key user
+(id 14, `substitute-verify-20260903`) was created via the static admin
+token to perform all of this and remains afterward -- no delete-user
+endpoint exists, matching every prior staging pass's bootstrap-user
+handling.
+
+1. **Admin key / auth -- PASS.** `POST /api/lineup-plans/67/substitute`
+   with no Authorization header returned 401 with a `WWW-Authenticate`
+   header; with an invalid key returned 403 `{"error":"forbidden"}`;
+   with the disposable `league_admin` key, set and clear both
+   succeeded (200).
+2. **Match Entry data model -- PASS (API-level, see NOT VERIFIED
+   below for the browser UI itself).** `POST .../lineup-plans/67/substitute`
+   with `{"substitute_player_id":68}` returned
+   `player_id:68, player_name:"Sub Verify", handicap:4.5, is_sub:true,
+   sub_for_id:62` -- exactly the data Match Entry's roster table/badge
+   would render. A follow-up `GET /api/lineup-plans?season_id=9&week_number=1`
+   confirmed the same row persisted correctly alongside the two
+   untouched slots.
+3. **Score save behavior -- PASS.** Saved a full 9-round scoresheet via
+   `POST /api/matches/42/rounds` with the Home slot 1 pairing using
+   `home_player_id:68` (the substitute). `GET /api/matches/42/rounds`
+   confirmed `home_player_id:68, home_player_name:"Sub Verify",
+   home_handicap:4.5, home_handicap_used:4.5` and a correctly computed
+   `handicap_pts_used` from the substitute's real 4.5 rating (not the
+   original player's) -- confirms requirement 5 (handicap/diff reflects
+   the actual substitute) directly from real round data, not just the
+   lineup row.
+4. **Undo behavior -- PASS.** `DELETE /api/lineup-plans/67/substitute`
+   returned `player_id:62, is_sub:false` with `sub_for_id` omitted --
+   reverted to exactly the original state. Re-verified the reverse
+   direction too (set again after confirming clear worked) to leave the
+   fixture substituted for the score-save/lock tests that needed it.
+5. **Lock behavior -- PASS, all four.** Attempted `DELETE
+   .../substitute` in each locked state and got 409 every time, with
+   the expected message: week closed -> `"week is closed; substitutes
+   cannot be changed"`; match approved -> `"match scores are approved;
+   substitutes cannot be changed"`; match processed -> `"match scores
+   are processed; substitutes cannot be changed"`; season closed ->
+   `"season is closed; substitutes cannot be changed"`. Reopened/
+   unapproved/unprocessed between each check to isolate them, matching
+   the guard's own validation order.
+6. **Weekly Summary / data surface -- PASS.** `GET
+   /api/seasons/9/weeks/1/recap` returned a `player_stats` entry for
+   player 68 with `"is_sub": true, "sub_for_name": "HomeP1 Verify"`
+   alongside correct set/game totals for that match. Confirmed (as
+   expected, not a regression) that the Weekly Summary screen itself
+   still does not render `player_stats` in any form -- still not
+   browser-visible, by design for this phase (see Known Gaps row #15
+   and the note above).
+7. **Player Overview -- PASS.** `GET /api/player-stats?season_id=9`
+   (the same season-scoped query Player Overview's stats section calls)
+   showed player 68 with `sets_won:3, games_won:6` correctly attributed
+   to their own team ("Verify Away"), while the original player 62
+   correctly showed all zeros (they didn't play). Confirms substitute
+   results count toward the substitute's own stats. Did not re-verify
+   the schedule-section limitation directly against this fixture (a
+   single-match season has no meaningful "schedule list" to inspect
+   beyond the one match already confirmed above); the limitation is
+   accepted and documented, not something this pass needed to
+   re-derive.
+- **Restoration:** season reopened (`closed_at` cleared) before
+  cleanup; the entire disposable league (id 6) was then deleted via
+  `DELETE /api/leagues/6`, which cascade-deleted the season, both
+  teams, all 7 players, the match, lineup_plans, round_results, and
+  match_results -- confirmed gone via a follow-up `GET /api/leagues`
+  showing only the three pre-existing leagues (Demo Pool League, Demo
+  9-Ball League, Fixture Scoresheet League) unchanged. The disposable
+  `league_admin` user (id 14) remains, per the no-delete-endpoint
+  convention noted above. The shared Fixture Scoresheet League/season
+  data was never touched by this pass.
+- **Discrepancies found:** none affecting the substitute workflow. One
+  incidental API-usability observation, unrelated to this phase: `PUT
+  /api/seasons/{id}/teams/{tid}` requires `season_name` in the body even
+  when only updating `captain_id` (omitting it returns `{"error":
+  "season_name is required"}`) -- a pre-existing partial-update
+  behavior in the season-teams endpoint, not a substitute-workflow bug,
+  not fixed on this verification-only branch.
+- **NOT VERIFIED (no browser), still required before this phase is
+  browser-complete:** the actual Match Entry screen rendering -- the
+  "Sub" button appearing on an editable roster row, the substitute
+  modal opening and listing "This Team" / "Other Players (Substitute)"
+  groups, the "Sub for X" badge and "Undo" link rendering after a
+  substitution, and the scoresheet visually reflecting the substitute's
+  name/handicap. All of the underlying data this UI reads was confirmed
+  correct at the API level above.
 
 ---
 
