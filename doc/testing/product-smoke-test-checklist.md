@@ -2029,6 +2029,118 @@ for a player-facing entry point.
   Overview" now succeeds regardless of the shell's selected league
   remains **NOT VERIFIED (no browser)**.
 
+#### Staging verification (2026-09-04)
+
+**Result: PASS (API-level + deployed-static-asset verification).**
+Verified on `http://league-staging.local`. No browser available in this
+developer's tool session, so every item below is either a direct API call
+against the live staging server or a direct fetch of the deployed static
+JS/HTML confirming the exact reviewed source is what staging serves --
+see the "NOT VERIFIED (no browser)" summary at the end for what a real
+click-through pass still needs to confirm.
+
+1. **Deployed checkpoint -- PASS.** `POST /api/users` with
+   `{"role":"player"}` and no `player_id` returned
+   `{"error":"player_id is required for role=player"}` -- the exact
+   Phase 1 validation message, not a generic role-rejection, confirming
+   the deployed build includes Phase 1. Independently confirmed by
+   fetching the live `/domains/players/player-overview-page-component.js`
+   from staging and finding the exact reviewed fix line present:
+   `const seasonId = forcedPlayerId != null ? null : this.#activeSeason?.id;`.
+   `GET /healthz` returned `{"status":"ok"}` first. (Staging does not
+   expose its running commit hash through any endpoint; the two
+   Phase-1-specific behavioral/source checks above are the available
+   substitute, consistent with how prior passes without a version
+   endpoint confirmed their deployed checkpoint.)
+2. **Admin key -- PASS.** Bootstrapped a disposable `system_admin`
+   personal-key user via the static `LEAGUE_ADMIN_TOKEN`, same pattern as
+   every prior staging pass (id 17,
+   `player-access-verify-admin-20260904-053641`).
+3. **Player-linked user creation -- PASS (API-level).** Using that
+   `system_admin`'s own personal key (not the static token), `POST
+   /api/users` with `{"role":"player","player_id":41}` (Avery Slate, a
+   Fixture Scoresheet League fixture player) returned 201 with a one-time
+   key and `player_id:41` on the created user (id 18,
+   `player-access-verify-avery-20260904`). A follow-up `GET /api/users`
+   (same admin key) showed user 18 with `"player_id":41,"player_name":
+   "Avery Slate"` and user 17 (the `system_admin`) with neither field
+   present -- confirms both the Linked Player column's data source and
+   goal 4's "unlinked users omit player_id" in the same call. **NOT
+   VERIFIED (no browser)**: the Users Admin screen's Add User modal
+   itself (Player role option selection, the Linked Player picker
+   appearing/populating, the one-time key alert rendering, the list's
+   Linked Player column rendering) -- confirmed at the deployed-source
+   level instead (`value="player"`, `.um-linked-player-row`,
+   `#toggleLinkedPlayerRow()` all present in the live
+   `users-management-page-component.js`).
+4. **`GET /api/users/me` -- PASS.** With the new player key: `{"id":18,
+   ...,"role":"player","player_id":41,...}`. With the `system_admin` key:
+   `{"id":17,...,"role":"system_admin",...}` with `player_id` entirely
+   absent from the JSON (not present as `null`) -- confirms the corrected
+   doc wording from the prior review round matches real server behavior,
+   not just the Go struct tag.
+5. **"My Overview" access and the season-scope fix -- PASS.** `GET
+   /api/players/41/overview` (own player, no `season_id`) with the player
+   key returned 200 with the full overview, falling back to season 6
+   ("Fixture Scoresheet Season") -- the fixture league's own active
+   season -- confirming the locked path's `season_id` omission works
+   end to end against real staging data. **Cross-league reproduction**:
+   the same request with `?season_id=2` (Demo Pool League's active
+   season -- a different league than player 41's) returned `404
+   {"error":"player is not in this season's league"}` -- this is exactly
+   the failure shape the pre-fix code could have produced if the shell
+   had a different league selected, and confirms why omitting
+   `season_id` on the locked path (rather than "just usually works") is
+   the correct fix. Combined with item 1's confirmation that the
+   deployed frontend source already omits `season_id` on this path, this
+   is as close to an end-to-end cross-league proof as is possible without
+   a browser. **NOT VERIFIED (no browser)**: actually selecting a
+   different league in the shell UI and clicking "My Overview" to watch
+   it still load the linked player's own overview; the "My Overview" nav
+   entry's visibility and the player-select dropdown's hidden state are
+   confirmed only at the deployed-source level (`#nav-item-my-overview`,
+   `isPlayerRole()`, `.po-selector-row` toggle all present as reviewed).
+6. **Ownership restriction -- PASS.** `GET /api/players/44/overview`
+   (Devon Reed, not the linked player) with the player key returned 403
+   `{"error":"forbidden"}`.
+7. **Admin access unchanged -- PASS.** The `system_admin` key
+   successfully loaded both player 44's and player 41's overviews (200
+   for each) -- confirms admin access to any player is unaffected. **NOT
+   VERIFIED (no browser)**: the Players-list "View Overview" row button
+   remaining admin-only; unchanged code path from the already-verified
+   Player Overview Phase 2 gating, not re-derived here.
+8. **Player key rejected from admin surfaces -- PASS.** With the player
+   key: `GET /api/users` -> 403 `{"error":"forbidden"}`; `POST
+   /api/backup` (sent with a real `{}` body per the known bodyless-POST/
+   IIS workaround -- see the Critical Blocker section above) -> 403
+   `{"error":"forbidden"}`; `GET /api/seasons/6/finances/dues` -> 403
+   `{"error":"forbidden"}` (checked in addition to the two PM explicitly
+   named, since Financial was also called out as a surface that must stay
+   hidden). **NOT VERIFIED (no browser)**: Users/Financial/Backup nav
+   entries actually staying hidden in a rendered page for this identity --
+   confirmed only via the already-reviewed `hasFinanceAdminRole`/
+   `isPlayerRole` gating logic being present in the deployed `app.js`.
+- **Cleanup:** no fixture data was mutated -- re-fetched player 41 and
+  `GET /api/leagues` after the pass and both are byte-identical to
+  before. Two disposable users remain, per the no-delete-endpoint
+  convention every prior staging pass has followed: id 17
+  (`player-access-verify-admin-20260904-053641`, `system_admin`) and id
+  18 (`player-access-verify-avery-20260904`, `role=player`, linked to
+  player 41 Avery Slate). No API keys or secrets are recorded in this
+  entry or elsewhere in this checklist. Standing exclusions
+  (`architecture-diagram.md`, `architecture-review.md`,
+  `backend/storage/postgres/`) untouched.
+- **Discrepancies found:** none. All 8 verification goals from the PM
+  memo passed at the API level, and every piece of frontend code relevant
+  to a goal was independently confirmed present in the exact deployed
+  static assets staging serves.
+- **Follow-up needed:** a real browser click-through of "My Overview"
+  (ideally including the cross-league scenario: select a different
+  league in the shell, click "My Overview", confirm it still loads the
+  linked player's own overview) and of the Users Admin "Add User" Player
+  flow remain the only gaps before this phase is browser-complete. No
+  code changes are indicated by this pass.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |
