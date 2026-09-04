@@ -414,6 +414,19 @@ CREATE INDEX IF NOT EXISTS idx_payouts_season_team ON payouts(season_id, team_id
 		`ALTER TABLE matches ADD COLUMN approval_note        TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE matches ADD COLUMN processed_at         DATETIME`,
 		`ALTER TABLE matches ADD COLUMN processed_by_user_id INTEGER`,
+		// Player Account Access Phase 1: optional one-to-one link from a user
+		// to a player. NULL for every existing system_admin/league_admin user;
+		// required (enforced at the application layer, not by NOT NULL, since
+		// SQLite can't add a NOT NULL column without a default) for new
+		// role=player users. The one-to-one part was already documented as
+		// intended in doc/domains/users/README.md's "Provisional
+		// Relationship" section before this phase; enforced below via a
+		// partial unique index (SQLite's ALTER TABLE ADD COLUMN cannot carry
+		// a UNIQUE constraint directly) rather than a UNIQUE column
+		// constraint, so multiple NULLs (every non-player user) remain
+		// allowed and only non-null values are required to be distinct.
+		`ALTER TABLE users ADD COLUMN player_id INTEGER REFERENCES players(id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_player_id ON users(player_id) WHERE player_id IS NOT NULL`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs

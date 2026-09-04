@@ -58,12 +58,20 @@ function loadSection(sec) {
     case 'standings': document.querySelector('standings-section')?.refresh(state.allSeasons); break;
     case 'stats':     document.querySelector('stats-section')?.refresh(state.allSeasons); break;
     case 'handicap':  document.querySelector('handicaps-page')?.refresh(state.allSeasons, state.activeSeason); break;
-    case 'users':     document.querySelector('users-management-page')?.refresh(); break;
+    case 'users':
+      document.querySelector('users-management-page')?.refresh(state.allPlayers);
+      break;
     case 'player-overview':
       document.querySelector('player-overview-page')?.refresh(
         state.allPlayers,
         state.activeSeason,
-        appContext.consumeOverviewPreselect()
+        appContext.consumeOverviewPreselect(),
+        // Player Account Access Phase 1: a role=player viewer only ever
+        // sees their own linked player's overview -- lock the page to
+        // that id regardless of which nav entry ("My Overview" or the
+        // admin "Player Overview" picker, though the latter is hidden
+        // for this role anyway) triggered the navigation.
+        isPlayerRole(state.currentIdentity) ? state.currentIdentity.player_id : null
       );
       break;
     case 'weekly-summary':
@@ -250,6 +258,16 @@ function hasFinanceAdminRole(identity) {
     (identity.role === 'system_admin' || identity.role === 'admin' || identity.role === 'league_admin');
 }
 
+// isPlayerRole (Player Account Access Phase 1) is the single definition of
+// "this is a player's own account, not an admin's" -- a resolved identity
+// with role="player" and a linked player_id. Used to show the "My
+// Overview" nav entry and to lock Player Overview to that one player;
+// never grants anything hasFinanceAdminRole gates (Users, Financial, the
+// admin Player Overview picker, Backup).
+function isPlayerRole(identity) {
+  return !!identity && identity.role === 'player' && identity.player_id != null;
+}
+
 function updateIdentityUI() {
   const identity = appContext.getState().currentIdentity;
   const statusEl = document.getElementById('admin-key-current-status');
@@ -270,6 +288,20 @@ function updateIdentityUI() {
   // clearanceAuth role set as Financial Phase 1 (it surfaces the same kind
   // of per-player money data), so the nav entry is gated identically.
   document.getElementById('nav-item-player-overview')?.classList.toggle('d-none', !canManageFinances);
+
+  // Player Account Access Phase 1: a linked player identity gets its own
+  // "My Overview" nav entry (locked to their own player_id, see
+  // loadSection) instead of the admin picker above -- the two are
+  // mutually exclusive by role, never both visible at once.
+  const isPlayer = isPlayerRole(identity);
+  document.getElementById('nav-item-my-overview')?.classList.toggle('d-none', !isPlayer);
+
+  // Backup DB is a system_admin/admin-only action on the backend (Phase 6);
+  // the button itself has no admin gating at all otherwise (visible to any
+  // visitor, key or not), so a resolved player identity is the one case
+  // explicitly hidden here per PM decision, rather than widening this into
+  // a full "require admin to see this button" change.
+  document.getElementById('backup-btn')?.classList.toggle('d-none', isPlayer);
 }
 
 function openAdminKeyModal() {

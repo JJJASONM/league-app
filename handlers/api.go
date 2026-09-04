@@ -176,7 +176,7 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		)
 		mux.HandleFunc("POST /api/users",
 			requireAdminTokenOrSystemAdminAuth(deps.AdminToken, auth, func(w http.ResponseWriter, r *http.Request) {
-				postUser(w, r, auth)
+				postUser(w, r, auth, deps.PlayerMgr)
 			}),
 		)
 		mux.HandleFunc("GET /api/users",

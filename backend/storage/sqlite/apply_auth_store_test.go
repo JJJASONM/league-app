@@ -19,6 +19,18 @@ func newApplyAuthStore(t *testing.T) *sqlite.ApplyAuthStore {
 	return sqlite.NewApplyAuthStore(db.DB)
 }
 
+// seedPlayerForUser inserts a minimal player row and returns its id, for
+// tests linking a role=player user to a real player.
+func seedPlayerForUser(t *testing.T, first, last string) int64 {
+	t.Helper()
+	res, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES (?,?,0)`, first, last)
+	if err != nil {
+		t.Fatalf("seed player: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
 // ─── CreateApplyUser ──────────────────────────────────────────────────────────
 
 func TestApplyAuthStore_Create_ReturnsUser(t *testing.T) {
@@ -94,6 +106,110 @@ func TestApplyAuthStore_Create_KeysAreUnique(t *testing.T) {
 }
 
 // ─── ResolveApplyUserByAPIKey ─────────────────────────────────────────────────
+
+// --- CreateApplyPlayerUser (Player Account Access Phase 1) -----------------
+
+func TestApplyAuthStore_CreateApplyPlayerUser_ReturnsLinkedUser(t *testing.T) {
+	store := newApplyAuthStore(t)
+	ctx := context.Background()
+	playerID := seedPlayerForUser(t, "Sam", "Player")
+
+	u, key, err := store.CreateApplyPlayerUser(ctx, "sam-player", playerID)
+	if err != nil {
+		t.Fatalf("CreateApplyPlayerUser: %v", err)
+	}
+	if u.Role != "player" {
+		t.Errorf("want role=player, got %q", u.Role)
+	}
+	if u.PlayerID == nil || *u.PlayerID != playerID {
+		t.Errorf("want player_id=%d, got %v", playerID, u.PlayerID)
+	}
+	if len(key) != 64 {
+		t.Errorf("want 64-char hex key, got len=%d", len(key))
+	}
+}
+
+func TestApplyAuthStore_Resolve_LinkedPlayerUser_ReturnsPlayerID(t *testing.T) {
+	store := newApplyAuthStore(t)
+	ctx := context.Background()
+	playerID := seedPlayerForUser(t, "Resolved", "Player")
+
+	_, key, err := store.CreateApplyPlayerUser(ctx, "resolved-player", playerID)
+	if err != nil {
+		t.Fatalf("CreateApplyPlayerUser: %v", err)
+	}
+
+	resolved, err := store.ResolveApplyUserByAPIKey(ctx, key)
+	if err != nil {
+		t.Fatalf("ResolveApplyUserByAPIKey: %v", err)
+	}
+	if resolved == nil {
+		t.Fatal("want non-nil user, got nil")
+	}
+	if resolved.PlayerID == nil || *resolved.PlayerID != playerID {
+		t.Errorf("want player_id=%d resolved from the key, got %v", playerID, resolved.PlayerID)
+	}
+}
+
+// TestApplyAuthStore_Resolve_AdminUser_HasNilPlayerID confirms the existing
+// admin-role creation path leaves player_id NULL -- the new column must not
+// change behavior for every pre-existing user.
+func TestApplyAuthStore_Resolve_AdminUser_HasNilPlayerID(t *testing.T) {
+	store := newApplyAuthStore(t)
+	ctx := context.Background()
+
+	_, key, err := store.CreateApplyUser(ctx, "plain-admin", "league_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser: %v", err)
+	}
+
+	resolved, err := store.ResolveApplyUserByAPIKey(ctx, key)
+	if err != nil {
+		t.Fatalf("ResolveApplyUserByAPIKey: %v", err)
+	}
+	if resolved.PlayerID != nil {
+		t.Errorf("want nil player_id for an admin-role user, got %v", resolved.PlayerID)
+	}
+}
+
+func TestApplyAuthStore_List_ShowsLinkedPlayerName(t *testing.T) {
+	store := newApplyAuthStore(t)
+	ctx := context.Background()
+	playerID := seedPlayerForUser(t, "Listed", "Player")
+
+	if _, _, err := store.CreateApplyPlayerUser(ctx, "listed-player", playerID); err != nil {
+		t.Fatalf("CreateApplyPlayerUser: %v", err)
+	}
+	if _, _, err := store.CreateApplyUser(ctx, "listed-admin", "league_admin"); err != nil {
+		t.Fatalf("CreateApplyUser: %v", err)
+	}
+
+	users, err := store.ListApplyUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListApplyUsers: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("want 2 users, got %d", len(users))
+	}
+	for _, u := range users {
+		switch u.Username {
+		case "listed-player":
+			if u.PlayerName != "Listed Player" {
+				t.Errorf("want player_name=%q for the linked user, got %q", "Listed Player", u.PlayerName)
+			}
+			if u.PlayerID == nil || *u.PlayerID != playerID {
+				t.Errorf("want player_id=%d, got %v", playerID, u.PlayerID)
+			}
+		case "listed-admin":
+			if u.PlayerName != "" {
+				t.Errorf("want empty player_name for an admin-role user, got %q", u.PlayerName)
+			}
+			if u.PlayerID != nil {
+				t.Errorf("want nil player_id for an admin-role user, got %v", u.PlayerID)
+			}
+		}
+	}
+}
 
 func TestApplyAuthStore_Resolve_MatchesCreatedKey(t *testing.T) {
 	store := newApplyAuthStore(t)

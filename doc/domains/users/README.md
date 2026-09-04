@@ -4,21 +4,26 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.11`
-**Last reviewed:** `2026-08-26`
+**Current version:** `0.12`
+**Last reviewed:** `2026-09-03`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
 
-## Provisional Relationship
+## Player Relationship
 
 ```text
 users.player_id NULL UNIQUE -> players.id
 ```
 
-This supports players without accounts and admins who are not players. Review
-the design before implementation for household accounts, guardians, shared
-email addresses, and account transfers.
+Implemented in Player Account Access Phase 1 (see below) as a nullable
+`INTEGER REFERENCES players(id)` column, with uniqueness enforced by a
+partial unique index (`WHERE player_id IS NOT NULL`) rather than a `UNIQUE`
+column constraint, since SQLite's `ALTER TABLE ADD COLUMN` cannot carry a
+`UNIQUE` constraint directly. This still supports players without accounts
+and admins who are not players, and still enforces one account per player.
+Household accounts, guardians, shared email addresses, and account
+transfers remain unreviewed and out of scope for this phase.
 
 ## Future User Screens
 
@@ -62,6 +67,11 @@ Current direction:
 league_admin); API key bridge continues; player link deferred; route auth wires
 incrementally per phase onto clearance and operational routes. See USERS-Q001
 Discovery section below.
+
+**Update (2026-09-03):** The deferred player link is now implemented as a
+third role, `player`, in Player Account Access Phase 1 (see above) --
+still on the same API-key bridge, not the browser-session/JWT model this
+resolution deferred.
 
 ## Phase C1 Implementation
 
@@ -234,6 +244,165 @@ can still read its own identity via `/me`. `node --check` on all changed
 JS files passes. Actual browser rendering of the new Users screen and
 Admin Key modal identity line remain **NOT VERIFIED (no browser)** in
 this developer's tool session.
+
+## Player Account Access Phase 1 Implementation
+
+**Status:** `implemented`
+**Date:** `2026-09-03`
+
+This is API-key V1 player access, not the final login/session model. It
+reuses the same personal-API-key bridge introduced in Phase C1 for a third
+role rather than introducing browser sessions, passwords, JWTs, or email
+invitations.
+
+### Why this phase exists
+
+Make the app testable as more than an admin console. A player should be
+able to use a personal key to view their own schedule, stats, and dues
+status through Player Overview, without gaining admin access.
+
+### What Phase 1 added
+
+- `users.player_id INTEGER REFERENCES players(id)`, nullable, NULL for
+  every existing `system_admin`/`league_admin` user; a partial unique index
+  (`idx_users_player_id ... WHERE player_id IS NOT NULL`) enforces at most
+  one user account per player. See "Player Relationship" above.
+- `models.User` gained `PlayerID *int64` (`json:"player_id,omitempty"`) and
+  a display-only `PlayerName string` (`json:"player_name,omitempty"`,
+  populated only by `GET /api/users`'s list query via a `LEFT JOIN players`).
+- New `role=player`, creatable alongside `system_admin`/`league_admin`.
+  `POST /api/users` requires `player_id` when `role=player`, validates it
+  references an existing player, and creates the user via a new
+  `ApplyAuthResolver.CreateApplyPlayerUser` method added alongside the
+  existing `CreateApplyUser` (rather than changing `CreateApplyUser`'s
+  signature, which would have touched all of its pre-existing call sites).
+  `system_admin`/`league_admin`/`admin` creation behavior is unchanged.
+- `GET /api/users/me` now returns `player_id` for a linked user; for
+  unlinked admin-role users, `player_id` remains absent from the JSON
+  response (`models.User.PlayerID` is `*int64` with `json:",omitempty"`,
+  so a nil pointer is omitted from the response body rather than
+  serialized as `null`).
+- Player Overview's access rule is now role-aware instead of using the
+  existing `clearanceAuth` role allowlist, because ownership can only be
+  checked once the URL's player id is parsed: the route now requires only a
+  resolvable personal key (`requirePersonalKeyOnly`), and the handler itself
+  (`checkPlayerOverviewAccess`) allows `system_admin`/`admin`/`league_admin`
+  to view any player's overview unchanged, allows `role=player` to view only
+  its own linked player's overview (403 otherwise), and rejects every other
+  role. The static `LEAGUE_ADMIN_TOKEN` does not resolve a user at all here,
+  so it does not authorize Player Overview.
+- Users Admin screen: role select gained a `player` option with a
+  conditionally-shown "Linked Player" picker (required when `role=player`);
+  the users list gained a "Linked Player" column. No edit, deactivate, or
+  key-rotation behavior was added for any role.
+- Frontend: a "My Overview" nav entry (visible only to a resolved
+  `role=player` identity) opens Player Overview directly on that player's
+  own record, with the player-select dropdown hidden as a UX courtesy --
+  the actual access control is the server-side check above. This locked
+  load also omits `season_id` from the overview request entirely rather
+  than passing the shell's currently selected `activeSeason.id` -- the
+  shell's selected league/season may belong to a different league than
+  the linked player's own, and the backend already falls back to that
+  player's own league's active season when `season_id` is omitted (see
+  "Correction" below). The existing admin "Player Overview" nav entry and
+  the Players-list "View Overview" row button are unchanged (already
+  gated to admin roles by an earlier Player Overview Money phase) and
+  still pass the shell's `activeSeason.id` when present. A `role=player`
+  identity also does not see the Users, Financial, or Backup admin
+  surfaces.
+
+### Protected routes (this phase)
+
+| Route | Auth requirement |
+|-------|-------------------|
+| `GET /api/players/{id}/overview` | personal key required; `system_admin`/`admin`/`league_admin` may view any player, `role=player` may view only its own linked player (403 otherwise) |
+| `POST /api/users` (role=player) | same gate as existing role creation: static `LEAGUE_ADMIN_TOKEN`, OR personal key + system_admin/admin role |
+
+### Correction (2026-09-03, same day): "My Overview" ignored the linked player's own league
+
+**PM finding:** `web/app.js` passed `state.activeSeason` into
+`<player-overview-page>.refresh(...)` unconditionally, including for a
+locked `role=player` view, and the component's `#load()` always sent
+`fetchPlayerOverview(playerId, this.#activeSeason?.id)`. If the app
+shell's currently selected league/season did not belong to the linked
+player's own league, "My Overview" would request
+`GET /api/players/{own_id}/overview?season_id={wrong_league_season}` and
+the backend would correctly reject it -- making a player-facing entry
+point fail depending on whatever league an admin had last selected in
+that browser tab.
+
+**Fix:** `#load(forcedPlayerId)` now computes
+`seasonId = forcedPlayerId != null ? null : this.#activeSeason?.id` and
+passes that to `fetchPlayerOverview` instead of always passing
+`this.#activeSeason?.id`. Since `refresh()` already calls
+`#load(lockedPlayerId)` for a locked view, the locked path now always
+omits `season_id`, letting the backend fall back to the linked player's
+own league's active season (`getPlayerOverview`'s existing, documented
+behavior -- see `handlers/api_player_overview_handler.go`'s doc comment:
+"season_id is optional: when omitted, the player's league's active
+season is used"). `fetchPlayerOverview`
+(`web/domains/players/players-api-service.js`) needed no change --
+`seasonId ? ... : ''` already treats `null` as "omit the query param."
+Admin loads (dropdown-driven `#load()` with no argument, including the
+Players-list "View Overview" preselect path) are unchanged and still pass
+`activeSeason.id` when present. No backend change was needed or made;
+the ownership check added earlier this phase is unaffected.
+
+### Intentionally unprotected / unchanged
+
+- `role=player` keys are not accepted anywhere `clearanceAuth`'s
+  `requireLeagueAdminRole` or `requireSystemAdminRole` is used (Users,
+  Financial/finances, backup, CRUD mutations, week close/reopen, etc.);
+  those already reject any role outside their allowlist, so `player` needed
+  no explicit new denial there.
+- No edit, deactivate, or key-rotation endpoint for any role, including
+  `player`. Unchanged from prior phases.
+
+### What Phase 1 defers
+
+- Score submission, captain approval workflows, browser sessions,
+  passwords, JWTs, email invitations, and mobile notifications --
+  explicitly out of scope per PM decision.
+- Household accounts, guardians, shared email addresses, and account
+  transfers remain unreviewed (see "Player Relationship" above).
+- A dedicated player-facing profile/settings screen beyond Player Overview.
+
+### Verification
+
+New backend tests: `TestApplyAuthStore_CreateApplyPlayerUser_ReturnsLinkedUser`,
+`TestApplyAuthStore_Resolve_LinkedPlayerUser_ReturnsPlayerID`,
+`TestApplyAuthStore_Resolve_AdminUser_HasNilPlayerID`,
+`TestApplyAuthStore_List_ShowsLinkedPlayerName`,
+`TestPostUsers_PlayerRoleWithoutPlayerID_Returns400`,
+`TestPostUsers_PlayerRoleWithNonexistentPlayerID_Returns400`,
+`TestPostUsers_PlayerRoleWithValidPlayerID_Returns201`,
+`TestGetMe_PlayerRolePersonalKey_ReturnsPlayerID`,
+`TestPlayerOverview_PlayerRole_CanAccessOwnOverview`,
+`TestPlayerOverview_PlayerRole_CannotAccessOtherPlayerOverview`,
+`TestPlayerOverview_PlayerRole_CannotAccessFinanceRoutes`,
+`TestPlayerOverview_PlayerRole_CannotAccessUsersRoutes`. `go test ./...
+-count=1` and `go build ./...` pass with zero regressions. Manually verified
+end to end against a local server build: player-role creation validation
+(missing/invalid/valid `player_id`), `/me` returning `player_id`, own-overview
+success, other-player-overview 403, admin access unchanged, Users list
+showing the linked player name, and 403 rejection of a player key from both
+`GET /api/users` and `POST /api/backup`. `node --check` on all changed JS
+files passes. Actual browser rendering of the "My Overview" nav entry and
+the Users Admin "Linked Player" picker remain **NOT VERIFIED (no browser)**
+in this developer's tool session.
+
+The "My Overview" `season_id` correction above (2026-09-03, same day) is a
+frontend-only change -- no Go code changed, so `go test ./... -count=1`
+and `go build ./...` were rerun for regression safety only (both pass,
+zero regressions), and `node --check` was rerun on
+`web/domains/players/player-overview-page-component.js` and `web/app.js`.
+Confirmed at the code level (`#load`'s `seasonId` computation and
+`fetchPlayerOverview`'s existing `seasonId ? ... : ''` behavior); no local
+server was rebuilt for this specific correction since the backend's
+season-fallback behavior was already covered by the handler's existing
+doc comment and behavior, not new code. Actual browser confirmation that
+"My Overview" now succeeds regardless of the shell's selected league
+remains **NOT VERIFIED (no browser)**.
 
 ## Users Auth Phase 6 Implementation
 
@@ -599,3 +768,32 @@ revisit was explicitly declined for this phase (PM decision): personal API
 keys remain the mechanism, and no login endpoint or session model was
 introduced. See "Users Admin Screen Phase 1 Implementation" above for full
 detail.
+
+### 2026-09-03 - Player Account Access Phase 1: player-linked accounts
+
+**Status:** `accepted`
+
+Added a third role, `role=player`, linked one-to-one (enforced via a
+partial unique index) to a `players` row via a new nullable `users.player_id`
+column. A player-role personal key can view only its own linked player's
+Player Overview (schedule, stats, dues); it is rejected everywhere the
+existing league_admin/system_admin allowlists already apply (Users,
+Financial, backup, CRUD mutations, clearance routes). Explicitly declared
+as API-key V1 player access, not the final login/session model -- score
+submission, captain approval, browser sessions, passwords, JWTs, email
+invitations, and mobile notifications remain out of scope. See "Player
+Account Access Phase 1 Implementation" above for full detail.
+
+### 2026-09-03 - Correction: "My Overview" must ignore the shell's selected league
+
+**Status:** `accepted`
+
+PM review found "My Overview" could 403 depending on whatever
+league/season the app shell happened to have selected, because the
+locked load path passed the shell's `activeSeason.id` through to the
+overview request just like the admin path does. Fixed by omitting
+`season_id` entirely for a locked (`role=player`) load, letting the
+backend's existing fallback (the linked player's own league's active
+season) apply instead. Admin behavior is unchanged. See "Correction
+(2026-09-03, same day)" under "Player Account Access Phase 1
+Implementation" above for full detail.

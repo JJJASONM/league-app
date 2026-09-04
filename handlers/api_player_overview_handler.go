@@ -32,11 +32,16 @@ import (
 //
 // financeMgr is nil in test-only setups that don't wire one (e.g. the
 // shared testServer() helper); when nil, money falls back to the old
-// Phase 1 "not tracked" placeholder instead of erroring. This route
-// remains an unprotected GET like every other Player Overview read even
-// though it now surfaces the same money data the Financial screen keeps
-// behind clearanceAuth -- see doc/domains/players/README.md for the
-// resulting privacy-inconsistency note and recommendation.
+// Phase 1 "not tracked" placeholder instead of erroring.
+//
+// Access control (Player Account Access Phase 1): system_admin/admin/
+// league_admin may view any player's overview, unchanged from Phase 2's
+// money-integration correction. A resolved role="player" user may view
+// only the one player their account is linked to (models.User.PlayerID);
+// requesting any other player's overview is forbidden. Any other role is
+// forbidden. When no user is in the request context (ApplyAuth not wired,
+// e.g. the shared testServer() helper), access is left open -- see
+// checkPlayerOverviewAccess.
 func getPlayerOverview(
 	w http.ResponseWriter, r *http.Request,
 	playerMgr PlayerManager, seasonMgr SeasonManager, teamMgr TeamManager,
@@ -45,6 +50,10 @@ func getPlayerOverview(
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if !checkPlayerOverviewAccess(r, id) {
+		jsonError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -154,6 +163,29 @@ func getPlayerOverview(
 	}
 
 	jsonOK(w, overview)
+}
+
+// checkPlayerOverviewAccess enforces per-viewer access to Player Overview
+// (Player Account Access Phase 1): system_admin/admin/league_admin may view
+// any player's overview; a resolved role="player" user may view only their
+// own linked player_id; any other role is forbidden. When no user is in
+// the request context -- ApplyAuth is not wired, e.g. the shared
+// testServer() test helper, so requirePersonalKeyOnly was a passthrough --
+// access is left open, matching every other personal-key-protected route's
+// behavior under that same test setup.
+func checkPlayerOverviewAccess(r *http.Request, requestedPlayerID int64) bool {
+	user := clearanceUserFromContext(r.Context())
+	if user == nil {
+		return true
+	}
+	switch user.Role {
+	case "system_admin", "admin", "league_admin":
+		return true
+	case "player":
+		return user.PlayerID != nil && *user.PlayerID == requestedPlayerID
+	default:
+		return false
+	}
 }
 
 // playerOverviewMoney composes the player's dues status for the season.

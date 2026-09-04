@@ -688,11 +688,20 @@ type SaveTeamLineupRequest struct {
 // APIKeyHash is intentionally excluded from JSON to prevent accidental exposure.
 // The cleartext key is returned once at create time (via CreateUserResponse) and never stored.
 type User struct {
-	ID        int64  `json:"id"`
-	Username  string `json:"username"`
-	Role      string `json:"role"`
-	Active    bool   `json:"active"`
-	CreatedAt string `json:"created_at"`
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	Active   bool   `json:"active"`
+	// PlayerID and PlayerName are Player Account Access Phase 1: the
+	// optional one-to-one link from a role=player user to their player
+	// record. Both are nil/empty for every system_admin/league_admin user.
+	// PlayerName is a display convenience populated only by ListApplyUsers
+	// (a LEFT JOIN for the Users Admin screen) -- ResolveApplyUserByAPIKey
+	// leaves it empty, since only PlayerID is needed for the auth/ownership
+	// check on Player Overview and elsewhere.
+	PlayerID   *int64 `json:"player_id,omitempty"`
+	PlayerName string `json:"player_name,omitempty"`
+	CreatedAt  string `json:"created_at"`
 }
 
 // CreateUserResponse is the one-time response body for POST /api/users.

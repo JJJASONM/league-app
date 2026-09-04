@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -179,6 +181,80 @@ func TestPostUsers_LegacyAdminRole_Returns400(t *testing.T) {
 	}
 }
 
+// TestPostUsers_PlayerRoleWithoutPlayerID_Returns400 is a Player Account
+// Access Phase 1 test: role=player requires a linked player_id, unlike the
+// two admin roles.
+func TestPostUsers_PlayerRoleWithoutPlayerID_Returns400(t *testing.T) {
+	srv, _ := testServerWithApplyAuth(t)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/users",
+		strings.NewReader(`{"username":"player-no-link","role":"player"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c1AdminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("want 400 (player_id required for role=player), got %d", resp.StatusCode)
+	}
+}
+
+// TestPostUsers_PlayerRoleWithNonexistentPlayerID_Returns400 confirms
+// player_id is validated against real players, not just required to be
+// non-zero.
+func TestPostUsers_PlayerRoleWithNonexistentPlayerID_Returns400(t *testing.T) {
+	srv, _ := testServerWithApplyAuth(t)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/users",
+		strings.NewReader(`{"username":"player-bad-link","role":"player","player_id":999999}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c1AdminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("want 400 (player_id must reference an existing player), got %d", resp.StatusCode)
+	}
+}
+
+// TestPostUsers_PlayerRoleWithValidPlayerID_Returns201 confirms role=player
+// succeeds once linked to a real player, and the response reflects the
+// link.
+func TestPostUsers_PlayerRoleWithValidPlayerID_Returns201(t *testing.T) {
+	srv, _ := testServerWithApplyAuth(t)
+	res, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('Sam','Player',0)`)
+	if err != nil {
+		t.Fatalf("seed player: %v", err)
+	}
+	playerID, _ := res.LastInsertId()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/users",
+		strings.NewReader(fmt.Sprintf(`{"username":"player-linked","role":"player","player_id":%d}`, playerID)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c1AdminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 201, got %d: %s", resp.StatusCode, body)
+	}
+	var got models.CreateUserResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.User.Role != "player" {
+		t.Errorf("want role=player, got %q", got.User.Role)
+	}
+	if got.User.PlayerID == nil || *got.User.PlayerID != playerID {
+		t.Errorf("want player_id=%d, got %v", playerID, got.User.PlayerID)
+	}
+}
+
 // TestPostUsers_SystemAdminPersonalKey_Returns201 verifies a resolved
 // system_admin personal key can create a user, not just the static admin
 // token -- the concrete backend gap identified in discovery (PM decision 1).
@@ -293,6 +369,45 @@ func TestGetMe_ValidPersonalKey_ReturnsResolvedIdentity(t *testing.T) {
 	}
 	if got.Role != "league_admin" {
 		t.Errorf("want role league_admin, got %q", got.Role)
+	}
+}
+
+// TestGetMe_PlayerRolePersonalKey_ReturnsPlayerID is a Player Account
+// Access Phase 1 test: /me must return the linked player_id for a
+// role=player user, not just username/role, so the frontend can resolve
+// "which player is this."
+func TestGetMe_PlayerRolePersonalKey_ReturnsPlayerID(t *testing.T) {
+	srv, authStore := testServerWithApplyAuth(t)
+	res, err := db.DB.Exec(`INSERT INTO players (first_name, last_name, handicap) VALUES ('Whoami','Player',0)`)
+	if err != nil {
+		t.Fatalf("seed player: %v", err)
+	}
+	playerID, _ := res.LastInsertId()
+
+	_, key, err := authStore.CreateApplyPlayerUser(context.Background(), "whoami-player", playerID)
+	if err != nil {
+		t.Fatalf("CreateApplyPlayerUser: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var got models.User
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Role != "player" {
+		t.Errorf("want role player, got %q", got.Role)
+	}
+	if got.PlayerID == nil || *got.PlayerID != playerID {
+		t.Errorf("want player_id=%d, got %v", playerID, got.PlayerID)
 	}
 }
 

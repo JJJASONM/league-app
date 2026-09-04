@@ -4,8 +4,8 @@
 
 **Owner:** `players`
 **Status:** `draft`
-**Current version:** `0.3`
-**Last reviewed:** `2026-08-27`
+**Current version:** `0.4`
+**Last reviewed:** `2026-09-03`
 
 Players are shared system-wide identities. They are not owned by one league or
 team and are separate from authenticated user accounts.
@@ -456,6 +456,79 @@ regression safety only; `node --check` was rerun on `web/app.js`,
 confirmation that the row button appears/disappears with the resolved
 identity remains **NOT VERIFIED (no browser)** as well.
 
+## Player Overview Phase 3: Player Account Access Implementation
+
+**Status:** `implemented`
+**Date:** `2026-09-03`
+
+This is API-key V1 player access, not the final login/session model. Full
+detail (the `users.player_id` link, `role=player`, and route auth changes)
+lives in `doc/domains/users/README.md`'s "Player Account Access Phase 1
+Implementation" section, since the account/role model is owned by the
+users domain; this entry records only the Player Overview-side change.
+
+### What changed
+
+Player Overview's auth moved from Phase 2's flat role allowlist
+(`clearanceAuth`: league_admin/admin/system_admin only) to an
+ownership-aware check performed in the handler itself, because the access
+rule now depends on which player id is in the URL:
+
+- `system_admin`/`admin`/`league_admin` may still view any player's
+  overview -- unchanged from Phase 2.
+- A new `role=player` personal key may view only
+  `GET /api/players/{their_own_player_id}/overview`; any other player id
+  returns 403.
+- The static `LEAGUE_ADMIN_TOKEN` does not resolve to a user at all on this
+  route (it never did), so it still does not authorize Player Overview --
+  restated here because it is easy to assume a token that works on other
+  admin routes would work here too.
+- Money data (the Phase 2 Dues card) is unaffected in shape; it is now
+  reachable by the linked player themselves, not only admins.
+
+### Frontend
+
+`<player-overview-page>`'s `refresh()` gained a 4th `lockedPlayerId`
+parameter. When the app shell resolves a `role=player` identity, a new
+"My Overview" nav entry opens this same section/component with
+`lockedPlayerId` set to that player's id: the player-select dropdown is
+hidden and the locked player loads directly. This is a UX courtesy only --
+the access control is the server-side check above, not this hidden
+dropdown. The existing admin "Player Overview" nav entry, and the
+Players-list "View Overview" row button (`hasFinanceAdminRole`-gated since
+the Phase 2 follow-up), are unchanged and remain invisible to a
+`role=player` identity, since `hasFinanceAdminRole` already returns `false`
+for that role -- no new gating logic was needed in
+`players-page-component.js`.
+
+The locked (`role=player`) load also omits `season_id` from the overview
+request entirely, rather than passing the app shell's currently selected
+`activeSeason.id` -- the shell's selected league/season may not be the
+linked player's own league at all, and `GET /api/players/{id}/overview`
+already falls back to that player's own league's active season when
+`season_id` is omitted. The admin load path is unchanged and still passes
+`activeSeason.id` when present. See "Correction (2026-09-03, same day)"
+under `doc/domains/users/README.md`'s "Player Account Access Phase 1
+Implementation" for full detail (PM-flagged correction, same day as
+initial implementation).
+
+### What this phase defers
+
+Everything Phase 2 already deferred, plus: score submission, captain
+approval, browser sessions, passwords, JWTs, email invitations, and mobile
+notifications -- explicitly out of scope per PM decision for this phase.
+
+### Verification
+
+See "Player Account Access Phase 1 Implementation" in
+`doc/domains/users/README.md` for the full test list and manual
+verification walkthrough (backend tests, `go test ./... -count=1`,
+`go build ./...`, `node --check`, and an end-to-end local server pass
+covering own-overview access, other-player 403, and admin access
+unchanged). Actual browser rendering of the "My Overview" nav entry and
+the hidden player-select dropdown remain **NOT VERIFIED (no browser)** in
+this developer's tool session.
+
 ## Questions
 
 ### PLAYERS-Q001 - Quick-add requirements
@@ -477,6 +550,17 @@ players and unsupported handicap values must be avoided.
 - Match-entry quick-add integration: deferred.
 
 ## Decision History
+
+### 2026-09-03 - Player Overview Phase 3: own-overview access for role=player
+
+**Status:** `accepted`
+
+Player Overview's access check moved from a flat admin-role allowlist to
+an ownership-aware handler check, so a new `role=player` personal key
+(owned by the users domain, see `doc/domains/users/README.md`'s "Player
+Account Access Phase 1") can view only its own linked player's overview.
+Admin access is unchanged. API-key V1 player access, not a login/session
+model.
 
 ### 2026-06-08 - Share players across leagues
 

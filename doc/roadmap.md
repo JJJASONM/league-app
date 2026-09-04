@@ -203,6 +203,26 @@ These items should stay small enough to review and ship independently.
     section still won't show a sub's one-off match for another team, an
     accepted limitation. See `doc/domains/matches/README.md`'s
     "Substitute Workflow Phase 1" section for full detail.
+  - **Player Account Access Phase 1 complete 2026-09-03, season-scope
+    corrected 2026-09-03 (same day)** -- see Completed / Largely
+    Completed below. Makes the app testable as more than an
+    admin console: a new `role=player`, linked one-to-one to a `players`
+    row via nullable `users.player_id`, can use a personal key to view
+    only its own Player Overview (schedule, stats, dues) through a new
+    "My Overview" nav entry, and cannot reach Users, Financial, Backup,
+    or another player's overview. Admin roles are unchanged. This is
+    API-key V1 player access, not the final login/session model -- score
+    submission, captain approval, browser sessions, passwords, JWTs,
+    email invitations, and mobile notifications remain out of scope.
+    PM review caught "My Overview" passing the app shell's currently
+    selected `activeSeason.id` through to the overview request, which
+    could 403 whenever that season belonged to a different league than
+    the linked player's own -- fixed by omitting `season_id` on the
+    locked load path so the backend's existing own-league-active-season
+    fallback applies instead; admin loads are unchanged. See
+    `doc/domains/users/README.md`'s "Player Account Access Phase 1
+    Implementation" section and `doc/domains/players/README.md`'s
+    "Player Overview Phase 3" section for full detail.
 
 ## Next
 
@@ -1163,6 +1183,69 @@ follow-up.
   widened roster picker remain **NOT VERIFIED (no browser)**. See
   `doc/domains/matches/README.md`'s "Substitute Workflow Phase 1"
   section for full detail.
+- Player Account Access Phase 1 (2026-09-03). Why this branch exists:
+  make the app testable as more than an admin console -- a player should
+  be able to use a personal key to view their own schedule, stats, and
+  dues status through Player Overview, without gaining admin access.
+  Added a nullable `users.player_id INTEGER REFERENCES players(id)`
+  (additive migration), with a partial unique index
+  (`WHERE player_id IS NOT NULL`) enforcing one account per player, since
+  SQLite's `ALTER TABLE ADD COLUMN` cannot carry a `UNIQUE` constraint
+  directly. This implements the one-to-one link `doc/domains/users/
+  README.md` had already documented as the intended "Provisional
+  Relationship" since before this phase. A new `role=player`, creatable
+  alongside `system_admin`/`league_admin`, requires a valid `player_id`
+  at creation; implemented as a new `ApplyAuthResolver.
+  CreateApplyPlayerUser` method rather than changing `CreateApplyUser`'s
+  signature, so none of `CreateApplyUser`'s 37 existing call sites across
+  6 files needed to change. `GET /api/users/me` now returns `player_id`
+  for a linked user. Player Overview's access rule moved from a flat
+  `clearanceAuth` role allowlist to an ownership-aware handler check
+  (`checkPlayerOverviewAccess`), because a `role=player` key's access
+  depends on the URL path's player id, which is only available once the
+  handler parses it: admin roles still view any player's overview
+  unchanged; `role=player` may view only its own linked player's overview
+  (403 otherwise); the static `LEAGUE_ADMIN_TOKEN` still does not
+  authorize this route, as before. Users Admin screen gained a `player`
+  role option with a required "Linked Player" picker and a "Linked
+  Player" list column; no edit/deactivate/key-rotation was added for any
+  role. Frontend added a "My Overview" nav entry (visible only to a
+  resolved `role=player` identity) that opens the existing
+  `<player-overview-page>` component directly on that player's own
+  record via a new `lockedPlayerId` parameter (hides the player-select
+  dropdown as a UX courtesy; the real access control is server-side); a
+  `role=player` identity does not see Users, Financial, or Backup.
+  Explicitly out of scope, per PM decision: score submission, captain
+  approval, browser sessions, passwords, JWTs, email invitations, and
+  mobile notifications -- this is API-key V1 player access, not the
+  final login/session model. Verified with `go test ./... -count=1` and
+  `go build ./...` (4 new `ApplyAuthStore` tests for the new create/
+  resolve/list behavior, 3 new handler tests for player-role user
+  creation validation, 1 new `/me` test, and 4 new Player Overview
+  auth tests covering own-overview success, other-player 403, and
+  finance/users-route rejection), `node --check` on all four changed JS
+  files, and a full manual walkthrough against a local server build:
+  player-role creation validation, `/me` returning `player_id`,
+  own-overview success, other-player-overview 403, admin access
+  unchanged, the Users list showing the linked player name, and 403
+  rejection of a player key from both `GET /api/users` and
+  `POST /api/backup`. Actual browser rendering of the "My Overview" nav
+  entry and the Users Admin "Linked Player" picker remain **NOT
+  VERIFIED (no browser)**. **PM review correction, same day:** "My
+  Overview" passed the app shell's currently selected `activeSeason.id`
+  through to the overview request even on the locked (`role=player`)
+  path, so it could 403 whenever that season belonged to a different
+  league than the linked player's own. Fixed by having
+  `player-overview-page-component.js`'s `#load(forcedPlayerId)` omit
+  `season_id` entirely on the locked path (`seasonId = forcedPlayerId !=
+  null ? null : this.#activeSeason?.id`), letting the backend's existing
+  own-league-active-season fallback apply instead; admin loads are
+  unchanged. Frontend-only change -- `go test ./... -count=1` and `go
+  build ./...` rerun for regression safety (pass, zero regressions),
+  `node --check` rerun on the changed component and `web/app.js`. See
+  `doc/domains/users/README.md`'s "Player Account Access Phase 1
+  Implementation" section and `doc/domains/players/README.md`'s
+  "Player Overview Phase 3" section for full detail.
 
 ## Open Questions To Resolve
 
@@ -1175,10 +1258,10 @@ follow-up.
 
 | ID | Area | Resolution |
 | --- | --- | --- |
-| `USERS-Q001` | Users | Resolved 2026-07-27 - Admin-provisioned accounts; two-role model (system_admin, league_admin); personal API keys continue; player link deferred; route auth wires incrementally per phase. |
+| `USERS-Q001` | Users | Resolved 2026-07-27 - Admin-provisioned accounts; two-role model (system_admin, league_admin); personal API keys continue; player link deferred; route auth wires incrementally per phase. **Update 2026-09-03:** the deferred player link is now implemented as a third role, `role=player`, in Player Account Access Phase 1 -- still on the same API-key bridge, not browser sessions/JWTs. |
 | `MATCHES-Q001` | Matches | Resolved 2026-08-25 - Two new admin-attested match-level states (`approved`, `processed`) added underneath Close Week, not a single review status; processed matches count toward handicap eligibility before week close; real captain/player login approval deferred. See Weekly Score Processing Phase 1A. |
 | `PLAYERS-Q001` | Players | Resolved 2026-07-14 - Phase 1 quick-add uses at least one name, diff rating default 0, and optional team; duplicate detection and INCOMPLETE status deferred. |
-| `PLAYERS-Q002` | Players / Finances | Resolved 2026-08-30 - Player Overview is protected with `clearanceAuth` while it exposes dues/payment status. Player-facing access to a player's own money/stat/schedule view remains deferred until real player login/permissions exist. |
+| `PLAYERS-Q002` | Players / Finances | Resolved 2026-08-30 - Player Overview is protected with `clearanceAuth` while it exposes dues/payment status. Player-facing access to a player's own money/stat/schedule view remains deferred until real player login/permissions exist. **Update 2026-09-03:** player-facing access to one's own Player Overview is now implemented via `role=player` (Player Account Access Phase 1) -- still API-key V1, not full login/permissions. |
 | `CODES-Q001` | Codes | Resolved 2026-07-14 - behavior-driving codes remain developer-owned constants; DB-backed code tables deferred. |
 | `SCHEDULES-Q001` | Schedules | Resolved 2026-07-13 - preview policy and enforcement complete. |
 

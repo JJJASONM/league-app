@@ -1919,6 +1919,116 @@ closes the "NOT VERIFIED (no browser)" item directly above.
 
 ---
 
+### 22. Player Account Access Phase 1 (2026-09-03)
+
+This is API-key V1 player access, not the final login/session model.
+
+- Browser: sidebar "Admin Key" modal (a player key resolves through the
+  same modal as an admin key), the new "My Overview" nav entry, the
+  Users screen's role picker, and the Players list.
+  - [ ] **NOT VERIFIED (no browser)**: pasting a `role=player` personal
+        key into the Admin Key modal resolves and shows the player's
+        identity (same "Signed in as `<username>` (`<role>`)" line
+        Users Admin Screen Phase 1 added); the "My Overview" nav entry
+        becomes visible, and the existing admin "Player Overview" nav
+        entry, "Users", "Financial", and "Backup DB" all stay hidden.
+        **API-verified** against a local server build: `GET
+        /api/users/me` with a `role=player` key returned
+        `{"role":"player","player_id":<id>,...}`.
+  - [ ] **NOT VERIFIED (no browser)**: clicking "My Overview" opens
+        Player Overview directly on the linked player's own record, with
+        the player-select dropdown hidden (not just defaulted) since the
+        viewer may not choose a different player, and this succeeds
+        regardless of which league/season the app shell currently has
+        selected -- the request omits `season_id` entirely on this path
+        rather than passing the shell's selected season, so the backend
+        falls back to the linked player's own league's active season
+        (PM-caught correction, see the note below). **API-verified**:
+        `GET /api/players/{own_id}/overview` with the player's own key
+        returned 200 with the full overview (schedule, stats, handicap,
+        dues); `GET /api/players/{other_id}/overview` with the same key
+        returned 403.
+  - [ ] **NOT VERIFIED (no browser)**: a `role=player` key gets 403 (not
+        a broken page) if used against the Users, Financial, or Backup
+        surfaces directly. **API-verified**: `GET /api/users` returned
+        403, `POST /api/backup` returned 403, both with the same
+        `role=player` key that succeeded against its own overview above.
+  - [ ] **NOT VERIFIED (no browser)**: the Users Admin screen's "Add
+        User" modal shows a "Player" role option; selecting it reveals a
+        required "Linked Player" picker populated from the current
+        league's players; saving without selecting a player is blocked
+        client-side ("Select a player to link"); the created user
+        appears in the list with its linked player name in a new
+        "Linked Player" column. **API-verified**: `POST /api/users` with
+        `role:"player"` and no `player_id` returned 400 ("player_id is
+        required for role=player"); with a nonexistent `player_id`
+        returned 400 ("player_id does not reference an existing
+        player"); with a valid `player_id` returned 201 with a one-time
+        key, and the same player id resolved through `/me` and appeared
+        in `GET /api/users`'s `player_name` field.
+  - [ ] **NOT VERIFIED (no browser)**: the existing admin "Player
+        Overview" nav entry and the Players list's "View Overview" row
+        button both stay hidden for a `role=player` identity, matching
+        their existing admin-only gating from Player Overview Phase 2 --
+        no new code path was added for this case, so this is a
+        regression check, not new behavior. **Confirmed at the code
+        level**: `hasFinanceAdminRole(identity)` (unchanged) returns
+        `false` for `role:"player"`, and both that nav entry and the row
+        button already gate on it.
+- New focused Go tests (all passing): 4 new `ApplyAuthStore` tests
+  (`backend/storage/sqlite/apply_auth_store_test.go`) covering
+  `CreateApplyPlayerUser`, resolving a linked player's `player_id`,
+  confirming an admin-role resolve still has a nil `player_id`, and
+  `ListApplyUsers` showing the joined player name; 3 new handler tests
+  (`handlers/api_apply_c1_test.go`) covering the missing/nonexistent/
+  valid `player_id` cases on `POST /api/users`; 1 new `/me` test
+  confirming `player_id` round-trips; 4 new handler tests
+  (`handlers/api_player_overview_auth_test.go`) covering a player key
+  reading its own overview, being rejected from another player's
+  overview, and being rejected from the finance and users route groups.
+  `go test ./... -count=1` and `go build ./...` pass with zero
+  regressions.
+- `node --check` passes on all four changed JS files: `web/app.js`,
+  `web/domains/users/users-management-page-component.js`,
+  `web/domains/players/player-overview-page-component.js`,
+  `web/domains/players/players-page-component.js` (unchanged; checked
+  only to confirm no edit was needed).
+- Known, deliberately out-of-scope notes (not oversights):
+  - No edit, deactivate, or key-rotation endpoint for any role,
+    including `player` -- unchanged from every prior Users phase.
+  - No score submission, captain approval, browser sessions, passwords,
+    JWTs, email invitations, or mobile notifications -- explicitly out
+    of scope per PM decision for this phase.
+  - `users.player_id` uniqueness is enforced by a partial unique index
+    (`WHERE player_id IS NOT NULL`), not a `UNIQUE` column constraint,
+    since SQLite's `ALTER TABLE ADD COLUMN` cannot add one directly; see
+    `doc/domains/users/README.md`'s "Player Relationship" section.
+
+#### Correction: "My Overview" ignored the shell's selected league (2026-09-03, same day)
+
+**PM review caught this before commit** (not a staging finding): "My
+Overview" passed the app shell's currently selected `activeSeason.id`
+into the overview request even for a locked (`role=player`) view. If the
+shell happened to be on a different league's active season, the backend
+correctly rejected the request, so "My Overview" could fail depending on
+whatever an admin had last selected in that browser tab -- unacceptable
+for a player-facing entry point.
+
+- **Fix:** `player-overview-page-component.js`'s `#load(forcedPlayerId)`
+  now omits `season_id` entirely on the locked path
+  (`seasonId = forcedPlayerId != null ? null : this.#activeSeason?.id`),
+  letting the backend's existing, already-documented fallback (the
+  player's own league's active season) apply instead. Admin loads are
+  unchanged and still pass the shell's selected season.
+- **Verification:** frontend-only change -- `node --check` on
+  `web/domains/players/player-overview-page-component.js` and
+  `web/app.js`; `go test ./... -count=1` and `go build ./...` rerun for
+  regression safety (pass, zero regressions, since no Go code changed).
+  Confirmed at the code level, not yet re-verified with a fresh local
+  server walkthrough or on staging. Actual browser confirmation that "My
+  Overview" now succeeds regardless of the shell's selected league
+  remains **NOT VERIFIED (no browser)**.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |

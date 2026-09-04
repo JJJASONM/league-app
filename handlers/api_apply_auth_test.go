@@ -232,6 +232,10 @@ func (s *stubApplyAuth) CreateApplyUser(_ context.Context, username, role string
 	return models.User{ID: 1, Username: username, Role: role, Active: true}, "fake-key-64chars-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", nil
 }
 
+func (s *stubApplyAuth) CreateApplyPlayerUser(_ context.Context, username string, playerID int64) (models.User, string, error) {
+	return models.User{ID: 1, Username: username, Role: "player", PlayerID: &playerID, Active: true}, "fake-key-64chars-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", nil
+}
+
 func (s *stubApplyAuth) ListApplyUsers(_ context.Context) ([]models.User, error) {
 	return nil, nil
 }

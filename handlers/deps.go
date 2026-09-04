@@ -44,6 +44,12 @@ type ApplyAuthResolver interface {
 	// CreateApplyUser creates a new user with the given role and returns the
 	// user plus the one-time cleartext key.
 	CreateApplyUser(ctx context.Context, username, role string) (models.User, string, error)
+	// CreateApplyPlayerUser creates a new role="player" user linked to
+	// playerID (Player Account Access Phase 1) and returns the user plus
+	// the one-time cleartext key. A separate method rather than a new
+	// parameter on CreateApplyUser, so every existing admin-role call site
+	// (production and test) is unaffected.
+	CreateApplyPlayerUser(ctx context.Context, username string, playerID int64) (models.User, string, error)
 	// ListApplyUsers returns all users. The api_key_hash column is never exposed.
 	ListApplyUsers(ctx context.Context) ([]models.User, error)
 }
