@@ -2141,6 +2141,119 @@ click-through pass still needs to confirm.
   flow remain the only gaps before this phase is browser-complete. No
   code changes are indicated by this pass.
 
+### 23. League Communication Screen Phase 1 (2026-09-06)
+
+Copy/paste message generation only -- no automated email sending, SMS/
+mobile push, template storage, message history, delivery tracking, or
+communication preferences exist in this phase.
+
+- Browser: the new "Communication" nav entry, and the screen's Message
+  Type / Season / Week / Team / Player selectors.
+  - [ ] **NOT VERIFIED (no browser)**: the "Communication" nav entry is
+        hidden for no-key and `role=player` identities, and visible for
+        `league_admin`/`admin`/`system_admin`, matching the Financial nav
+        entry exactly. **Confirmed at the code level**: `app.js`'s
+        `updateIdentityUI()` toggles `#nav-item-communications` off the
+        same `canManageFinances` (`hasFinanceAdminRole(identity)`) value
+        that already gates `#nav-item-finances` and
+        `#nav-item-player-overview` -- no new permission model was
+        introduced.
+  - [ ] **NOT VERIFIED (no browser)**: selecting "Weekly Team Summary"
+        shows Season/Week/Team selectors (Player selector hidden);
+        selecting "Team Dues Reminder" shows Season/Team (Week and Player
+        hidden); selecting "Player Summary" shows Season/Player (Week and
+        Team hidden); changing any visible selector regenerates the
+        message automatically (no separate "Generate" click needed);
+        switching to a different season while on Weekly Team Summary (or
+        switching to Weekly Team Summary after changing season on a
+        different type) reloads the Week selector for the newly selected
+        season before generating, rather than generating against a stale
+        week left over from the previous season (see the correction
+        below). **Confirmed at the code level**: `#toggleFieldsForType()`
+        toggles `.comm-week-row`/`.comm-team-row`/`.comm-player-row` per
+        the `MESSAGE_TYPES` table's `needsWeek`/`needsTeam`/`needsPlayer`
+        flags, and the `change` listener is `async` and now `await`s
+        `#loadWeeksIfNeeded()` before `#generate()` on both the type and
+        season paths.
+  - [ ] **NOT VERIFIED (no browser)**: the generated message renders in a
+        read-only textarea, and clicking "Copy" either copies silently
+        (secure context) or selects the text with a toast explaining
+        Ctrl+C is needed (non-secure context, e.g. staging's plain HTTP).
+        **Confirmed at the code level and via a standalone Node script**
+        (see below) that the three message-building functions produce
+        correctly formatted, correctly filtered text from realistic
+        fixture-shaped data; the Clipboard-API-vs-fallback branch itself
+        needs a real browser (and, for the fallback path specifically, a
+        plain-HTTP context like staging) to observe.
+- **Message content verification (API-shape level, via a standalone Node
+  script against realistic fixture-shaped data, not a live server call --
+  see `doc/domains/communications/README.md`'s Verification section):**
+  - Weekly Team Summary: given a week recap with one match involving the
+    selected team, the message correctly named the team's opponent and
+    home/away side, showed the server-computed status label (`Approved`
+    in the test case) and a matching reminder line, included the set
+    score since `has_result` was true, surfaced `missing_count` as a
+    league-wide note, and included the next week's scheduled match count.
+  - Team Dues Reminder: given three players across two teams, the
+    message correctly included only the two players on the selected team
+    (the third, on a different team, was correctly excluded), correctly
+    labeled the paid player with their total and the unpaid player as
+    `UNPAID`, and correctly listed only the unpaid player's name in the
+    reminder line.
+  - Player Summary: given a full Player Overview-shaped response, the
+    message correctly rendered handicap, win/loss/win-percent record,
+    both schedule rows (one completed, one pending with a `TBD` date),
+    and a paid dues status with the last payment date.
+- No new Go tests -- this phase added no backend code. `go test ./...
+  -count=1` and `go build ./...` were rerun anyway for full regression
+  safety (cross-domain screen, per PM's explicit instruction) and both
+  pass with zero regressions, confirming nothing in this phase's frontend
+  work required or accidentally triggered a backend change.
+- `node --check` passes on all five files: `web/domains/communications/
+  communication-api-service.js`, `communication-message-generators.js`,
+  `communication-page-component.js`, `communications-domain.js`, and
+  `web/app.js` (nav gating + `loadSection` case).
+- Known, deliberately out-of-scope notes (not oversights):
+  - No automated email sending, SMTP, SMS/mobile push, template storage,
+    message history, delivery tracking, or communication preferences --
+    explicitly out of scope per PM decision for this phase.
+  - No bulk "generate for every team/player" action -- one selection at
+    a time in V1.
+  - No real email address collection or display -- messages address
+    people by name only.
+  - No new backend aggregate endpoint -- filtering the existing week
+    recap and season dues responses by `team_id` in the frontend was
+    judged sufficient, not brittle cross-domain stitching.
+
+#### Correction: stale week selector on type/season change (2026-09-07, PM review before commit)
+
+**PM finding:** the Message Type and Season `change` handlers called
+`#loadWeeksIfNeeded()` without awaiting it before calling `#generate()`.
+Since `#loadWeeksIfNeeded()` is async, this meant Weekly Team Summary
+could generate against the previous season's week value right after a
+season change, and switching to Weekly Team Summary from a different
+message type never reloaded the Week selector for the currently selected
+season before generating at all.
+
+- **Fix:** the `change` listener is now `async`, and both the type-change
+  and season-change branches `await #loadWeeksIfNeeded()` before
+  `await #generate()`; the week/team/player branch also awaits
+  `#generate()` for consistency. `#loadWeeksIfNeeded()` additionally
+  clears the Week selector to a "Loading weeks..." placeholder
+  (empty value) synchronously before its own fetch, so even a
+  `#generate()` call that slipped in while a fetch is in flight would see
+  an empty week value (`#generate()` already treats that as "nothing to
+  generate yet") rather than a stale one.
+- **Verification:** frontend-only change, same file already covered by
+  section 23 above. `node --check` on
+  `communication-page-component.js`, `communication-message-generators.js`
+  (unchanged, rechecked for regression safety), and `web/app.js` all pass.
+  No Go code touched, so `go test`/`go build` were not rerun for this
+  specific correction. Confirmed at the code level; actual browser
+  confirmation of the season/type-switch sequencing remains **NOT
+  VERIFIED (no browser)**, same as every other interaction in this
+  section.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |

@@ -80,6 +80,11 @@ function loadSection(sec) {
     case 'finances':
       document.querySelector('finances-page')?.refresh(state.allSeasons, state.activeSeason);
       break;
+    case 'communications':
+      document.querySelector('communication-page')?.refresh(
+        state.allSeasons, state.activeSeason, state.allTeams, state.allPlayers
+      );
+      break;
   }
 }
 
@@ -283,6 +288,11 @@ function updateIdentityUI() {
 
   const canManageFinances = hasFinanceAdminRole(identity);
   document.getElementById('nav-item-finances')?.classList.toggle('d-none', !canManageFinances);
+
+  // League Communication Screen Phase 1: same admin role set as Financial
+  // (league_admin/admin/system_admin) -- reuses hasFinanceAdminRole's
+  // existing meaning rather than a new permission model, per PM decision.
+  document.getElementById('nav-item-communications')?.classList.toggle('d-none', !canManageFinances);
 
   // Player Overview Phase 2 correction: the route now requires the same
   // clearanceAuth role set as Financial Phase 1 (it surfaces the same kind

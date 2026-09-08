@@ -223,6 +223,15 @@ These items should stay small enough to review and ship independently.
     `doc/domains/users/README.md`'s "Player Account Access Phase 1
     Implementation" section and `doc/domains/players/README.md`'s
     "Player Overview Phase 3" section for full detail.
+  - **League Communication Screen Phase 1 complete 2026-09-06** -- see
+    Completed / Largely Completed below. A new admin-only "Communication"
+    screen generates copy/paste message text -- Weekly Team Summary, Team
+    Dues Reminder, Player Summary -- from data Weekly Summary, Financial,
+    and Player Overview already expose. No automated sending, no new
+    backend routes or schema, no message history, and no communication
+    preferences -- copy/paste only, gated by the same admin role set as
+    Financial. See `doc/domains/communications/README.md` for full
+    detail.
 
 ## Next
 
@@ -1246,6 +1255,54 @@ follow-up.
   `doc/domains/users/README.md`'s "Player Account Access Phase 1
   Implementation" section and `doc/domains/players/README.md`'s
   "Player Overview Phase 3" section for full detail.
+- League Communication Screen Phase 1 (2026-09-06). Why this branch
+  exists: the league admin already has Weekly Summary, Financial, Player
+  Overview, Users, score approval/processing, and substitute workflows --
+  everything needed to know what to tell a team or player, but no way to
+  turn that data into a message without manually re-typing it. Added a
+  new `web/domains/communications/` frontend domain and a "Communication"
+  nav entry, gated by the exact same `hasFinanceAdminRole` role set
+  (league_admin/admin/system_admin) the Financial and Player Overview nav
+  entries already use -- reused, not reinvented, per PM's explicit
+  instruction. **No new backend routes or schema were added.** Three
+  message types, each a pure text-building function in
+  `communication-message-generators.js` operating on already-fetched
+  data: Weekly Team Summary (from `GET .../weeks/{week}/recap`, filtered
+  to the selected team's match(es), including the
+  Unscored/Scored/Approved/Processed/Closed status label and a status-
+  appropriate reminder line); Team Dues Reminder (from `GET
+  .../finances/dues`, filtered to the selected team's rostered players,
+  listing paid/unpaid and collecting unpaid names); Player Summary (from
+  `GET /players/{id}/overview` directly, no filtering needed). The
+  generators only choose display wording for values the backend already
+  computed (`has_result`/`approved_at`/`processed_at`/`week_closed`/
+  `paid`) -- they do not recompute any business decision, matching the
+  same division of responsibility Weekly Summary's and Financial's own
+  badge rendering already use. A frontend aggregate/filter was judged
+  sufficient rather than adding a new backend endpoint, since filtering
+  an existing per-season response by `team_id` is a simple, non-brittle
+  operation, not the kind of cross-domain stitching that would justify
+  new backend surface. Season/team/player selectors are populated from
+  data the shell already scopes to the active league, so (unlike Player
+  Account Access Phase 1's cross-league bug) a selected team/player/
+  season here can never mismatch across leagues. A Copy button uses the
+  Clipboard API when available and falls back to selecting the message
+  text (Ctrl+C) otherwise, since the Clipboard API requires a secure
+  context and staging is plain HTTP today -- the fallback is a real path
+  on staging, not a rare edge case. Explicitly out of scope, per PM
+  decision: automated email sending, SMTP, SMS/mobile push, a templates
+  database, message history, delivery tracking, an audit/history
+  framework, and communication preferences -- this is copy/paste only.
+  Verified with `node --check` on all four new files and `web/app.js`;
+  `go test ./... -count=1` and `go build ./...` rerun for full regression
+  safety per PM's instruction for a cross-domain screen (both pass, zero
+  regressions, since no Go code was touched); the three message
+  generators (pure functions, no DOM dependency) were exercised directly
+  in a standalone Node script against realistic fixture-shaped data,
+  confirming correct team/dues filtering and message formatting for all
+  three types. Actual browser rendering of the new screen remains **NOT
+  VERIFIED (no browser)**. See `doc/domains/communications/README.md`
+  for full detail.
 
 ## Open Questions To Resolve
 

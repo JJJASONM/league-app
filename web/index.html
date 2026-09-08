@@ -40,6 +40,7 @@
       <li class="nav-item"><a class="nav-link" href="#" data-section="handicap"><i class="bi bi-graph-up-arrow"></i> Handicap</a></li>
       <li class="nav-item d-none" id="nav-item-users"><a class="nav-link" href="#" data-section="users"><i class="bi bi-person-gear"></i> Users</a></li>
       <li class="nav-item d-none" id="nav-item-finances"><a class="nav-link" href="#" data-section="finances"><i class="bi bi-cash-stack"></i> Financial</a></li>
+      <li class="nav-item d-none" id="nav-item-communications"><a class="nav-link" href="#" data-section="communications"><i class="bi bi-chat-left-text"></i> Communication</a></li>
     </ul>
 
     <div class="mt-auto px-3 pb-3">
@@ -120,6 +121,11 @@
     <!-- Financial -->
     <div id="section-finances" class="section">
       <finances-page></finances-page>
+    </div>
+
+    <!-- Communication -->
+    <div id="section-communications" class="section">
+      <communication-page></communication-page>
     </div>
 
   </div><!-- /main -->
@@ -248,5 +254,6 @@
     <script type="module" src="/domains/users/users-domain.js"></script>
     <script type="module" src="/domains/weekly-summary/weekly-summary-domain.js"></script>
     <script type="module" src="/domains/finances/finances-domain.js"></script>
+    <script type="module" src="/domains/communications/communications-domain.js"></script>
 </body>
 </html>
