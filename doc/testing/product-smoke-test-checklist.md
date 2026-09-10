@@ -2254,6 +2254,132 @@ season before generating at all.
   VERIFIED (no browser)**, same as every other interaction in this
   section.
 
+#### Staging verification (2026-09-09)
+
+**Result: PASS (API-level + deployed-static-asset verification, with one
+minor non-blocking wording discrepancy noted below).** Verified on
+`http://league-staging.local`, deployed commit `aeaba9a` ("Communications
+Phase 1: add copyable league messages"). No browser available in this
+developer's tool session -- every item below is a direct API call against
+real staging, a direct fetch confirming the deployed static JS/HTML
+matches the reviewed source exactly, or the exact deployed generator
+module executed in Node against real staging API responses (a stronger
+check than the prior phase's synthetic-fixture Node run, since this time
+the data itself came live from staging, not a hand-built object).
+
+1. **Deployed checkpoint -- PASS.** `GET /healthz` returned `{"status":
+   "ok"}` first. Fetched all three named static assets directly from
+   staging and got 200 with the expected content:
+   `/domains/communications/communications-domain.js`,
+   `/domains/communications/communication-page-component.js`,
+   `/domains/communications/communication-message-generators.js`.
+   Confirmed the *corrected* source specifically (not a pre-correction
+   draft): the deployed `communication-page-component.js` contains
+   `this.addEventListener('change', async e => {`, both
+   `await this.#loadWeeksIfNeeded();` / `await this.#generate();` pairs,
+   and the `'Loading weeks...'` placeholder string -- all exactly as
+   reviewed and approved.
+2. **Admin visibility -- PASS.** `GET /api/users/me`: a disposable
+   `league_admin` key (id 19, `comm-verify-admin-20260909-204346`)
+   resolved with `role:"league_admin"`; a disposable `role=player` key
+   (id 20, `comm-verify-player-20260909`, linked to player 45 since
+   player 41 was already linked to an existing disposable user from a
+   prior pass and `player_id` is uniquely constrained) resolved with
+   `role:"player"`; no `Authorization` header returned 401. Combined with
+   the already-confirmed deployed `app.js` gating
+   (`document.getElementById('nav-item-communications')?.classList
+   .toggle('d-none', !canManageFinances)`, reading the same
+   `hasFinanceAdminRole` value `#nav-item-finances` and
+   `#nav-item-player-overview` already use), this confirms the nav
+   entry's visibility logic will resolve correctly for all three
+   identity states. **NOT VERIFIED (no browser)**: actually seeing the
+   nav entry itself appear/disappear in a rendered page.
+3. **Weekly Team Summary -- PASS.** Ran the live
+   `communication-message-generators.js` (fetched directly from staging,
+   not a local copy) against two real recap responses:
+   - `GET /api/seasons/6/weeks/1/recap` (Fixture Breakers vs Fixture
+     Bankers, both unscored): generated message correctly showed team
+     name, season name, week number, opponent, `(Home)`, `Status:
+     Unscored`, the matching reminder line, no result line (has_result
+     false), a missing-scores note, and next week's scheduled match
+     count (2).
+   - `GET /api/seasons/6/weeks/2/recap` (same matchup, scored): generated
+     message correctly showed `Status: Scored`, a `Result: 0 sets - 0
+     sets` line (this fixture's `match_results` only have game data, not
+     set data, which is why both sides show 0 sets -- a pre-existing
+     fixture-data characteristic, not a generator bug), the
+     awaiting-approval reminder text, and correctly omitted the
+     missing-scores note since `missing_count` was 0.
+   - Selector sequencing itself (the season-change and type-switch reload
+     behavior corrected in the prior review round) is a DOM/event-timing
+     behavior and remains **NOT VERIFIED (no browser)** -- the corrected
+     source being live on staging (item 1) is the strongest evidence
+     available from this tool session.
+   - **Minor discrepancy found (non-blocking, not a bug in the approved
+     design):** the missing-scores note reads "N other match(es) ...
+     still need scores," but `recap.missing_count` is the week's total
+     missing-match count and is not reduced by one for the team's own
+     match already shown above it -- so week 1's note said "2 other
+     matches" when, from the reader's point of view, only the *other*
+     match (Cutters vs Safeties) was actually still outstanding once
+     their own match (shown Unscored just above) is accounted for. This
+     matches the phase's own documented design (`doc/domains/
+     communications/README.md` describes this line as surfacing
+     `recap.missing_count` "as a league-wide note," not as an
+     other-than-this-match count), so it is not a deviation from what
+     was reviewed -- flagging it as a wording-precision follow-up
+     candidate, not a defect requiring a code change on this
+     verification-only branch.
+4. **Team Dues Reminder -- PASS.** `GET /api/seasons/6/finances/dues`
+   (live) fed through the same live generator for Fixture Breakers:
+   message correctly showed team name, season name, `Dues amount: not
+   set` (this season has no `dues_amount` rule configured), and exactly
+   the three Fixture Breakers players (Avery Slate, Blair Flint paid
+   with totals; Casey Vale `UNPAID`) -- Devon Reed (Fixture Bankers) was
+   correctly excluded. The reminder line listed only Casey Vale.
+5. **Player Summary -- PASS.** `GET /api/players/41/overview` (live) fed
+   through the same live generator: message correctly showed player
+   name, team/season, handicap (`+0`), the 0-0/0.0% record (this
+   fixture's `match_results` don't attribute set/game totals to this
+   player specifically), all five real schedule rows with correct
+   Pending/Completed status matching each match's `completed` flag, and
+   `Dues status: Paid ($3.21 total, last payment 2026-08-29T00:00:00Z)`.
+   Read-only by construction -- the generated text and the underlying
+   `GET` calls include no write action of any kind.
+6. **Copy behavior -- confirmed at the deployed-source level only, NOT
+   VERIFIED (no browser).** The live `communication-page-component.js`
+   contains the exact reviewed `#copyMessage()`/`#selectMessageText()`
+   pair: `navigator.clipboard.writeText` guarded by
+   `window.isSecureContext`, falling back to selecting the textarea and a
+   warning toast otherwise. Staging is plain HTTP, so the fallback branch
+   is the one that would actually execute there -- but observing that in
+   a real page requires a browser this tool session does not have.
+7. **Scope guard -- PASS.** Searched the deployed
+   `communication-page-component.js` for any automated-sending indicator
+   (`smtp`, `mailto`, `sms`, `twilio`, `sendgrid`, "push notification")
+   and found none outside the file's own "we don't do this" doc comment.
+   Confirmed no new backend routes exist: `GET /api/communications` and
+   `GET /api/messages` both correctly 404.
+8. **Cleanup:** read-only for all fixture/financial/player data --
+   re-fetched `GET /api/leagues` and `GET /api/players/41` after the pass
+   and both are byte-identical to before. Two disposable users remain,
+   per the no-delete-endpoint convention every prior staging pass has
+   followed: id 19 (`comm-verify-admin-20260909-204346`, `league_admin`)
+   and id 20 (`comm-verify-player-20260909`, `role=player`, linked to
+   player 45 Emery Frost). No API keys or secrets are recorded in this
+   entry or elsewhere in this checklist. Standing exclusions
+   (`architecture-diagram.md`, `architecture-review.md`,
+   `backend/storage/postgres/`) untouched.
+- **Follow-up needed:** a real browser click-through remains the only gap
+  before this phase is browser-complete -- nav visibility rendering,
+  selector show/hide and auto-regeneration timing (including the
+  corrected season/type-switch sequencing), and the Copy button's
+  clipboard-vs-fallback behavior all need a browser this tool session
+  does not have. Optionally, consider tightening the missing-scores
+  note's wording (item 3's discrepancy) in a future small pass -- not
+  blocking, and no code change was made on this verification-only
+  branch.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |
