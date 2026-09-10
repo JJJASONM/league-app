@@ -2380,6 +2380,101 @@ the data itself came live from staging, not a hand-built object).
   blocking, and no code change was made on this verification-only
   branch.
 
+### 24. League Admin Screen Phase 1 (2026-09-10)
+
+Read-only operational hub -- it navigates to existing screens, it never
+mutates. No automated notifications, no audit/history, no new backend
+routes or schema, no new permission model, no code-management editing.
+
+- Browser: the new "League Admin" nav entry (under Dashboard) and the
+  hub's cards.
+  - [ ] **NOT VERIFIED (no browser)**: the "League Admin" nav entry is
+        hidden for no-key and `role=player` identities and visible for
+        `league_admin`/`admin`/`system_admin`, matching the Financial /
+        Communication / Player Overview nav entries. **Confirmed at the
+        code level**: `app.js`'s `updateIdentityUI()` toggles
+        `#nav-item-league-admin` off the same `canManageFinances`
+        (`hasFinanceAdminRole(identity)`) value that already gates those
+        three -- no new permission model.
+  - [ ] **NOT VERIFIED (no browser)**: with an active season, the hub
+        shows a Season/Week strip, a Weekly Score Processing card (season
+        `N/M scored` + `X/Y weeks closed` line, plus the focus week's
+        Missing/Scored/Approved/Processed/Closed badge counts), a Lineups
+        & Substitutes card (`ready X/Y teams` using Match Entry's own
+        week-specific/default-lineup resolution, `substitutes in use: N`,
+        and a one-line note that readiness matches Match Entry), a Money
+        card (`unpaid dues: N/M players`), a Communication card (three
+        message types listed), a Players & Users card, and a "Jump to"
+        button row. With no active season, only a warning plus
+        Seasons/Teams/Players links render.
+  - [ ] **NOT VERIFIED (no browser)**: each jump/link button navigates to
+        the correct existing section (Weekly Summary, Schedule, Lineups,
+        Match Entry, Financial, Communication, Players, Player Overview,
+        Teams, Seasons, Handicap, Users). **Confirmed at the code
+        level**: every button carries `data-navigate="<section>"` and the
+        component dispatches `admin-nav-request`, which `app.js` handles
+        with `navTo(e.detail.section)` -- the same one-line pattern
+        `dashboard-nav-request` already uses.
+  - [ ] **NOT VERIFIED (no browser)**: the Users button appears in the
+        Players & Users card and the Jump-to row only when the resolved
+        identity role is `system_admin` or `admin` (not plain
+        `league_admin`). **Confirmed at the code level**:
+        `#canManageUsers()` checks exactly those two roles, matching the
+        Users nav entry's own `canManageUsers` gate in `app.js`.
+- **Card computation verification (against real staging season 6 data,
+  via a standalone script replaying the hub's `#load` logic):**
+  - Focus week selection resolved to **Week 1** (the lowest week with
+    matches whose status is not closed), from `GET
+    /api/seasons/6/weeks`.
+  - Weekly Score Processing: the focus week's ladder counts came out
+    `Missing 2 / Scored 0 / Approved 0 / Processed 0 / Closed 0`, matching
+    the `GET .../weeks/1/recap` per-match states; the season line came out
+    `8/10 matches scored, 0/5 weeks closed`, matching the sum over `GET
+    .../weeks`.
+  - Lineups & Substitutes: `ready 4/4 teams`, `substitutes in use: 0`.
+    Readiness was resolved the same way Match Entry does -- week-specific
+    plans from `GET /api/lineup-plans?season_id=6&week_number=1` (12 rows
+    / 4 teams = 3 each), falling back to the default
+    (`week_number=0`) plans for any team with fewer than 3, then requiring
+    the first 3 resolved rows to resolve to real players in the full
+    league player list -- not a raw row count (corrected after PM
+    review). All four Week 1 teams resolved to 3 real players; no `is_sub`
+    rows in the resolved slots.
+  - Money: `unpaid dues: 10/12 players`, matching `GET
+    /api/seasons/6/finances/dues` (`dues.players` filtered on `!paid`).
+- No new Go tests -- this phase added no backend code. `go test ./...
+  -count=1` and `go build ./...` were rerun for full regression safety
+  (cross-domain screen) and both pass with zero regressions.
+- `node --check` passes on all four new/changed files:
+  `web/domains/admin/admin-domain.js`,
+  `web/domains/admin/league-admin-api-service.js`,
+  `web/domains/admin/league-admin-page-component.js`, and `web/app.js`
+  (nav gating + `loadSection` case + `admin-nav-request` handler).
+- **Correction (2026-09-10, before commit):** PM review caught the
+  Lineups & Substitutes card treating "3+ `lineup_plans` rows" as ready.
+  Corrected to Match Entry's resolution path: week-specific plans if a
+  team has >=3, else the default (`week_number=0`) plans, with the first
+  3 resolved rows required to resolve to real players in the full league
+  player list (a substitute's `player_id` may not be on the team roster).
+  `refresh()` gained an `allPlayers` parameter (from `state.allPlayers`);
+  `#load()` now also fetches the `week_number=0` lineup plans. Substitute
+  count taken from `is_sub` in the resolved first-3 slots of playing
+  teams. Frontend/docs-only -- no Go code touched. Re-simulated against
+  real staging season 6: still `4/4 ready`, `0 subs` for Week 1, now via
+  the resolution path. `node --check` re-run on all four files -- pass.
+- Known, deliberately out-of-scope notes (not oversights):
+  - Read-only -- no write action of any kind; the hub only navigates.
+  - No automated email/SMS/mobile notifications, no audit/history
+    framework, no developer/system tools consolidation (Backup stays its
+    own sidebar button and is not linked from the hub).
+  - Not the deferred "Admin code-management screens" item -- no
+    controlled-code/label/display-order/active-flag editing.
+  - Only the focus week gets the deeper `recap` call; per-week
+    approved/processed counts for every week at once were deliberately not
+    fetched, to keep the load cheap.
+  - No new backend aggregate endpoint -- a small fixed set of existing
+    GETs, each feeding one card, was judged non-brittle.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |

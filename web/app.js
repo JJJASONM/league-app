@@ -31,6 +31,12 @@ function loadSection(sec) {
   if (!state.activeLeague) return;
   switch(sec) {
     case 'dashboard': document.querySelector('dashboard-page')?.refresh(state.activeLeague, state.activeSeason, state.allTeams, state.allPlayers); break;
+    case 'league-admin':
+      document.querySelector('league-admin-page')?.refresh(
+        state.activeLeague, state.activeSeason, state.allSeasons,
+        state.allTeams, state.allPlayers, state.currentIdentity
+      );
+      break;
     case 'seasons':   document.querySelector('seasons-page')?.refresh(state.activeLeague, state.allSeasons, state.allTeams); break;
     case 'teams':     loadTeams(); break;
     case 'players':
@@ -182,6 +188,11 @@ document.addEventListener('player-overview-nav-request', e => {
 
 document.addEventListener('dashboard-nav-request', e => navTo(e.detail.section));
 
+// League Admin Screen Phase 1: the hub fires this to jump to an existing
+// operational screen. Same one-line pattern as dashboard-nav-request, kept
+// as a distinct name so the hub's intent stays self-documenting.
+document.addEventListener('admin-nav-request', e => navTo(e.detail.section));
+
 document.addEventListener('dashboard-refresh-request', async () => {
   await loadLeagueData();
   const state = appContext.getState();
@@ -293,6 +304,10 @@ function updateIdentityUI() {
   // (league_admin/admin/system_admin) -- reuses hasFinanceAdminRole's
   // existing meaning rather than a new permission model, per PM decision.
   document.getElementById('nav-item-communications')?.classList.toggle('d-none', !canManageFinances);
+
+  // League Admin Screen Phase 1: same admin role set again -- the hub only
+  // links to screens this identity can already reach.
+  document.getElementById('nav-item-league-admin')?.classList.toggle('d-none', !canManageFinances);
 
   // Player Overview Phase 2 correction: the route now requires the same
   // clearanceAuth role set as Financial Phase 1 (it surfaces the same kind

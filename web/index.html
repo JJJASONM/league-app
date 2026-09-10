@@ -26,6 +26,7 @@
 
     <ul class="nav flex-column mt-1">
       <li class="nav-item"><a class="nav-link active" href="#" data-section="dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
+      <li class="nav-item d-none" id="nav-item-league-admin"><a class="nav-link" href="#" data-section="league-admin"><i class="bi bi-clipboard2-pulse"></i> League Admin</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-section="seasons"><i class="bi bi-calendar3"></i> Seasons</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-section="teams"><i class="bi bi-people-fill"></i> Teams</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-section="players"><i class="bi bi-person-badge"></i> Players</a></li>
@@ -56,6 +57,11 @@
     <!-- Dashboard -->
     <div id="section-dashboard" class="section active">
       <dashboard-page></dashboard-page>
+    </div>
+
+    <!-- League Admin -->
+    <div id="section-league-admin" class="section">
+      <league-admin-page></league-admin-page>
     </div>
 
     <!-- Seasons -->
@@ -255,5 +261,6 @@
     <script type="module" src="/domains/weekly-summary/weekly-summary-domain.js"></script>
     <script type="module" src="/domains/finances/finances-domain.js"></script>
     <script type="module" src="/domains/communications/communications-domain.js"></script>
+    <script type="module" src="/domains/admin/admin-domain.js"></script>
 </body>
 </html>

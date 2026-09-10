@@ -232,6 +232,23 @@ These items should stay small enough to review and ship independently.
     preferences -- copy/paste only, gated by the same admin role set as
     Financial. See `doc/domains/communications/README.md` for full
     detail.
+  - **League Admin Screen Phase 1 complete 2026-09-10** -- see Completed /
+    Largely Completed below. A new admin-only "League Admin" hub that
+    links the existing operational screens together and surfaces their
+    current state from data those screens already expose: weekly score
+    ladder counts (missing/scored/approved/processed/closed) for a focus
+    week, season-wide scored/closed totals, lineup readiness and
+    substitute count, unpaid dues count, and jump buttons to Weekly
+    Summary, Schedule, Lineups, Match Entry, Financial, Communication,
+    Players, Player Overview, Teams, Seasons, Handicap, and (for
+    system_admin/admin) Users. Read-only -- the hub navigates, it never
+    mutates. No new backend routes or schema (a small fixed set of
+    existing GETs, each feeding one card), no new permission model (same
+    `hasFinanceAdminRole` gate as Financial/Communication/Player
+    Overview). Lineup readiness uses Match Entry's own week-specific/
+    default resolution, not a raw row count (corrected after PM review).
+    Not the deferred "Admin code-management screens" item.
+    See `doc/domains/admin/README.md` for full detail.
 
 ## Next
 
@@ -1303,6 +1320,61 @@ follow-up.
   three types. Actual browser rendering of the new screen remains **NOT
   VERIFIED (no browser)**. See `doc/domains/communications/README.md`
   for full detail.
+- League Admin Screen Phase 1 (2026-09-10). Why this branch exists: the
+  app now has several useful admin screens, but the league-admin workflow
+  is spread across many sidebar entries -- there was no single place to
+  see "what needs attention now, and where do I go next." Added a new
+  `web/domains/admin/` frontend domain and a "League Admin" nav entry
+  (placed under Dashboard), gated by the exact same `hasFinanceAdminRole`
+  role set the Financial, Communication, and Player Overview nav entries
+  already use -- reused, not reinvented. **No new backend routes or
+  schema.** The hub is read-only: it makes a small fixed set of existing
+  GETs on load (`GET .../weeks`, `finances/dues`, and for the focus week:
+  its `recap`, its `lineup-plans`, and the default `week_number=0`
+  lineup-plans), each feeding exactly one card, and every card degrades to
+  a plain jump link when its data is unavailable -- it never fabricates a
+  count. Cards: a Season/Week strip; Weekly Score Processing (season `N/M
+  scored` + `X/Y weeks closed`, plus the focus week's
+  Missing/Scored/Approved/Processed/Closed ladder counts -- the ladder key
+  is a deliberate duplicate of Weekly Summary's private `#matchStatus`,
+  mapping the server's own status fields to labels, not recomputing
+  anything); Lineups & Substitutes (`ready X/Y teams` for the focus week,
+  `substitutes in use: N` -- readiness resolved the same way Match Entry
+  does: week-specific plans if a team has >=3, else the default lineup,
+  with the first 3 rows required to resolve to real players in the full
+  league player list, since a substitute's player_id may not be on the
+  team roster; corrected from a raw ">=3 rows" check after PM review);
+  Money (`unpaid dues: N/M players`); Communication (static reminder of
+  the three message types);
+  Players & Users (link-only, Users button only for system_admin/admin);
+  and a flat "Jump to" button row. "Focus week" = the lowest week with
+  matches whose status is not closed, else the highest such week, else
+  none. Cross-screen navigation uses a new one-line `admin-nav-request`
+  shell handler (a deliberate rename of the identical
+  `dashboard-nav-request` handler, kept distinct so the hub's intent
+  stays self-documenting); no other shell bridge method was needed. This
+  is **not** the deferred "Admin code-management screens" roadmap item --
+  no controlled-code/label/display-order/active-flag editing. Explicitly
+  out of scope, per PM: any write action, automated notifications, an
+  audit/history framework, developer/system tools consolidation (Backup
+  stays separate and is not linked), new roles/permissions/sessions, and
+  payment editing. Verified with `node --check` on all four new/changed
+  JS files; `go test ./... -count=1` and `go build ./...` rerun for full
+  regression safety per the cross-domain-screen convention (both pass,
+  zero regressions, no Go code touched); the focus-week selection and
+  every card's count computation were simulated in a standalone script
+  against real staging season 6 data, matching the underlying endpoint
+  responses (focus week 1, ladder `2 missing / rest 0`, season `8/10
+  scored` / `0/5 weeks closed`, lineups `4/4 teams` / `0 subs`, dues
+  `10/12 unpaid`). PM review before commit caught the Lineups &
+  Substitutes card treating "3+ lineup_plans rows" as ready -- corrected
+  to Match Entry's week-specific/default resolution with first-3 rows
+  required to resolve to real players in the full league player list;
+  `refresh()` gained an `allPlayers` param and `#load()` now also fetches
+  the `week_number=0` default lineup; re-simulated against staging with
+  the same result. Actual browser rendering of the hub remains **NOT
+  VERIFIED (no browser)**. See `doc/domains/admin/README.md` for full
+  detail.
 
 ## Open Questions To Resolve
 
