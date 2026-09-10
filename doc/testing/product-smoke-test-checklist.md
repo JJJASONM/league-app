@@ -2475,6 +2475,120 @@ routes or schema, no new permission model, no code-management editing.
   - No new backend aggregate endpoint -- a small fixed set of existing
     GETs, each feeding one card, was judged non-brittle.
 
+#### Staging verification (2026-09-10)
+
+**Result: PASS (API-level + deployed-static-asset verification).** Verified
+on `http://league-staging.local`, deployed commit `f6d90f1` ("League Admin
+Phase 1: add operational hub"). No browser available in this developer's
+tool session -- every item below is a direct API call against real
+staging, a direct fetch confirming the deployed static JS/HTML matches the
+reviewed source exactly, or the hub's `#load` card computations replayed
+in a standalone script against real staging responses.
+
+1. **Deployed static assets / shell registration -- PASS.** `GET
+   /healthz` returned `{"status":"ok"}` first. All four hub files return
+   200 from staging (`domains/admin/admin-domain.js`,
+   `domains/admin/league-admin-api-service.js`,
+   `domains/admin/league-admin-page-component.js`, `app.js`), and the
+   deployed `index.html` contains `id="nav-item-league-admin"`,
+   `data-section="league-admin"`, `id="section-league-admin"`, and the
+   `domains/admin/admin-domain.js` module script. The deployed component
+   is the *corrected* f6d90f1 version specifically: it contains the
+   `refresh(..., allPlayers, identity)` signature, the
+   `wk.length >= 3 ? wk : dflt.filter(...)` fallback, the
+   `this.#allPlayers.find(p => p.id === lp.player_id)` full-list
+   resolution, `resolvedByTeam`, and the `admin-nav-request` dispatch;
+   the deployed `app.js` passes `state.allPlayers, state.currentIdentity`
+   into the league-admin refresh, has the
+   `document.addEventListener('admin-nav-request', ...)` handler, and
+   toggles `#nav-item-league-admin` off `!canManageFinances`.
+2. **Admin visibility -- PASS (API + code level).** `GET /api/users/me`:
+   a disposable `league_admin` key (id 22) resolved `role:"league_admin"`;
+   a disposable `role=player` key (id 23, linked to fixture player 42)
+   resolved `role:"player"`; no `Authorization` header returned 401.
+   Combined with the confirmed deployed gating
+   (`#nav-item-league-admin` toggled off the same
+   `hasFinanceAdminRole`/`canManageFinances` value that already gates
+   `#nav-item-finances`, `#nav-item-communications`,
+   `#nav-item-player-overview`), this confirms the nav resolves visible
+   for the three admin roles and hidden for `role=player` / no key.
+   **NOT VERIFIED (no browser)**: actually seeing the nav entry
+   appear/disappear in a rendered page.
+3. **Hub cards present -- PASS (computation level).** Replaying the hub's
+   `#load` against real staging season 6 data produced content for every
+   V1 card: Season/Focus-Week strip, Weekly Score Processing, Lineups &
+   Substitutes, Money, Communication, Players & Users, and the Jump-to
+   row. **NOT VERIFIED (no browser)**: the actual rendered card layout.
+4. **Focus-week behavior -- PASS.** Against `GET /api/seasons/6/weeks`
+   (weeks 1-5, all `status:"open"`, all `match_count:2`), the focus week
+   resolved to **Week 1** -- the earliest week with unclosed matches.
+   Against an empty schedule (`GET /api/seasons/3/weeks` returned `[]`),
+   `#pickFocusWeek` returned `null`, so the focus-week cards render
+   link-only. The "all weeks closed -> latest week with matches" fallback
+   is **confirmed by code inspection only** -- staging currently has no
+   season with a closed week, and creating one would mean mutating shared
+   fixture data, which this read-only pass avoided.
+5. **Weekly Score Processing -- PASS.** Season line came out `8/10
+   matches scored, 0/5 weeks closed`, matching the sum over `GET
+   .../weeks`. The Week 1 ladder came out `Missing 2 / Scored 0 /
+   Approved 0 / Processed 0 / Closed 0`, matching the raw `GET
+   .../weeks/1/recap` (both matches: `has_result:false`, no
+   `approved_at`/`processed_at`/`week_closed`). The card's only actions
+   are `data-navigate` links to Weekly Summary and Schedule -- no write
+   call.
+6. **Lineups & Substitutes -- PASS.** Against `GET
+   /api/lineup-plans?season_id=6&week_number=1` (12 rows) with
+   `week_number=0` default fallback available (60 rows) and the 12-player
+   `GET /api/players?league_id=3` list: all four teams playing Week 1
+   (14/15/16/17) had exactly 3 week-specific rows, each resolving to 3
+   real players in the full league list (41-43, 44-46, 47-49, 50-52), so
+   readiness came out `4/4 teams`; `substitutes in use: 0` (no `is_sub`
+   rows in the resolved first-3 slots). The off-roster-substitute
+   resolution is **confirmed by code inspection**: resolution matches
+   against the full `#allPlayers` list with no team filter, so a
+   substitute whose `player_id` is not on the team roster still resolves
+   -- staging has no live `is_sub` lineup row to exercise this directly.
+   The card's only actions are `data-navigate` links to Lineups and Match
+   Entry -- no substitute write call.
+7. **Money -- PASS.** `GET /api/seasons/6/finances/dues` (with the
+   `league_admin` key) fed the card as `unpaid dues: 10/12 players`
+   (`dues.players` filtered on `!paid`). The degrade path is real:
+   the same route returned `403 {"error":"forbidden"}` for the
+   `role=player` key, and `#renderMoneyCard(null)` renders "Dues status
+   unavailable -- open the Financial screen." plus the Financial link
+   rather than breaking the hub.
+8. **Communication / Players & Users / Jump links -- PASS.** Every
+   `#navBtn(...)` target in the deployed component (seasons, teams,
+   players, weekly-summary, schedule, lineup, entry, finances,
+   communications, player-overview, users, handicap) is a valid
+   `data-section` in the deployed `index.html`; the component dispatches
+   `admin-nav-request`, handled by `navTo(e.detail.section)`. The Users
+   button is wrapped in `#canManageUsers()` (system_admin/admin only),
+   matching the Users nav entry's own gate.
+9. **Scope guard -- PASS.** No new backend routes: `/api/admin`,
+   `/api/league-admin`, `/api/hub`, `/api/admin/summary` all 404. No
+   admin write action exists in the component (only `data-navigate`
+   links). No auth/session/JWT/password code was added. No
+   developer/system-admin function beyond this operational hub.
+- **Restoration:** fully read-only against fixture/financial/player data
+  -- re-fetched `GET /api/players/42` and `GET /api/leagues` after the
+  pass, both byte-identical to before (linking a user to a player does
+  not modify the player row). Two disposable users remain, per the
+  no-delete-endpoint convention every prior staging pass has followed:
+  id 22 (`la-hub-staging-admin-20260910-184808`, `league_admin`) and id
+  23 (`la-hub-staging-player-20260910`, `role=player`, linked to fixture
+  player 42 Blair Flint). No API keys or secrets recorded here. Standing
+  exclusions (`architecture-diagram.md`, `architecture-review.md`,
+  `backend/storage/postgres/`) untouched.
+- **Discrepancies found:** none. All ten verification goals passed at the
+  API / deployed-source / computation level.
+- **Follow-up needed:** a real browser click-through is the only gap
+  before this phase is browser-complete -- nav visibility rendering, the
+  card layout, and the jump buttons actually navigating. The "all weeks
+  closed -> latest week" focus-week fallback and the off-roster-substitute
+  resolution are confirmed by code inspection only (no staging data
+  exercises either without mutating shared fixtures).
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |
