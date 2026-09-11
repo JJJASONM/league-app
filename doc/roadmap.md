@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-08-27
+**Last reviewed:** 2026-09-11
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -26,242 +26,60 @@ Stabilize current admin workflows
 
 ## Now
 
-These items should stay small enough to review and ship independently.
+The whole-app admin-screen and product-test-readiness chunk is complete
+(see Completed / Largely Completed below). One item of active work
+remains; the rest of this section is standing operating rules, not
+active work.
 
-- Product test readiness.
-  - Establish a realistic staging test path that exercises most current admin
-    workflows end to end, rather than continuing immediately into deeper
-    feature polish.
-  - Create or refresh a known test league/season dataset that supports setup,
-    scheduling, lineup planning, score entry, close/reopen, standings,
-    handicap review/apply, recap, season close/reopen, backup, and health
-    checks.
-  - Write a browser smoke-test checklist with clear pass/fail checkpoints for
-    the full admin journey.
-  - Run the checklist against staging, record blockers, and promote only the
-    highest-value gaps into focused follow-up branches.
-  - Treat Player merge UI, default lineup setup, and other polish as follow-up
-    candidates after this readiness pass identifies what most blocks testing.
-  - The checklist's top blocker -- the browser could not perform any admin
-    write except Handicap Apply -- is resolved; see "Browser admin auth
-    bridge" in Completed / Largely Completed below.
-  - The remaining staging data blocker is also resolved: `seed-staging.ps1`
-    now has an opt-in `-SeedFixtures` switch to load the scoresheet fixtures
-    right after the base seed, so match-entry/close-week/standings/
-    handicap/recap have data to exercise on staging without generating a
-    schedule by hand; see "Staging seed fixtures option" below.
-  - The checklist was run against real staging 2026-08-23; see "Staging
-    product smoke pass" below for the full results. It found one new
-    critical, staging-only blocker (bodyless `POST` calls -- Backup,
-    Season Activate/Close/Reopen, Reopen Week -- rejected with IIS 411
-    regardless of the Admin Key) plus several smaller product findings.
-    The critical one is fixed and verified on staging as of 2026-08-23
-    (`api-client-bodyless-post-fix`) -- all five affected routes now reach
-    the Go app instead of IIS 411ing. The `GET /api/player-stats`
-    roster-only-player gap is also fixed as of 2026-08-23
-    (`player-stats-roster-join-fix`), verified via new SQLite store tests
-    (not yet re-verified against staging). The Week Recap / Handicap
-    Recommendations eligibility parity gap is also fixed as of 2026-08-24
-    (`handicap-preview-parity`) -- both paths now share one computation and
-    eligibility gate. **Player Stats accuracy fix complete 2026-09-01**
-    (`player-stats-winpct-roster-scope-fix`) -- see Completed / Largely
-    Completed below: the league-scoped roster/lineup gap is fixed, and the
-    `WinPct`-always-zero claim in the two Known Gaps rows below turned out
-    to be a discovery-time misdiagnosis, corrected as part of this fix (see
-    that entry for detail). See Completed / Largely Completed below for
-    all entries and `doc/testing/product-smoke-test-checklist.md` for full
-    detail on the remaining open findings (the generated-schedule undo gap
-    and two low-severity rough edges).
+- Resolve remaining product test-readiness findings.
+  - Actionable now:
+    - Known Gap #10: `POST /api/seasons/{id}/teams` with a same-named
+      standalone team returns a raw 500 with a leaked SQL message
+      instead of a friendly 409.
+    - Known Gap #11: `PUT /api/seasons/{id}/rules/{rid}` echoes
+      `season_id:0, rule_key:""` in its response body instead of the
+      real values, even though the stored row is correct.
+    - Known Gap #9: decide whether `Generate Schedule` needs a matching
+      undo path (no `DELETE` short of removing the whole season/league).
+  - Lower-priority, cosmetic/script-level:
+    - Known Gap #14: dashboard bootstrap logs a console error
+      (`refresh is not a function`) on initial load; content still
+      populates correctly.
+    - Known Gap #5: the staging health check polls `/api/leagues`
+      instead of the dedicated `/healthz` the app already exposes.
+    - Known Gap #3: no seed/fixture data demonstrates the Dashboard
+      readiness gate's "disabled" state.
+  - Tracked-deferred, no action unless a real workflow hits them:
+    - Known Gap #4: Player safe-merge has no admin UI (see "Player
+      record maintenance" in Then).
+    - Known Gap #16: no Sub control for a lineup slot resolved only
+      from already-scored round results.
+    - Known Gap #17: Weekly Summary's `player_stats` array (carrying
+      `is_sub`/`sub_for_name`) is still not rendered in that screen.
+    - Known Gap #18: Player Overview's schedule section won't show a
+      substitute's one-off match for a different team.
+  - Full detail, evidence, and staging verification history for every
+    item above: `doc/testing/product-smoke-test-checklist.md`.
 
-- Domain and data-access restructuring.
-  - Major domains (matches, handicaps, seasons, leagues, players, teams) have
-    purpose-built service/store layers. All CRUD handlers delegate to domain
-    services; no direct DB access remains in production handler code.
-  - Continue moving workflow UI out of `web/app.js` into domain-owned frontend
-    modules. Seasons, skipped-weeks, bye-requests, and season CRUD are extracted.
-    Remaining `web/app.js` content is shell-level event wiring.
-  - Keep backend/domain/store/adapter boundaries explicit and purpose-built for
-    any new work added.
+### Standing operating rules (not active work)
 
-- Incremental route-level auth for admin mutations is complete.
-  - Phases 1-5 protect clearance, schedule mutation, match mutation, season
-    setup mutation, and global league/player/team CRUD routes with
-    personal-key role auth (league_admin, admin, system_admin).
-  - Phase 6 protects `POST /api/backup` with a stricter system-admin-only
-    check (system_admin, admin; league_admin rejected).
-  - Keep `handicap-apply` static-token fallback unchanged until a focused
-    attribution/auth cleanup phase.
-  - **Users Admin Screen Phase 1 complete 2026-08-26** -- `POST/GET
-    /api/users` now also accept a resolved system_admin/admin personal
-    key (previously the static token was the only way in); new `GET
-    /api/users/me`; first Users screen (list + create) and an Admin Key
-    modal identity indicator. See `doc/domains/users/README.md` and the
-    "Then" section below for full detail.
-
-- Stabilize current official-results workflow.
-  - Keep Close Week, Reopen, warning acknowledgment, and advance
-    preview/result behavior correct.
-  - Keep standings and player stats derived only from official closed-week
-    results.
-  - Keep handicap review/apply behavior aligned with official results and
-    attribution.
-
-- Keep staging and GitHub current after accepted work.
-  - PM owns pushing committed work to origin.
-  - Deploy staging after work that needs browser or user verification.
-
-- Weekly Score Processing / Approved Scores workflow.
-  - Replaces the physical signed-scoresheet process with admin-attested,
-    match-level approval and processing, sitting underneath Close Week so
-    a match's results can count toward handicap recommendation
-    eligibility before its whole week closes.
-  - **Phase 1A (backend foundation) complete 2026-08-25** -- see Completed
-    / Largely Completed below. Resolves MATCHES-Q001.
-  - **Phase 1B (Close Week auto-processes approved matches) complete
-    2026-08-25** -- see Completed / Largely Completed below. Close Week's
-    own requirements are unchanged; it does not require approval to close.
-  - **Phase 1C (frontend approval/processing UI) complete 2026-08-26** --
-    see Completed / Largely Completed below. UI-only per PM's constraints
-    (no business-rule, route, auth, or schema behavior changes); one small
-    API-shape addition (`week_closed` now serialized on `models.Match`)
-    was needed for a closed-week button-gating correction.
-  - Real captain/player-side approval (Player Portal) remains deferred --
-    every action through this UI is still admin-attested.
-
-- Whole-app screens: viewing and testing the product coherently across
-  roles and workflows, rather than continuing low-severity smoke-test
-  polish. Users Admin Screen Phase 1 (above) was the first of these.
-  - **Player Overview screen Phase 1 complete 2026-08-27** -- see
-    Completed / Largely Completed below. New `GET
-    /api/players/{id}/overview` (unprotected read, handler-level
-    composition, no new players-domain service) and a new admin-viewable
-    `<player-overview-page>` screen: team/season context, schedule,
-    season stats, current handicap, and an explicit money-not-tracked
-    placeholder. Real player login/portal, payments/payouts, handicap
-    history, and multi-season views are all explicitly deferred. See
-    `doc/domains/players/README.md`'s "Player Overview Phase 1
-    Implementation" section for full detail.
-  - **Player Overview screen Phase 2 complete 2026-08-29, auth-corrected
-    2026-08-30** -- see Completed / Largely Completed below. Replaced
-    the Phase 1 money-not-tracked placeholder with real per-player
-    season dues status (paid/unpaid, total paid, payment history,
-    configured dues amount), backed by a new
-    `FinanceStore.ListDuesPaymentsByPlayer` read method on the
-    `finances` domain. Payout display and payment entry from this
-    screen remain out of scope. `GET /api/players/{id}/overview` is now
-    protected by `clearanceAuth` (league_admin/admin/system_admin),
-    resolving `PLAYERS-Q002` -- the route surfaces the same kind of
-    money data Financial Phase 1 keeps behind `clearanceAuth`, so it is
-    now gated the same way rather than left open. The nav entry and the
-    Players list's "View Overview" row button are both hidden unless
-    the resolved identity qualifies, matching the Financial screen's
-    gating exactly. See `doc/domains/players/README.md`'s "Player
-    Overview Phase 2
-    Implementation" section for full detail.
-  - **Weekly Summary screen Phase 1 complete 2026-08-27** -- see
-    Completed / Largely Completed below. Built entirely on the existing
-    Week Recap endpoint (no new aggregate endpoint, no new auth) -- added
-    three API-shape-only fields (`approved_at`, `processed_at`,
-    `week_closed`) to `RecapMatchRow` so a new `<weekly-summary-page>`
-    screen can show the full unscored/scored/approved/processed/closed
-    status ladder per match, a "Process Approved Scores" action (client-
-    side loop over the existing per-match process endpoint, no new bulk
-    endpoint), handicap changes/recommendations, and next-week
-    readiness. Close Week stays separate, linked to only via an "Open in
-    Schedule" button. Substitute workflows (shipped 2026-09-02, see
-    below), a real bulk-process backend endpoint, and payment/financial
-    schema remain/remained explicitly deferred. See
-    `doc/domains/matches/README.md`'s "Weekly Summary Phase 1" section
-    for full detail.
-  - **Financial screen Phase 1 complete 2026-08-27** -- see Completed /
-    Largely Completed below. New `finances` domain (`dues_payments` and
-    `payouts` tables, both simple append-only history, no partial-
-    payment/balance math) and a new league-admin-only Financial screen:
-    per-player dues paid/unpaid status with payment history, per-team
-    payout totals/history with standings shown for reference only.
-    Unlike every other domain, ALL finance routes (reads and writes)
-    require `clearanceAuth` -- money data is not made public just
-    because other domain reads are. Payout amounts are always
-    admin-entered; standings never compute them automatically. Real
-    player login, payment editing/voiding, penalties, and payout
-    formulas are all explicitly deferred. Player Overview money
-    integration shipped as Phase 2 on 2026-08-29 (see above and below).
-    See `doc/domains/finances/README.md` for full detail.
-  - **Substitute Workflow Phase 1 complete 2026-09-02** -- see Completed
-    / Largely Completed below. `lineup_plans.is_sub`/`sub_for_id`
-    (schema already supported this, previously read-only) can now be
-    set/cleared via two new `clearanceAuth`-gated endpoints
-    (`POST`/`DELETE /api/lineup-plans/{id}/substitute`), rejected with
-    409 when the team's match is season-closed, week-closed, approved,
-    or processed -- the same lock set score edits respect. Match Entry
-    now resolves players (auto-fill and the manual picker) against the
-    full player list instead of the team roster, and the scoresheet
-    roster table gained a Sub/Undo control per slot. Weekly Summary's
-    player-stats query gained substitute-status fields (data only, no
-    new UI section yet). Player Overview's stats were verified to
-    already count a substitute's results correctly; its schedule
-    section still won't show a sub's one-off match for another team, an
-    accepted limitation. See `doc/domains/matches/README.md`'s
-    "Substitute Workflow Phase 1" section for full detail.
-  - **Player Account Access Phase 1 complete 2026-09-03, season-scope
-    corrected 2026-09-03 (same day)** -- see Completed / Largely
-    Completed below. Makes the app testable as more than an
-    admin console: a new `role=player`, linked one-to-one to a `players`
-    row via nullable `users.player_id`, can use a personal key to view
-    only its own Player Overview (schedule, stats, dues) through a new
-    "My Overview" nav entry, and cannot reach Users, Financial, Backup,
-    or another player's overview. Admin roles are unchanged. This is
-    API-key V1 player access, not the final login/session model -- score
-    submission, captain approval, browser sessions, passwords, JWTs,
-    email invitations, and mobile notifications remain out of scope.
-    PM review caught "My Overview" passing the app shell's currently
-    selected `activeSeason.id` through to the overview request, which
-    could 403 whenever that season belonged to a different league than
-    the linked player's own -- fixed by omitting `season_id` on the
-    locked load path so the backend's existing own-league-active-season
-    fallback applies instead; admin loads are unchanged. See
-    `doc/domains/users/README.md`'s "Player Account Access Phase 1
-    Implementation" section and `doc/domains/players/README.md`'s
-    "Player Overview Phase 3" section for full detail.
-  - **League Communication Screen Phase 1 complete 2026-09-06** -- see
-    Completed / Largely Completed below. A new admin-only "Communication"
-    screen generates copy/paste message text -- Weekly Team Summary, Team
-    Dues Reminder, Player Summary -- from data Weekly Summary, Financial,
-    and Player Overview already expose. No automated sending, no new
-    backend routes or schema, no message history, and no communication
-    preferences -- copy/paste only, gated by the same admin role set as
-    Financial. See `doc/domains/communications/README.md` for full
-    detail.
-  - **League Admin Screen Phase 1 complete 2026-09-10** -- see Completed /
-    Largely Completed below. A new admin-only "League Admin" hub that
-    links the existing operational screens together and surfaces their
-    current state from data those screens already expose: weekly score
-    ladder counts (missing/scored/approved/processed/closed) for a focus
-    week, season-wide scored/closed totals, lineup readiness and
-    substitute count, unpaid dues count, and jump buttons to Weekly
-    Summary, Schedule, Lineups, Match Entry, Financial, Communication,
-    Players, Player Overview, Teams, Seasons, Handicap, and (for
-    system_admin/admin) Users. Read-only -- the hub navigates, it never
-    mutates. No new backend routes or schema (a small fixed set of
-    existing GETs, each feeding one card), no new permission model (same
-    `hasFinanceAdminRole` gate as Financial/Communication/Player
-    Overview). Lineup readiness uses Match Entry's own week-specific/
-    default resolution, not a raw row count (corrected after PM review).
-    Not the deferred "Admin code-management screens" item.
-    See `doc/domains/admin/README.md` for full detail.
+- Keep `main` stable and representative of accepted milestones. PM owns
+  pushing committed work to origin, merging accepted branches, and
+  deploying staging after work that needs browser or user verification.
+- Preserve the official-results invariants: Close Week, Reopen, warning
+  acknowledgment, and advance-preview behavior stay correct; standings
+  and player stats are derived only from official closed-week results;
+  handicap review/apply stays aligned with official results and
+  attribution.
+- Keep new work inside backend/domain/store/adapter boundaries rather
+  than adding workflow logic to shared shell/handler files.
+- Keep roadmap and domain documentation aligned with accepted decisions;
+  keep resolved questions out of the active Open Questions list.
 
 ## Next
 
 These are the next build targets after the current workflow foundation is
 stable.
-
-- Resolve product test-readiness findings.
-  - Fix only the blockers and high-friction gaps discovered by the staging
-    smoke-test pass.
-  - Prefer small branches that make the existing product easier to test,
-    explain, and recover from.
-  - Keep rare repair workflows and broader platform expansion out of the way
-    unless the readiness pass proves they are blocking real testing.
 
 - Continue backend/domain extraction where workflows are already active.
   - Reduce monolithic handler/shell ownership further.
@@ -380,6 +198,10 @@ admin workflows are stable.
     is finished.
   - Current direction: only rostered players assigned to a match can submit that
     match's scores, with admin override.
+  - Includes the deferred captain/player-side (Player Portal) approval
+    for Weekly Score Processing (see Completed / Largely Completed) --
+    every approval/processing action today is still admin-attested
+    through the Weekly Summary UI until this lands.
 
 - Simple browser-based match-entry prototype.
   - Prototype a lightweight browser match-entry screen.
@@ -423,6 +245,44 @@ admin workflows are stable.
 
 These areas are no longer "next" work, though they may still receive focused
 follow-up.
+
+- Product test readiness (2026-08-20 to 2026-09-10). Established the
+  staging test path (`scripts/deploy/seed-staging.ps1`'s `-SeedFixtures`
+  switch), the 24-section browser smoke-test checklist, and the practice
+  of a staging verification pass after every shipped phase. The full
+  2026-08-23 staging run, plus every per-phase staging verification since,
+  are recorded in `doc/testing/product-smoke-test-checklist.md`. Every
+  blocker and critical/medium finding from that run is fixed and
+  verified (`browser-admin-auth-bridge`, `staging-seed-fixtures-option`,
+  `api-client-bodyless-post-fix`, `player-stats-roster-join-fix`,
+  `handicap-preview-parity`, `player-stats-winpct-roster-scope-fix`).
+  What remains is a short list of low-severity findings, tracked as the
+  one active item in Now. Player merge UI and default-lineup setup
+  remain deferred (see Then).
+
+- Whole-app admin screens Phase 1 (2026-08-26 to 2026-09-10). Built the
+  operational admin surface across the app: Users Admin Screen Phase 1,
+  Player Overview Phases 1-3, Weekly Summary Phase 1, Financial Phase 1,
+  Substitute Workflow Phase 1, Player Account Access Phase 1
+  (`role=player`), League Communication Screen Phase 1, and the League
+  Admin hub (Phase 1) -- each with its own detailed entry below and its
+  own domain README. Real player login/sessions, automated email/SMS
+  notifications, message history/audit trails, and payment
+  editing/voiding are all explicitly deferred across every one of these
+  phases. Any further admin screen is a new, separately-scoped item, not
+  a reopening of this lane.
+
+- Incremental route-level auth for admin mutations (Phases 1-6,
+  2026-07-28 to 2026-08-08). All clearance, schedule-mutation,
+  match-mutation, season-setup-mutation, global league/player/team CRUD,
+  and `POST /api/backup` routes are gated by personal-key + role auth
+  (`league_admin`/`admin`/`system_admin`, with backup restricted to
+  `system_admin`/`admin`). No unprotected admin mutation route remains
+  from this rollout; `handicap-apply` keeps its dual-tier
+  `requireApplyAuth` (personal key + static token fallback) by design,
+  with no change planned until a focused attribution/auth cleanup phase.
+  Full per-phase detail remains in the Then section's "Roles,
+  permissions, and API access implementation."
 
 - Season-end clearance (Phases 1-3, shipped 2026-07-26).
   - Close preview endpoint and close commit endpoint.
