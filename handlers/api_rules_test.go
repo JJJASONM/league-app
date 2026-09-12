@@ -398,3 +398,56 @@ func TestUpdateSeasonRule_AcceptsValidValue(t *testing.T) {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
 }
+
+// TestUpdateSeasonRule_ResponseEchoesRealSeasonIDAndRuleKey guards Known Gap
+// #11: the PUT body only carries rule_label/rule_value (season_id and
+// rule_key are not client-editable), but the response previously echoed the
+// caller-constructed request struct as-is, so season_id came back 0 and
+// rule_key came back "" even though the stored row was updated correctly.
+func TestUpdateSeasonRule_ResponseEchoesRealSeasonIDAndRuleKey(t *testing.T) {
+	srv := testServer(t)
+	defer srv.Close()
+	sid := seedSeason(t, srv.URL)
+
+	createBody := `{"rule_key":"handicap_rounding","rule_label":"Rounding","rule_value":"nearest"}`
+	createResp, err := http.Post(
+		fmt.Sprintf("%s/api/seasons/%d/rules", srv.URL, sid),
+		"application/json", strings.NewReader(createBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created map[string]any
+	json.NewDecoder(createResp.Body).Decode(&created)
+	createResp.Body.Close()
+	rid := int64(created["id"].(float64))
+
+	// The PUT body deliberately omits season_id and rule_key -- only label
+	// and value are ever client-editable.
+	req, _ := http.NewRequest(http.MethodPut,
+		fmt.Sprintf("%s/api/seasons/%d/rules/%d", srv.URL, sid, rid),
+		strings.NewReader(`{"rule_label":"Rounding Mode","rule_value":"floor"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var updated map[string]any
+	json.NewDecoder(resp.Body).Decode(&updated)
+
+	if int64(updated["season_id"].(float64)) != sid {
+		t.Errorf("want season_id=%d, got %v", sid, updated["season_id"])
+	}
+	if updated["rule_key"] != "handicap_rounding" {
+		t.Errorf("want rule_key=handicap_rounding, got %v", updated["rule_key"])
+	}
+	if updated["id"] == nil || int64(updated["id"].(float64)) != rid {
+		t.Errorf("want id=%d, got %v", rid, updated["id"])
+	}
+	if updated["rule_label"] != "Rounding Mode" || updated["rule_value"] != "floor" {
+		t.Errorf("want the new label/value reflected, got label=%v value=%v", updated["rule_label"], updated["rule_value"])
+	}
+}

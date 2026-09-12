@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"league_app/backend/domainerr"
@@ -672,6 +673,30 @@ func TestSeasonService_AddTeam_NewTeam_CallsStoreAndReturns(t *testing.T) {
 	}
 	if !store.staleCalled {
 		t.Error("want MarkStaleIfScheduled called")
+	}
+}
+
+// TestSeasonService_AddTeam_NewTeamNameCollision_ReturnsFriendlyConflict
+// guards Known Gap #10: teams(league_id, name) is UNIQUE, so creating a
+// standalone team whose name already exists in the league previously
+// returned the raw SQLite constraint error unwrapped (a leaked-SQL 500 once
+// it reached the handler). AddTeam must map it to a friendly
+// domainerr.Conflict instead.
+func TestSeasonService_AddTeam_NewTeamNameCollision_ReturnsFriendlyConflict(t *testing.T) {
+	store := &stubSeasonStore{
+		isDraftResult: true,
+		meta:          seasons.SeasonMeta{LeagueID: 1},
+		addNewErr:     fmt.Errorf(`insert team "Rack Attackers": UNIQUE constraint failed: teams.league_id, teams.name`),
+	}
+	_, err := newSvc(store).AddTeam(context.Background(), 1, seasons.AddTeamRequest{Name: "Rack Attackers"})
+	if !domainerr.IsCategory(err, domainerr.Conflict) {
+		t.Fatalf("want Conflict for a duplicate standalone team name, got %v", err)
+	}
+	if strings.Contains(err.Error(), "SQLITE") || strings.Contains(err.Error(), "constraint failed") {
+		t.Errorf("error message must not leak raw SQL/constraint text, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Rack Attackers") {
+		t.Errorf("want the friendly message to name the conflicting team, got %q", err.Error())
 	}
 }
 

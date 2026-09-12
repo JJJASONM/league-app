@@ -413,8 +413,20 @@ Bye requests (7): `CountParticipatingTeams`, `CheckTeamInSeason`, `HasDuplicateB
 Store methods return typed sentinel errors (`ErrTeamAlreadyInSeason`,
 `ErrTeamNotInSeason`, `ErrByeNotFound`, `ErrTeamNotInPriorSeason`). The service
 translates these into `domainerr.Err` with categories (`InvalidInput`,
-`Unprocessable`, `NotFound`, `Internal`). The handler calls `mapSeasonErr` which
-maps `domainerr.Err` categories to HTTP status codes (400/404/422/500).
+`Unprocessable`, `NotFound`, `Conflict`, `Internal`). The handler calls
+`mapSeasonErr` which maps `domainerr.Err` categories to HTTP status codes
+(400/404/409/422/500).
+
+**Exception (fixed 2026-09-11, Known Gap #10):** `AddTeam`'s new-team path
+(`AddSeasonTeamNew`) has no sentinel for a `teams(league_id, name)` UNIQUE
+violation -- the SQLite adapter just returns the plain wrapped constraint
+error, as adapters do for any error without a defined sentinel. Rather than
+add a new sentinel + store-layer round trip for this one case, the service
+detects it directly (`strings.Contains(err.Error(), "UNIQUE")`, the same
+pattern `backend/domains/matches/lineup_service.go` already uses for its
+own UNIQUE-constraint mapping) and returns `domainerr.Conflict`
+(`SEASON_TEAM_NAME_TAKEN`) with a friendly message naming the conflicting
+team -- no raw SQL or constraint text reaches the HTTP response.
 
 SQLite adapters (`backend/storage/sqlite/`) must NOT import `domainerr`; only
 the service layer uses it.

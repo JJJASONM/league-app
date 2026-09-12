@@ -19,7 +19,7 @@ import (
 type RuleManager interface {
 	List(ctx context.Context, seasonID int64) ([]models.SeasonRule, error)
 	Upsert(ctx context.Context, rule models.SeasonRule) (models.SeasonRule, error)
-	Update(ctx context.Context, ruleID int64, label, value string) error
+	Update(ctx context.Context, ruleID int64, label, value string) (models.SeasonRule, error)
 	Delete(ctx context.Context, ruleID int64) error
 }
 

@@ -170,6 +170,18 @@ func (s *SeasonService) AddTeam(ctx context.Context, seasonID int64, req AddTeam
 	} else if strings.TrimSpace(req.Name) != "" {
 		newID, err := s.store.AddSeasonTeamNew(ctx, seasonID, meta.LeagueID, req.Name)
 		if err != nil {
+			// teams(league_id, name) is UNIQUE; a standalone team with this
+			// name already exists in the league. Map to a friendly 409
+			// rather than letting the raw SQLite constraint error (and its
+			// query text) reach the HTTP response -- the same
+			// strings.Contains(err.Error(), "UNIQUE") pattern
+			// lineup_service.go already uses for its own UNIQUE-constraint
+			// mapping, since the SQLite adapter layer returns plain wrapped
+			// errors (no sentinel) for this case.
+			if strings.Contains(err.Error(), "UNIQUE") {
+				return models.SeasonTeam{}, domainerr.Wrap("SEASON_TEAM_NAME_TAKEN", domainerr.Conflict,
+					fmt.Sprintf("a team named %q already exists in this league", req.Name), err)
+			}
 			return models.SeasonTeam{}, err
 		}
 		teamID = newID

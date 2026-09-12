@@ -153,7 +153,7 @@ func TestRuleService_Upsert_ReplacesExistingKey(t *testing.T) {
 
 func TestRuleService_Update_ReturnsNotFoundWhenIDMissing(t *testing.T) {
 	svc := rules.NewRuleService(newStub())
-	err := svc.Update(context.Background(), 999, "Label", "true")
+	_, err := svc.Update(context.Background(), 999, "Label", "true")
 	if err == nil {
 		t.Fatal("want error for missing rule, got nil")
 	}
@@ -166,7 +166,7 @@ func TestRuleService_Update_ReturnsNotFoundWhenIDMissing(t *testing.T) {
 func TestRuleService_Update_RejectsInvalidValue(t *testing.T) {
 	stub := newStub(models.SeasonRule{ID: 1, SeasonID: 1, RuleKey: "allow_substitutes", RuleValue: "true"})
 	svc := rules.NewRuleService(stub)
-	err := svc.Update(context.Background(), 1, "Subs", "maybe")
+	_, err := svc.Update(context.Background(), 1, "Subs", "maybe")
 	if err == nil {
 		t.Fatal("want error for invalid value, got nil")
 	}
@@ -179,7 +179,7 @@ func TestRuleService_Update_RejectsInvalidValue(t *testing.T) {
 func TestRuleService_Update_WritesValidValue(t *testing.T) {
 	stub := newStub(models.SeasonRule{ID: 1, SeasonID: 1, RuleKey: "allow_substitutes", RuleValue: "true"})
 	svc := rules.NewRuleService(stub)
-	err := svc.Update(context.Background(), 1, "Subs", "false")
+	_, err := svc.Update(context.Background(), 1, "Subs", "false")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,9 +192,38 @@ func TestRuleService_Update_PropagatesStoreGetError(t *testing.T) {
 	stub := newStub()
 	stub.getErr = errors.New("db failure")
 	svc := rules.NewRuleService(stub)
-	err := svc.Update(context.Background(), 1, "Label", "true")
+	_, err := svc.Update(context.Background(), 1, "Label", "true")
 	if err == nil || !strings.Contains(err.Error(), "db failure") {
 		t.Errorf("want db failure error propagated, got %v", err)
+	}
+}
+
+// TestRuleService_Update_ReturnsRealSeasonIDAndRuleKey guards Known Gap #11:
+// the response previously echoed the caller-constructed models.SeasonRule
+// (season_id:0, rule_key:"" -- fields the PUT body never carries) instead of
+// the actual stored row. Update must return the real season_id and rule_key
+// alongside the newly-applied label/value.
+func TestRuleService_Update_ReturnsRealSeasonIDAndRuleKey(t *testing.T) {
+	stub := newStub(models.SeasonRule{
+		ID: 1, SeasonID: 7, RuleKey: "allow_substitutes",
+		RuleLabel: "Allow Substitutes", RuleValue: "true",
+	})
+	svc := rules.NewRuleService(stub)
+	updated, err := svc.Update(context.Background(), 1, "Subs Allowed", "false")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.SeasonID != 7 {
+		t.Errorf("want SeasonID=7, got %d", updated.SeasonID)
+	}
+	if updated.RuleKey != "allow_substitutes" {
+		t.Errorf("want RuleKey=allow_substitutes, got %q", updated.RuleKey)
+	}
+	if updated.ID != 1 {
+		t.Errorf("want ID=1, got %d", updated.ID)
+	}
+	if updated.RuleLabel != "Subs Allowed" || updated.RuleValue != "false" {
+		t.Errorf("want the new label/value reflected, got %q/%q", updated.RuleLabel, updated.RuleValue)
 	}
 }
 

@@ -35,7 +35,9 @@ func (n *noopRuleManager) List(_ context.Context, _ int64) ([]models.SeasonRule,
 func (n *noopRuleManager) Upsert(_ context.Context, r models.SeasonRule) (models.SeasonRule, error) {
 	return r, nil
 }
-func (n *noopRuleManager) Update(_ context.Context, _ int64, _, _ string) error { return nil }
+func (n *noopRuleManager) Update(_ context.Context, _ int64, _, _ string) (models.SeasonRule, error) {
+	return models.SeasonRule{}, nil
+}
 func (n *noopRuleManager) Delete(_ context.Context, _ int64) error               { return nil }
 
 // noopSeasonMgr satisfies SeasonManager for tests that only exercise auth or

@@ -60,7 +60,9 @@ func (n *noopRuleMgr) List(_ context.Context, _ int64) ([]models.SeasonRule, err
 func (n *noopRuleMgr) Upsert(_ context.Context, r models.SeasonRule) (models.SeasonRule, error) {
 	return r, nil
 }
-func (n *noopRuleMgr) Update(_ context.Context, _ int64, _, _ string) error { return nil }
+func (n *noopRuleMgr) Update(_ context.Context, _ int64, _, _ string) (models.SeasonRule, error) {
+	return models.SeasonRule{}, nil
+}
 func (n *noopRuleMgr) Delete(_ context.Context, _ int64) error               { return nil }
 
 // noopSeasonMgr satisfies handlers.SeasonManager for tests that only exercise

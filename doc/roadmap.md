@@ -33,14 +33,10 @@ active work.
 
 - Resolve remaining product test-readiness findings.
   - Actionable now:
-    - Known Gap #10: `POST /api/seasons/{id}/teams` with a same-named
-      standalone team returns a raw 500 with a leaked SQL message
-      instead of a friendly 409.
-    - Known Gap #11: `PUT /api/seasons/{id}/rules/{rid}` echoes
-      `season_id:0, rule_key:""` in its response body instead of the
-      real values, even though the stored row is correct.
     - Known Gap #9: decide whether `Generate Schedule` needs a matching
       undo path (no `DELETE` short of removing the whole season/league).
+      Likely only worth it if a real workflow, not just the smoke test,
+      hits it.
   - Lower-priority, cosmetic/script-level:
     - Known Gap #14: dashboard bootstrap logs a console error
       (`refresh is not a function`) on initial load; content still
@@ -256,9 +252,12 @@ follow-up.
   verified (`browser-admin-auth-bridge`, `staging-seed-fixtures-option`,
   `api-client-bodyless-post-fix`, `player-stats-roster-join-fix`,
   `handicap-preview-parity`, `player-stats-winpct-roster-scope-fix`).
-  What remains is a short list of low-severity findings, tracked as the
-  one active item in Now. Player merge UI and default-lineup setup
-  remain deferred (see Then).
+  Two of the remaining low-severity findings are also fixed as of
+  2026-09-11 (`season-teams-error-and-rules-echo-fixes`, see below): the
+  season-team name-collision raw 500 (#10) and the rules-update response
+  echo (#11). What remains is a shorter list of low-severity findings,
+  tracked as the one active item in Now. Player merge UI and
+  default-lineup setup remain deferred (see Then).
 
 - Whole-app admin screens Phase 1 (2026-08-26 to 2026-09-10). Built the
   operational admin surface across the app: Users Admin Screen Phase 1,
@@ -283,6 +282,38 @@ follow-up.
   with no change planned until a focused attribution/auth cleanup phase.
   Full per-phase detail remains in the Then section's "Roles,
   permissions, and API access implementation."
+
+- Season-teams error and rules-echo fixes (2026-09-11). Fixed two
+  low-severity correctness/clarity bugs from the smoke checklist (Known
+  Gaps #10 and #11) that made season setup harder to test and explain.
+  Backend-only, no schema/auth change:
+  - #10: `POST /api/seasons/{id}/teams` with `name` returned a raw 500
+    with a leaked SQLite constraint message when a same-named standalone
+    team already existed in the league (`teams(league_id, name)` is
+    `UNIQUE`). `SeasonService.AddTeam` now recognizes the constraint
+    error (the same `strings.Contains(err.Error(), "UNIQUE")` pattern
+    `lineup_service.go` already uses for its own UNIQUE-constraint
+    mapping) and returns `domainerr.Conflict` (`SEASON_TEAM_NAME_TAKEN`),
+    so the handler's existing `mapSeasonErr` now correctly returns a
+    friendly 409 naming the conflicting team.
+  - #11: `PUT /api/seasons/{id}/rules/{rid}` stored the update correctly
+    but echoed `season_id:0, rule_key:""` in its response body, since the
+    PUT body only carries `rule_label`/`rule_value` (the client never
+    sends `season_id`/`rule_key`) and the handler echoed the
+    caller-constructed request struct as-is. `RuleService.Update` now
+    returns the updated `models.SeasonRule` -- it already fetched the
+    existing row to validate the new value against the rule's real key,
+    but previously discarded it -- so the handler returns the real,
+    accurate row. Stored-row behavior, validation, and error mapping are
+    unchanged.
+  Verified with `go test ./... -count=1` and `go build ./...` (2 new
+  `SeasonService`/`RuleService` unit tests plus 2 new end-to-end handler
+  tests, one per fix, all passing; zero regressions). `RuleManager.Update`
+  gained a return value (`(models.SeasonRule, error)` instead of `error`),
+  a small, contained interface change touching only the one production
+  call site and two test-only no-op stubs. See
+  `doc/testing/product-smoke-test-checklist.md`'s Known Gaps #10/#11 for
+  full before/after detail.
 
 - Season-end clearance (Phases 1-3, shipped 2026-07-26).
   - Close preview endpoint and close commit endpoint.

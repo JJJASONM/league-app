@@ -1346,3 +1346,38 @@ func TestUpdateSeasonTeam_BlankNameRejected(t *testing.T) {
 		t.Errorf("season_name was blanked after rejected PUT; got %q", name)
 	}
 }
+
+// TestSeasonTeams_NewTeamNameCollision_ReturnsFriendlyConflict guards Known
+// Gap #10: creating a standalone team (via name, not from_team_id) whose
+// name already exists as a team in the league previously reached the
+// handler as a raw 500 with a leaked SQLite constraint message, since
+// teams(league_id, name) is UNIQUE. It must now be a friendly 409.
+func TestSeasonTeams_NewTeamNameCollision_ReturnsFriendlyConflict(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, _ := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+
+	r1 := postNewSeasonTeam(t, srv, seasonID, "Charlie")
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusCreated {
+		t.Fatalf("first add: want 201, got %d", r1.StatusCode)
+	}
+
+	r2 := postNewSeasonTeam(t, srv, seasonID, "Charlie")
+	defer r2.Body.Close()
+	if r2.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate name add: want 409, got %d", r2.StatusCode)
+	}
+	body, _ := io.ReadAll(r2.Body)
+	var errBody map[string]string
+	json.Unmarshal(body, &errBody)
+	if errBody["error"] == "" {
+		t.Fatalf("expected a friendly error message, got body %s", body)
+	}
+	lower := strings.ToLower(errBody["error"])
+	if strings.Contains(lower, "sqlite") || strings.Contains(lower, "constraint failed") || strings.Contains(lower, "unique constraint") {
+		t.Errorf("error message must not leak raw SQL/constraint text, got %q", errBody["error"])
+	}
+	if !strings.Contains(errBody["error"], "Charlie") {
+		t.Errorf("want the friendly message to name the conflicting team, got %q", errBody["error"])
+	}
+}

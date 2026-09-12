@@ -61,7 +61,8 @@ func updateSeasonRule(w http.ResponseWriter, r *http.Request, mgr RuleManager) {
 		jsonError(w, "invalid body", 400)
 		return
 	}
-	if err := mgr.Update(r.Context(), rid, ru.RuleLabel, ru.RuleValue); err != nil {
+	updated, err := mgr.Update(r.Context(), rid, ru.RuleLabel, ru.RuleValue)
+	if err != nil {
 		var de *domainerr.Err
 		if errors.As(err, &de) {
 			switch de.Category {
@@ -77,8 +78,7 @@ func updateSeasonRule(w http.ResponseWriter, r *http.Request, mgr RuleManager) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	ru.ID = rid
-	jsonOK(w, ru)
+	jsonOK(w, updated)
 }
 
 func deleteSeasonRule(w http.ResponseWriter, r *http.Request, mgr RuleManager) {

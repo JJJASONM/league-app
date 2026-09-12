@@ -39,17 +39,26 @@ func (s *RuleService) Upsert(ctx context.Context, rule models.SeasonRule) (model
 }
 
 // Update validates a new value against the existing rule's key, then persists.
+// Returns the updated row (with its real season_id and rule_key, which the
+// caller does not supply -- only label and value are editable) so handlers
+// can echo an accurate response instead of a caller-constructed value with
+// zeroed fields it never had.
 // Returns domainerr.NotFound when ruleID does not exist.
 // Returns domainerr.InvalidInput when the value fails ValidateValue.
-func (s *RuleService) Update(ctx context.Context, ruleID int64, label, value string) error {
+func (s *RuleService) Update(ctx context.Context, ruleID int64, label, value string) (models.SeasonRule, error) {
 	existing, err := s.store.GetByID(ctx, ruleID)
 	if err != nil {
-		return err // propagates domainerr.NotFound from store
+		return models.SeasonRule{}, err // propagates domainerr.NotFound from store
 	}
 	if err := ValidateValue(existing.RuleKey, value); err != nil {
-		return domainerr.New("RULE_INVALID_VALUE", domainerr.InvalidInput, err.Error())
+		return models.SeasonRule{}, domainerr.New("RULE_INVALID_VALUE", domainerr.InvalidInput, err.Error())
 	}
-	return s.store.UpdateByID(ctx, ruleID, label, value)
+	if err := s.store.UpdateByID(ctx, ruleID, label, value); err != nil {
+		return models.SeasonRule{}, err
+	}
+	existing.RuleLabel = label
+	existing.RuleValue = value
+	return existing, nil
 }
 
 // Delete removes the rule with the given ID.
