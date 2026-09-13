@@ -108,6 +108,27 @@ Backend guards enforced at the service layer before any schedule generation runs
 The `SCHEDULE_ACTIVE_HAS_COMPLETED` guard fires after `SCHEDULE_HAS_CLOSED_WEEKS`.
 A season with closed weeks hits the first guard regardless of active status.
 
+### Undo / Recovery Path (decided 2026-09-11, Known Gap #9)
+
+There is no separate "undo Generate Schedule" endpoint, and none is
+planned. Regeneration itself already is the recovery path: every call to
+`POST /api/matches/generate` deletes and replaces all unplayed
+(`completed=0`) matches unconditionally, while the guards above prevent
+it from ever touching a completed match. To recover from a mistaken
+generation (wrong start date, wrong schedule type, missing team), just
+regenerate with corrected inputs before any of the mistaken matches are
+scored. The frontend confirms this in plain language before calling it.
+For staging/test scenarios that need repeated schedule churn against
+real seeded data, use a disposable season/league rather than a shared
+fixture. Deleting the whole season (`DELETE /api/seasons/{id}`) or
+league remains the full-wipe option when the setup/rosters need to be
+discarded too. A narrow `DELETE /api/matches/{id}` for removing one
+erroneous/duplicate match without a full regenerate was considered and
+deferred -- no real workflow has needed it. See
+`doc/testing/product-smoke-test-checklist.md`'s Known Gap #9 and
+`doc/roadmap.md`'s "Generate Schedule undo -- discovery and decision"
+entry for full detail.
+
 ## Pushback
 
 A pushback inserts one or more complete No Play league weeks at a selected
@@ -353,3 +374,16 @@ match the regeneration endpoint returns 409 (`SCHEDULE_ACTIVE_HAS_COMPLETED`).
 Close Week returns 409 (`WEEK_CLOSE_SEASON_DRAFT`) for draft seasons; activation
 is required before any week can be officially closed. The schedule page enforces
 these constraints in the UX with a draft banner and a disabled close-week button.
+
+### 2026-09-11 - No separate Generate Schedule undo endpoint
+
+**Status:** `accepted`
+
+Discovery (Known Gap #9) found that regeneration already is the undo
+path: it deletes and replaces all unplayed matches on every call while
+the existing guards keep completed/approved/processed matches
+untouched. No `DELETE /api/matches/{id}` or broader undo feature was
+added. Recovery is: regenerate with corrected inputs before the mistaken
+matches are scored, or delete the whole season/league for a full wipe.
+A narrow single-match delete remains a candidate for later if a real
+workflow needs it. See "Undo / Recovery Path" above for full detail.

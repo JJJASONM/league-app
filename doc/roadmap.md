@@ -27,33 +27,29 @@ Stabilize current admin workflows
 ## Now
 
 The whole-app admin-screen and product-test-readiness chunk is complete
-(see Completed / Largely Completed below). One item of active work
-remains; the rest of this section is standing operating rules, not
-active work.
+(see Completed / Largely Completed below). **No actionable Now item
+remains.** Known Gap #9 (the last actionable finding, "Generate Schedule"
+undo) was closed 2026-09-11 as a documented decision, not a code change --
+see `doc/testing/product-smoke-test-checklist.md`'s Known Gap #9 and the
+Completed / Largely Completed entry below. Product test readiness moves
+to a closed/monitoring posture: nothing left to schedule, only a short
+list of low-severity items to watch in case a real workflow (not just
+the smoke checklist) hits one of them.
 
-- Resolve remaining product test-readiness findings.
-  - Actionable now:
-    - Known Gap #9: decide whether `Generate Schedule` needs a matching
-      undo path (no `DELETE` short of removing the whole season/league).
-      Likely only worth it if a real workflow, not just the smoke test,
-      hits it.
-  - Lower-priority, cosmetic/script-level:
-    - Known Gap #14: dashboard bootstrap logs a console error
-      (`refresh is not a function`) on initial load; content still
-      populates correctly.
-    - Known Gap #5: the staging health check polls `/api/leagues`
-      instead of the dedicated `/healthz` the app already exposes.
-    - Known Gap #3: no seed/fixture data demonstrates the Dashboard
-      readiness gate's "disabled" state.
-  - Tracked-deferred, no action unless a real workflow hits them:
-    - Known Gap #4: Player safe-merge has no admin UI (see "Player
-      record maintenance" in Then).
-    - Known Gap #16: no Sub control for a lineup slot resolved only
-      from already-scored round results.
-    - Known Gap #17: Weekly Summary's `player_stats` array (carrying
-      `is_sub`/`sub_for_name`) is still not rendered in that screen.
-    - Known Gap #18: Player Overview's schedule section won't show a
-      substitute's one-off match for a different team.
+- Product test-readiness monitoring (no action required unless a real
+  workflow hits one of these):
+  - Cosmetic/script-level: Known Gap #14 (dashboard bootstrap console
+    error on initial load; content still populates correctly), Known
+    Gap #5 (staging health check polls `/api/leagues` instead of the
+    dedicated `/healthz`), Known Gap #3 (no seed/fixture data
+    demonstrates the Dashboard readiness gate's "disabled" state).
+  - Tracked-deferred: Known Gap #4 (Player safe-merge has no admin UI --
+    see "Player record maintenance" in Then), Known Gap #16 (no Sub
+    control for a lineup slot resolved only from already-scored round
+    results), Known Gap #17 (Weekly Summary's `player_stats` array is
+    still not rendered in that screen), Known Gap #18 (Player Overview's
+    schedule section won't show a substitute's one-off match for a
+    different team).
   - Full detail, evidence, and staging verification history for every
     item above: `doc/testing/product-smoke-test-checklist.md`.
 
@@ -255,9 +251,13 @@ follow-up.
   Two of the remaining low-severity findings are also fixed as of
   2026-09-11 (`season-teams-error-and-rules-echo-fixes`, see below): the
   season-team name-collision raw 500 (#10) and the rules-update response
-  echo (#11). What remains is a shorter list of low-severity findings,
-  tracked as the one active item in Now. Player merge UI and
-  default-lineup setup remain deferred (see Then).
+  echo (#11). The last actionable finding, Known Gap #9 ("Generate
+  Schedule" undo), was closed the same day as a documented decision
+  rather than a code change -- see the discovery entry below. **Product
+  test readiness has no actionable item remaining**; what's left is a
+  short list of low-severity findings tracked in Now's monitoring
+  posture, not scheduled work. Player merge UI and default-lineup setup
+  remain deferred (see Then).
 
 - Whole-app admin screens Phase 1 (2026-08-26 to 2026-09-10). Built the
   operational admin surface across the app: Users Admin Screen Phase 1,
@@ -314,6 +314,42 @@ follow-up.
   call site and two test-only no-op stubs. See
   `doc/testing/product-smoke-test-checklist.md`'s Known Gaps #10/#11 for
   full before/after detail.
+
+- Generate Schedule undo -- discovery and decision (2026-09-11). Known
+  Gap #9 asked whether `Generate Schedule` needs an undo path (no
+  `DELETE` short of removing the whole season/league). Discovery
+  (`schedule-generate-undo-discovery`) found that `POST
+  /api/matches/generate` already *is* the undo path:
+  `ScheduleService.GenerateSchedule` -> `SaveGeneratedSchedule` deletes
+  and replaces every unplayed (`completed=0`) match on every call,
+  unconditionally, while completed/approved/processed matches are never
+  touched (excluded from the delete by `completed=0` in the SQL, and
+  further protected by the season-closed / has-closed-weeks /
+  active-with-completed-matches guards `GenerateSchedule` already
+  enforces). The frontend already confirms this in plain language before
+  calling it (`web/domains/seasons/seasons-domain.js`). **Decision:** no
+  new `DELETE /api/matches/{id}` route or broad undo feature -- the
+  existing recovery path is sufficient: regenerate the schedule (with
+  corrected inputs) any time before scores/round results are entered for
+  the matches being replaced -- not merely before they reach completed/
+  approved/processed state, since regeneration deletes every unplayed
+  (`completed=0`) match unconditionally and would cascade-delete a
+  partial/incomplete round_results row along with it -- or use a
+  disposable season/league for staging scenarios needing repeated
+  schedule churn against real seeded data (the working convention every
+  staging pass has already followed since 2026-08-23, including this
+  session's own). Deleting the whole season/league remains available as
+  the full-wipe option. No real workflow has hit a
+  need beyond this in the month since the gap was first noted -- only
+  the smoke test's own test-data setup did, and that was already solved.
+  A narrow single-match delete (removing one erroneous/duplicate match
+  without regenerating the whole season) was considered and is a
+  reasonable future candidate if a real workflow needs it, but is
+  explicitly not part of the current product-readiness lane -- not
+  implemented, no branch opened for it. This closes Known Gap #9 and
+  leaves Now with no actionable product-test-readiness item; see
+  `doc/testing/product-smoke-test-checklist.md`'s Known Gap #9 for full
+  detail.
 
 - Season-end clearance (Phases 1-3, shipped 2026-07-26).
   - Close preview endpoint and close commit endpoint.
