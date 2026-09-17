@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-09-16
+**Last reviewed:** 2026-09-17
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -240,6 +240,33 @@ admin workflows are stable.
 
 These areas are no longer "next" work, though they may still receive focused
 follow-up.
+
+- SQLite foreign-key cascade enforcement (2026-09-17, Known Gap #19).
+  Staging verification found a league/season delete could remove the
+  parent while leaving cascade-owned rows (seasons, teams, lineup_plans,
+  etc.) orphaned. Root cause confirmed empirically: `foreign_keys` is a
+  per-connection SQLite setting, and `db.Init`'s single startup
+  `PRAGMA foreign_keys=ON` only configured the one connection that ran
+  it -- every other connection `database/sql`'s pool later opened
+  silently had foreign-key enforcement off. Fixed by moving the pragma
+  into the connection DSN itself (`?_pragma=foreign_keys(1)`), which
+  `modernc.org/sqlite` re-applies to every connection it opens. Players
+  are correctly never deleted by this cascade (`players.team_id` is
+  `ON DELETE SET NULL`, not `CASCADE`) -- only surviving seasons, teams,
+  and season/league-owned rows were ever the defect. Verified with 4 new
+  regression tests: 1 proving the pragma now applies pool-wide; 1
+  exercising the real `SeasonService.DeleteSeason`/`SeasonStore` path;
+  1 exercising the real `LeagueService.DeleteLeague`/`LeagueStore` path;
+  and 1 that deliberately uses a direct SQL `DELETE FROM teams` instead
+  of `TeamService`/`TeamStore` (`TeamStore.DeleteTeam` already clears
+  `team_id` itself before deleting, so going through it would prove the
+  application code, not the schema's own `ON DELETE SET NULL` action).
+  All three delete tests run `PRAGMA foreign_key_check` and deliberately
+  force a non-init connection so they fail without the fix (confirmed by
+  reverting it and re-running). No existing data was reset or rewritten.
+  See `doc/architecture-decisions.md`'s Decision History and
+  `doc/testing/product-smoke-test-checklist.md`'s Known Gap #19 for full
+  detail.
 
 - Product test readiness (2026-08-20 to 2026-09-10). Established the
   staging test path (`scripts/deploy/seed-staging.ps1`'s `-SeedFixtures`

@@ -20,15 +20,32 @@ func Init(dataDir string) error {
 	}
 
 	dbPath := filepath.Join(dataDir, "league.db")
-	db, err := sql.Open("sqlite", dbPath)
+	// foreign_keys is a per-connection SQLite setting -- unlike journal_mode,
+	// SQLite does not persist it in the database file, so it defaults back to
+	// OFF on every new connection. database/sql maintains a pool of
+	// connections and opens more of them on demand (e.g. under concurrent
+	// load); a single *sql.DB.Exec("PRAGMA foreign_keys=ON") call after Open
+	// below only configures the one connection that happened to run it,
+	// leaving every other pooled connection's ON DELETE CASCADE/SET NULL
+	// enforcement silently disabled (confirmed empirically: Known Gap #19,
+	// reproduced in TestForeignKeysPragma_EnabledOnEveryPooledConnection).
+	// modernc.org/sqlite's driver re-applies a DSN's "_pragma=..." query
+	// parameter to every connection it opens (see that package's Driver.Open
+	// doc comment), so foreign_keys is enabled here, in the DSN itself,
+	// instead of via a post-Open Exec call.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
 	}
 
-	// SQLite pragmas for performance and safety
+	// Remaining SQLite pragmas for performance and safety. journal_mode is
+	// persisted in the database file itself (WAL mode, once set, applies to
+	// every future connection automatically), so a single startup Exec is
+	// sufficient for it; synchronous is not correctness-critical the way
+	// foreign_keys is, so it is left as a startup-only pragma too, unchanged
+	// from before.
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
 		"PRAGMA synchronous=NORMAL",
 	}
 	for _, p := range pragmas {

@@ -1,7 +1,7 @@
 # League App Architecture Decisions
 
 **Status:** Target design
-**Last reviewed:** 2026-07-27
+**Last reviewed:** 2026-09-17
 
 This document consolidates approved product and architecture decisions. It
 describes the target model, not necessarily the schema currently implemented in
@@ -504,3 +504,39 @@ the season re-enters Historical state. `activated_at` and `final_standings_snaps
 are preserved. Edit locks lift automatically because `closed_at IS NULL` returns false
 for all `IsClosed`/`IsSeasonClosed` checks. Reopen is never triggered automatically
 by any other workflow.
+
+### 2026-09-17 - SQLite foreign-key enforcement is a per-connection invariant
+
+**Status:** accepted
+
+Every domain's schema-declared `ON DELETE CASCADE`/`ON DELETE SET NULL`
+relationship (leagues -> seasons/teams, seasons -> season-owned rows,
+teams -> players.team_id, and any future one) depends on SQLite's
+`foreign_keys` pragma being enabled on the specific connection that runs
+the delete -- not on the database file, and not on the process as a
+whole. This is a cross-domain persistence invariant, not a single
+domain's concern: no domain's store code re-declares or re-checks it: the
+schema and the connection layer's configuration are the entire contract.
+
+`foreign_keys` is not persisted in the database file the way
+`journal_mode` is, and Go's `database/sql` maintains a pool of
+independent underlying connections, opening new ones on demand. A single
+`*sql.DB.Exec("PRAGMA foreign_keys=ON")` call after `sql.Open` only
+configures whichever one connection happens to run it -- every other
+pooled connection silently reverts to SQLite's own `foreign_keys=OFF`
+default. This was discovered as Known Gap #19 (a league or season delete
+could remove the parent while leaving cascade-owned children orphaned)
+and confirmed empirically, not just hypothesized: a test holding multiple
+concurrent connections and querying `PRAGMA foreign_keys` on each showed
+connections beyond the first returning `0`.
+
+**Decision:** any code that opens a SQLite connection pool must enable
+`foreign_keys` in the connection string itself (`?_pragma=foreign_keys(1)`
+for `modernc.org/sqlite`, which re-applies a DSN's `_pragma` parameters to
+every connection it opens), not via a post-`Open` `Exec` call. `db/db.go`
+was corrected accordingly. If a future persistence layer (a different
+SQLite driver, a connection wrapper, or a non-SQLite database) is
+introduced, whoever wires it up must re-verify this invariant explicitly
+rather than assuming a single startup pragma is sufficient -- it is not,
+for any connection-pooling `database/sql` driver where a pragma is a
+per-connection setting.
