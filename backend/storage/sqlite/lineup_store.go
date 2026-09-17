@@ -16,8 +16,10 @@ type LineupStore struct{ db *sql.DB }
 // NewLineupStore returns a LineupStore backed by the given database.
 func NewLineupStore(db *sql.DB) *LineupStore { return &LineupStore{db: db} }
 
-// ListLineupPlans returns lineup plans for a season, optionally filtered by
-// week and/or team. Results are ordered by team then insertion order.
+// ListLineupPlans returns lineup plans for a season, always filtered by
+// week (week_number=0 is the real, meaningful "Default Lineup" week, not a
+// wildcard -- see ListLineupPlansRequest's doc comment) and optionally
+// filtered by team. Results are ordered by team then insertion order.
 func (s *LineupStore) ListLineupPlans(ctx context.Context, req matches.ListLineupPlansRequest) ([]models.LineupPlan, error) {
 	q := `SELECT lp.id, lp.season_id, lp.team_id, t.name,
 	             lp.player_id, p.first_name || ' ' || p.last_name, p.handicap,
@@ -25,12 +27,8 @@ func (s *LineupStore) ListLineupPlans(ctx context.Context, req matches.ListLineu
 	      FROM lineup_plans lp
 	      JOIN teams t ON t.id = lp.team_id
 	      JOIN players p ON p.id = lp.player_id
-	      WHERE lp.season_id = ?`
-	args := []any{req.SeasonID}
-	if req.WeekNumber != 0 {
-		q += ` AND lp.week_number = ?`
-		args = append(args, req.WeekNumber)
-	}
+	      WHERE lp.season_id = ? AND lp.week_number = ?`
+	args := []any{req.SeasonID, req.WeekNumber}
 	if req.TeamID != 0 {
 		q += ` AND lp.team_id = ?`
 		args = append(args, req.TeamID)

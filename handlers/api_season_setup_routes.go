@@ -5,7 +5,10 @@ import "net/http"
 // registerSeasonSetupRoutes mounts season CRUD, activation, rules,
 // skipped-weeks, bye-requests, and season team/roster routes onto mux.
 // GET reads are unprotected; mutations are gated by clearanceAuth.
-func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, ruleMgr RuleManager, applyAuth ApplyAuthResolver) {
+// lineupMgr is optional (nil when unwired, e.g. in tests that don't need
+// it) -- it only feeds the checklist's non-blocking default-lineup
+// warning; every other route in this function is unaffected by it.
+func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, ruleMgr RuleManager, lineupMgr LineupManager, applyAuth ApplyAuthResolver) {
 	mux.HandleFunc("GET /api/seasons", func(w http.ResponseWriter, r *http.Request) {
 		listSeasons(w, r, seasonMgr)
 	})
@@ -123,6 +126,6 @@ func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, rule
 		listAvailablePlayers(w, r, seasonMgr)
 	})
 	mux.HandleFunc("GET /api/seasons/{id}/checklist", func(w http.ResponseWriter, r *http.Request) {
-		getSeasonChecklist(w, r, seasonMgr)
+		getSeasonChecklist(w, r, seasonMgr, lineupMgr)
 	})
 }

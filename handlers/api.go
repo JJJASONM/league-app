@@ -80,7 +80,7 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	// seasonMgr is also used later by the round-results block and by
 	// registerSeasonCloseRoutes below.
 	seasonMgr := deps.SeasonMgr
-	registerSeasonSetupRoutes(mux, seasonMgr, deps.RuleMgr, deps.ApplyAuth)
+	registerSeasonSetupRoutes(mux, seasonMgr, deps.RuleMgr, deps.LineupMgr, deps.ApplyAuth)
 
 	// Player Overview route registration lives in
 	// api_player_overview_routes.go. Handler-level composition across

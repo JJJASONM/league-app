@@ -2589,6 +2589,93 @@ in a standalone script against real staging responses.
   resolution are confirmed by code inspection only (no staging data
   exercises either without mutating shared fixtures).
 
+### 25. Default Lineup Week-Filter Fix + Setup Checklist Warning (2026-09-16)
+
+Backend-only fix and a non-blocking checklist warning -- no new screen,
+no schema change, no auth change, no UI polish. The Default Lineup
+editor itself already existed on the Lineups screen before this phase;
+see the fix/warning detail in `doc/domains/matches/README.md`.
+
+- Store and handler level (verified via new and updated automated tests,
+  listed below; no browser needed for this item since it's a pure data-
+  correctness fix):
+  - [x] **Store-verified**: `ListLineupPlans(..., WeekNumber: 0)` for a
+        team with both a saved default lineup and a saved week-specific
+        lineup now returns only the 3 default-lineup rows, not a mix of
+        both weeks. Guarded by the new
+        `TestLineupStore_ListLineupPlans_WeekZeroNotMixedWithOtherWeeks`
+        store test (seeds week 0 and week 1 rows for the same season/
+        team, confirms each `WeekNumber` filter returns only its own
+        week). This exercises the SQLite store method directly, not the
+        `GET /api/lineup-plans` HTTP route -- no handler/API-level test
+        was added for this specific fix, since the store test already
+        proves the query-building change and the handler is a thin,
+        unchanged passthrough onto it.
+  - [ ] **NOT VERIFIED (no browser)**: opening the Lineups screen's
+        "Default Lineup" view for a season that also has week-specific
+        overrides now shows the real default roster, not a stale mix of
+        rows from other weeks. Confirmed at the code/store level only
+        (same underlying `ListLineupPlans` call the `GET
+        /api/lineup-plans` route -- and in turn the Lineups screen,
+        Dashboard, Match Entry, and the League Admin hub -- all use, but
+        not exercised through HTTP for this specific fix).
+- Browser: the Seasons screen's setup checklist.
+  - [ ] **NOT VERIFIED (no browser)**: a draft season with a team that
+        has fewer than 3 default-lineup rows shows a `TEAM_NO_DEFAULT_
+        LINEUP` warning (e.g. "team \"Alpha\" has no default lineup set"
+        or "...has an incomplete default lineup (2/3 players set)") in
+        the existing Setup Checklist card, rendered by the same generic
+        warning-item loop that already renders `TEAM_FEW_PLAYERS` and
+        similar. **API-verified**: `GET /api/seasons/{id}/checklist`
+        includes the warning in its `warnings` array, confirmed via the
+        new `TestSeasonChecklist_DefaultLineupWarning_AppearsThenClears`
+        handler test.
+  - [ ] **NOT VERIFIED (no browser)**: the warning does not disable the
+        "Activate Season" button and does not appear as a blocker.
+        **API-verified**: the same test confirms the warning is never
+        present in `blockers` and that `can_activate` does not change
+        based on the lineup-state transition (saving a full 3-player
+        default lineup for the team removes the warning without
+        affecting `can_activate` either way).
+  - [ ] **NOT VERIFIED (no browser)**: the warning disappears once a
+        full 3-player default lineup is saved for that team via the
+        existing Lineups screen. **API-verified** via the same test
+        (saves the default lineup through `POST /api/lineup-plans`,
+        re-fetches the checklist, confirms the warning for that team is
+        gone).
+- New focused Go tests (all passing): 1 new SQLite store test
+  (`TestLineupStore_ListLineupPlans_WeekZeroNotMixedWithOtherWeeks`); 2
+  existing SQLite store tests corrected
+  (`TestLineupStore_ListLineupPlans_BySeason`,
+  `TestLineupStore_ListLineupPlans_ByTeam` -- both previously omitted
+  `WeekNumber`, unintentionally relying on the now-removed "no filter"
+  behavior; both now pass an explicit `WeekNumber` and still cover their
+  original intent); 1 new handler test
+  (`TestSeasonChecklist_DefaultLineupWarning_AppearsThenClears`). All
+  four pre-existing checklist tests
+  (`TestSeasonChecklist_LegacySeason_CanActivate`,
+  `_ManagedNoTeams_BlocksTooFew`, `_TwoTeamsNoSchedule_Blocked`,
+  `_AllGood_CanActivate`) continue to pass unchanged.
+- `go test ./... -count=1` and `go build ./...` pass with zero
+  regressions. No JS changed -- the existing checklist renderer already
+  displays any `{code, message, team_id}` warning item generically, so
+  no frontend file needed a change.
+- Known, deliberately out-of-scope notes (not oversights):
+  - No new "Default Lineup" screen -- the existing Lineups screen editor
+    is unchanged and sufficient; this phase only fixed how its data is
+    read back and added a setup-time nudge.
+  - No link/button from the warning to the Lineups screen -- judged not
+    tiny enough to include without drifting into UI polish.
+  - No "exactly 3 players" enforcement added to `SaveTeamLineup` (the
+    write side stays permissive, as before); only read-side readiness
+    checks require exactly 3.
+  - No guard added to `SetSubstitute`/`ClearSubstitute` against
+    `week_number=0` rows -- a low-risk edge case noted during discovery
+    (no UI exposes it today), not addressed here.
+  - The three independent frontend `resolvePlans`-style fallback
+    implementations (Dashboard, Match Entry, League Admin hub) remain
+    unconsolidated -- a code-quality opportunity, not this phase's scope.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |

@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-09-11
+**Last reviewed:** 2026-09-16
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -152,8 +152,11 @@ stable.
     shipped as Phase A; see Completed / Largely Completed below.
 
 - Season setup polish.
-  - Explore default lineup setup during season creation or immediately after
-    season creation, without making Close Week depend on future lineups.
+  - **Default lineup setup explored and largely addressed 2026-09-16** --
+    see Completed / Largely Completed below. Discovery found the default
+    lineup editor already existed; a real week-filter bug was fixed and
+    a non-blocking setup checklist warning was added. Close Week does
+    not depend on future lineups.
 
 - Architecture review follow-up.
   - Defer `models/models.go` decomposition until a touched workflow needs
@@ -350,6 +353,45 @@ follow-up.
   leaves Now with no actionable product-test-readiness item; see
   `doc/testing/product-smoke-test-checklist.md`'s Known Gap #9 for full
   detail.
+
+- Season setup polish: default lineup week-filter fix + setup checklist
+  warning (2026-09-16). Discovery for the roadmap's "Season setup
+  polish -- default lineup setup" item found that a full Default Lineup
+  editor already existed on the Lineups screen (`week_number=0`, used
+  consistently by Dashboard, Match Entry, and the League Admin hub) --
+  no new screen was built. Discovery also found a real, live correctness
+  bug: `ListLineupPlansRequest`'s `WeekNumber=0` "no filter" convention
+  collided with `week_number=0`'s real meaning (the Default Lineup),
+  silently mixing week-specific rows into "default" reads once a team
+  had both -- confirmed against real staging data from an earlier
+  discovery pass (a `week_number=0` request returned 60 rows for a
+  5-week season, i.e. every week combined, not a genuine ~12-row default
+  set). **Fixed:** `backend/storage/sqlite/lineup_store.go`'s
+  `ListLineupPlans` now always filters on `WeekNumber` (no schema
+  change, no API-shape change, no frontend caller needed to change,
+  since every real caller already passed an explicit week number).
+  **Added:** a non-blocking `TEAM_NO_DEFAULT_LINEUP` warning in `GET
+  /api/seasons/{id}/checklist`'s existing `warnings` array for any
+  season team with fewer than 3 default-lineup rows -- composed at the
+  handler layer (`handlers/api_season_teams_handlers.go`) to keep
+  `SeasonService` free of a lineups-domain dependency, using the
+  existing `Warnings []ChecklistItem` shape so the Seasons screen's
+  existing generic warning renderer displays it with no frontend change.
+  Warning only -- never a blocker; `can_activate` is unaffected; Close
+  Week, activation, and schedule generation still do not depend on
+  future lineups. Verified with `go test ./... -count=1` and `go build
+  ./...` (1 new store test proving the exact bug is fixed, 2 existing
+  store tests corrected since they unintentionally relied on the removed
+  "no filter" behavior, 1 new handler test proving the warning appears/
+  disappears/never blocks/never affects `can_activate`; all pre-existing
+  checklist tests pass unchanged). Explicitly out of scope, per
+  discovery and PM decision: no new default-lineup screen, no
+  link/button from the warning to Lineups (skipped as unnecessary UI
+  polish), no "exactly 3" enforcement on the write side, no guard on
+  substitute endpoints against week-0 rows, no consolidation of the
+  three independent frontend fallback implementations, no auth/schema
+  change. See `doc/domains/matches/README.md`'s "Default Lineup
+  Week-Filter Fix + Setup Checklist Warning" for full detail.
 
 - Season-end clearance (Phases 1-3, shipped 2026-07-26).
   - Close preview endpoint and close commit endpoint.

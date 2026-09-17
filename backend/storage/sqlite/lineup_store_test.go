@@ -45,17 +45,63 @@ func TestLineupStore_ListLineupPlans_BySeason(t *testing.T) {
 	lsseedPlan(t, sid, tid, pid, 1)
 	lsseedPlan(t, sid, tid, pid, 2)
 
-	plans, err := store.ListLineupPlans(ctx, matches.ListLineupPlansRequest{SeasonID: sid})
+	// ListLineupPlans always filters by week (week_number=0 is a real,
+	// meaningful value -- the Default Lineup -- never a wildcard), so
+	// season scoping is verified per seeded week rather than in one
+	// unfiltered call.
+	week1, err := store.ListLineupPlans(ctx, matches.ListLineupPlansRequest{SeasonID: sid, WeekNumber: 1})
 	if err != nil {
-		t.Fatalf("ListLineupPlans: %v", err)
+		t.Fatalf("ListLineupPlans week 1: %v", err)
 	}
-	if len(plans) != 2 {
-		t.Errorf("want 2 plans, got %d", len(plans))
+	if len(week1) != 1 || week1[0].SeasonID != sid {
+		t.Errorf("want 1 plan for week 1 with season_id=%d, got %v", sid, week1)
 	}
-	for _, p := range plans {
-		if p.SeasonID != sid {
-			t.Errorf("want season_id=%d, got %d", sid, p.SeasonID)
-		}
+
+	week2, err := store.ListLineupPlans(ctx, matches.ListLineupPlansRequest{SeasonID: sid, WeekNumber: 2})
+	if err != nil {
+		t.Fatalf("ListLineupPlans week 2: %v", err)
+	}
+	if len(week2) != 1 || week2[0].SeasonID != sid {
+		t.Errorf("want 1 plan for week 2 with season_id=%d, got %v", sid, week2)
+	}
+}
+
+// TestLineupStore_ListLineupPlans_WeekZeroNotMixedWithOtherWeeks guards the
+// week_number=0 filter fix: before this fix, ListLineupPlans treated
+// WeekNumber=0 as "no filter," so a request for the Default Lineup
+// (week_number=0) silently returned every week's rows once a team had both
+// default and week-specific lineups saved in the same season. Both weeks
+// must now stay disambiguated.
+func TestLineupStore_ListLineupPlans_WeekZeroNotMixedWithOtherWeeks(t *testing.T) {
+	store := newLineupStore(t)
+	ctx := context.Background()
+	lid := sseedLeague(t)
+	sid := sseedSeason(t, lid, "S", "", "", true)
+	tid := sseedTeam(t, lid, "T")
+	pid := sseedPlayer(t, tid)
+	lsseedPlan(t, sid, tid, pid, 0) // default lineup
+	lsseedPlan(t, sid, tid, pid, 1) // week-specific override
+
+	defaultPlans, err := store.ListLineupPlans(ctx, matches.ListLineupPlansRequest{SeasonID: sid, WeekNumber: 0})
+	if err != nil {
+		t.Fatalf("ListLineupPlans week 0: %v", err)
+	}
+	if len(defaultPlans) != 1 {
+		t.Fatalf("want 1 default-lineup plan, got %d: %v", len(defaultPlans), defaultPlans)
+	}
+	if defaultPlans[0].WeekNumber != 0 {
+		t.Errorf("want week_number=0, got %d", defaultPlans[0].WeekNumber)
+	}
+
+	weekOnePlans, err := store.ListLineupPlans(ctx, matches.ListLineupPlansRequest{SeasonID: sid, WeekNumber: 1})
+	if err != nil {
+		t.Fatalf("ListLineupPlans week 1: %v", err)
+	}
+	if len(weekOnePlans) != 1 {
+		t.Fatalf("want 1 week-1 plan, got %d: %v", len(weekOnePlans), weekOnePlans)
+	}
+	if weekOnePlans[0].WeekNumber != 1 {
+		t.Errorf("want week_number=1, got %d", weekOnePlans[0].WeekNumber)
 	}
 }
 
@@ -93,7 +139,7 @@ func TestLineupStore_ListLineupPlans_ByTeam(t *testing.T) {
 	lsseedPlan(t, sid, tid1, pid1, 1)
 	lsseedPlan(t, sid, tid2, pid2, 1)
 
-	plans, err := store.ListLineupPlans(ctx, matches.ListLineupPlansRequest{SeasonID: sid, TeamID: tid1})
+	plans, err := store.ListLineupPlans(ctx, matches.ListLineupPlansRequest{SeasonID: sid, WeekNumber: 1, TeamID: tid1})
 	if err != nil {
 		t.Fatalf("ListLineupPlans: %v", err)
 	}

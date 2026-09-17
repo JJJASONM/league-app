@@ -613,6 +613,113 @@ func TestSeasonChecklist_AllGood_CanActivate(t *testing.T) {
 	}
 }
 
+// saveDefaultLineup POSTs a week_number=0 (Default Lineup) lineup for one team.
+func saveDefaultLineup(t *testing.T, srv *httptest.Server, seasonID, teamID int64, playerIDs []int64) *http.Response {
+	t.Helper()
+	idsJSON, err := json.Marshal(playerIDs)
+	if err != nil {
+		t.Fatalf("marshal player_ids: %v", err)
+	}
+	body := fmt.Sprintf(`{"season_id":%d,"team_id":%d,"week_number":0,"player_ids":%s}`, seasonID, teamID, idsJSON)
+	resp, err := http.Post(srv.URL+"/api/lineup-plans", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST lineup-plans: %v", err)
+	}
+	return resp
+}
+
+// checklistWarningCodes returns the set of "code:team_id" strings present in
+// a decoded checklist's warnings array, for easy membership checks.
+func checklistWarningEntries(c map[string]any, code string) []float64 {
+	var teamIDs []float64
+	warnings, _ := c["warnings"].([]any)
+	for _, w := range warnings {
+		wm := w.(map[string]any)
+		if wm["code"].(string) == code {
+			teamIDs = append(teamIDs, wm["team_id"].(float64))
+		}
+	}
+	return teamIDs
+}
+
+// TestSeasonChecklist_DefaultLineupWarning_AppearsThenClears guards the
+// Season setup polish (default lineup) checklist warning: it must appear
+// as a non-blocking Warning (never a Blocker) when a season team has fewer
+// than 3 default-lineup (week_number=0) rows, and disappear once a full
+// 3-player default lineup is saved for that team. can_activate must stay
+// unaffected by lineup state throughout, matching the constraint that
+// season activation (and, by the same principle, Close Week) must never
+// depend on future lineups.
+func TestSeasonChecklist_DefaultLineupWarning_AppearsThenClears(t *testing.T) {
+	srv := testServer(t)
+	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")
+	ensureSeasonTeams(t, seasonID, teamIDs)
+	teamA := teamIDs[0]
+
+	// Team A gets a full 3-player roster (so a complete default lineup is
+	// possible); Team B just needs the one captain every other checklist
+	// test already relies on -- it is not this test's focus.
+	var teamAPlayers []int64
+	for i := 0; i < 3; i++ {
+		pID := createTestPlayer(t, srv, fmt.Sprintf("DL%d", i), "Tester")
+		setPlayerTeam(t, pID, teamA)
+		postRosterPlayer(t, srv, seasonID, teamA, pID).Body.Close()
+		teamAPlayers = append(teamAPlayers, pID)
+	}
+	httpDo(t, srv, http.MethodPut,
+		fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, teamA),
+		fmt.Sprintf(`{"season_name":"TeamA","captain_id":%d}`, teamAPlayers[0])).Body.Close()
+
+	pB := createTestPlayer(t, srv, "DLB", "Tester")
+	setPlayerTeam(t, pB, teamIDs[1])
+	postRosterPlayer(t, srv, seasonID, teamIDs[1], pB).Body.Close()
+	httpDo(t, srv, http.MethodPut,
+		fmt.Sprintf("/api/seasons/%d/teams/%d", seasonID, teamIDs[1]),
+		fmt.Sprintf(`{"season_name":"TeamB","captain_id":%d}`, pB)).Body.Close()
+
+	genBody := fmt.Sprintf(`{"season_id":%d,"start_date":"2026-09-01","schedule_type":"single_rr"}`, seasonID)
+	genResp, err := http.Post(srv.URL+"/api/matches/generate", "application/json", strings.NewReader(genBody))
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	genResp.Body.Close()
+
+	// Before: no default lineup saved for Team A -> warning present.
+	before := getChecklist(t, srv, seasonID)
+	beforeCanActivate, _ := before["can_activate"].(bool)
+	beforeTeams := checklistWarningEntries(before, "TEAM_NO_DEFAULT_LINEUP")
+	if len(beforeTeams) == 0 || beforeTeams[0] != float64(teamA) {
+		t.Fatalf("want TEAM_NO_DEFAULT_LINEUP warning for team %d before a default lineup is saved, got %v", teamA, before["warnings"])
+	}
+	beforeBlockers, _ := before["blockers"].([]any)
+	for _, b := range beforeBlockers {
+		if b.(map[string]any)["code"].(string) == "TEAM_NO_DEFAULT_LINEUP" {
+			t.Error("TEAM_NO_DEFAULT_LINEUP must never appear in blockers")
+		}
+	}
+
+	// Save a full 3-player default lineup for Team A.
+	saveResp := saveDefaultLineup(t, srv, seasonID, teamA, teamAPlayers)
+	saveResp.Body.Close()
+	if saveResp.StatusCode != http.StatusOK {
+		t.Fatalf("save default lineup: want 200, got %d", saveResp.StatusCode)
+	}
+
+	// After: warning for Team A must be gone; can_activate must be
+	// unaffected by the lineup state change either way.
+	after := getChecklist(t, srv, seasonID)
+	afterCanActivate, _ := after["can_activate"].(bool)
+	if afterCanActivate != beforeCanActivate {
+		t.Errorf("can_activate must not change based on default-lineup state alone: before=%v after=%v", beforeCanActivate, afterCanActivate)
+	}
+	afterTeams := checklistWarningEntries(after, "TEAM_NO_DEFAULT_LINEUP")
+	for _, tid := range afterTeams {
+		if int64(tid) == teamA {
+			t.Errorf("want no TEAM_NO_DEFAULT_LINEUP warning for team %d after a full default lineup is saved, got warnings %v", teamA, after["warnings"])
+		}
+	}
+}
+
 func TestActivateSeason_BlockedByChecklist(t *testing.T) {
 	srv := testServer(t)
 	_, seasonID, teamIDs := seedScheduleFixtureWithTeams(t, srv, "2026-09-01", "Alpha", "Bravo")

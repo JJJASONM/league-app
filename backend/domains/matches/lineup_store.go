@@ -6,8 +6,13 @@ import (
 	"league_app/models"
 )
 
-// ListLineupPlansRequest filters lineup plan queries. SeasonID is required;
-// WeekNumber and TeamID of 0 mean no filter.
+// ListLineupPlansRequest filters lineup plan queries. SeasonID is required.
+// WeekNumber is always an exact filter -- 0 means the real, meaningful
+// "Default Lineup" week (lineup_plans.week_number=0), never "all weeks."
+// No caller needs "all weeks in one call" today; every caller (Dashboard,
+// Match Entry, the League Admin hub, and the Lineups screen) always passes
+// an explicit real week or 0 for the default. TeamID of 0 means no team
+// filter (team ids are never 0, so it is unambiguous, unlike WeekNumber).
 type ListLineupPlansRequest struct {
 	SeasonID   int64
 	WeekNumber int64
