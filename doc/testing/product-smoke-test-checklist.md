@@ -2676,6 +2676,71 @@ see the fix/warning detail in `doc/domains/matches/README.md`.
     implementations (Dashboard, Match Entry, League Admin hub) remain
     unconsolidated -- a code-quality opportunity, not this phase's scope.
 
+#### Staging verification (2026-09-17)
+
+**Result: PASS for the feature under test** (default-lineup week
+filtering and the setup checklist warning), with one unrelated
+discrepancy found during cleanup -- see Known Gap #19 below. Verified on
+`http://league-staging.local` against commit `b88537c`. No browser
+available in this developer's tool session -- every item below is a
+direct API call against real staging; the Lineups screen and Seasons
+checklist rendering items are marked NOT VERIFIED for that reason.
+
+**Fixture used:** a fresh, fully disposable league (League 7, "Lineup
+Filter Verify League 20260917"; Season 10; Team Alpha team_id 25 with
+players covering a full 3-player roster; Team Bravo team_id 26 with a
+2-player roster), created and torn down entirely within this pass rather
+than touching the shared Fixture Scoresheet League.
+
+1. **Week filtering -- PASS.** Saved a `week_number=0` default lineup
+   for Team Alpha with one set of 3 players, then a `week_number=1`
+   lineup for the *same team* with a partially-overlapping but distinct
+   set of 3 players (2 shared, 1 different), deliberately reproducing
+   the exact bug scenario (one team, both a default and a week-specific
+   lineup coexisting). `GET .../lineup-plans?season_id=...&week_number=0`
+   returned exactly the 3 default-lineup rows, all `week_number:0`.
+   `GET .../lineup-plans?season_id=...&week_number=1` returned exactly
+   the 3 week-specific rows, all `week_number:1`. No row appeared in
+   both responses beyond the players intentionally shared between the
+   two lineups; no extra or missing rows in either response.
+2. **Checklist warning lifecycle -- PASS.** With zero default-lineup
+   rows for either team, `TEAM_NO_DEFAULT_LINEUP` appeared in `warnings`
+   for both teams, each with its own team-specific message. After Team
+   Alpha's default lineup was completed to 3 players, Team Alpha's
+   warning was gone while Team Bravo's warning remained untouched
+   (confirms per-team independence). After Team Bravo's default lineup
+   was set to 2 (of 3) players, its warning changed to the expected
+   "incomplete default lineup (2/3 players set)" wording rather than
+   clearing.
+3. **Non-blocking behavior -- PASS.** Across every checklist snapshot
+   taken during this pass (0 rows for both teams; Team Alpha complete;
+   Team Bravo partial; final state), `blockers` contained only the
+   season's pre-existing, unrelated `NO_SCHEDULE` blocker --
+   `TEAM_NO_DEFAULT_LINEUP` never appeared there. `can_activate` stayed
+   `false` throughout and did not change in either direction as a result
+   of any lineup-state transition -- it was governed entirely by the
+   unrelated `NO_SCHEDULE` blocker for the whole pass.
+4. **Shared fixture data -- PASS.** Re-checked a player from the shared
+   Fixture Scoresheet League after the pass; unchanged.
+5. **Browser rendering -- NOT VERIFIED (no browser)** in this developer's
+   tool session: the Lineups screen's "Default Lineup" view actually
+   showing the correct (non-mixed) roster, and the Seasons setup
+   checklist card actually rendering the warning and its
+   appear/disappear transitions. Every underlying data claim those
+   screens would render is proven correct at the API level above.
+- **Cleanup:** the disposable league did not cascade-delete its
+  dependents through the API as the schema declares it should -- see
+  Known Gap #19. Cleanup was completed through targeted calls to the
+  same existing, already-approved DELETE endpoints (season, lineup
+  plans, players, teams) rather than relying on cascade. Final state
+  confirmed clean: the league list matches the pre-pass baseline exactly,
+  the disposable season/teams/players all 404, and no lineup-plans rows
+  remain for the disposable season. No database reset or replacement was
+  performed. One disposable `league_admin` bootstrap user remains, per
+  the no-delete-user-endpoint convention every prior staging pass has
+  followed. No API keys or secrets are recorded here or elsewhere in
+  this checklist.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |
@@ -2698,6 +2763,7 @@ see the fix/warning detail in `doc/domains/matches/README.md`.
 | 16 | No Sub control for a lineup slot resolved only from already-scored round results (no known `lineup_plans` row for it) -- retroactively substituting a played match raises different questions this phase doesn't answer -- discovered 2026-09-02 during Substitute Workflow Phase 1 | Low (known/tracked) | `web/domains/matches/match-entry-page-component.js` | Open -- explicitly deferred, not bundled into Substitute Workflow Phase 1 |
 | 17 | Weekly Summary's `player_stats` array (now carrying `is_sub`/`sub_for_name` as of Substitute Workflow Phase 1) is still not rendered in that screen at all -- pre-existing since Weekly Summary Phase 1, not a regression -- discovered 2026-09-02 | Low (known/tracked) | `web/domains/weekly-summary/weekly-summary-page-component.js` | Open -- explicitly deferred, not bundled into Substitute Workflow Phase 1 |
 | 18 | Player Overview's schedule section won't show a substitute's one-off match for a different team (schedule resolves via the player's own team for the season, not the team they subbed for) -- discovered 2026-09-02 during Substitute Workflow Phase 1 | Low (known/tracked, accepted) | `handlers/api_player_overview_handler.go` | Open -- explicitly accepted as a limitation, not the "big player-history redesign" this phase was told not to force |
+| 19 | Deleting a league or season can remove the parent row while leaving dependent seasons, teams, players, and lineup plans orphaned; the expected SQLite foreign-key cascades did not run -- discovered 2026-09-17 during default-lineup staging verification cleanup | **High** | `db/db.go` SQLite connection initialization and the league/season delete paths | **Open -- reproducible on staging 2026-09-17. Root cause not yet confirmed.** Observed behavior (confirmed): `DELETE /api/leagues/{id}` and, separately, `DELETE /api/seasons/{id}` each returned 200 and the targeted parent row was confirmed gone (subsequent `GET` 404), but rows in tables the schema declares `ON DELETE CASCADE` against that parent (seasons under the deleted league; lineup_plans under the deleted season) remained fully present and queryable afterward. A working hypothesis, not yet confirmed: SQLite foreign-key enforcement is a per-connection setting, and `db/db.go` sets `PRAGMA foreign_keys=ON` once at startup via a single `DB.Exec` call -- if that only applied to the one connection that ran it, other connections in `database/sql`'s pool could handle later requests (including these deletes) without foreign-key enforcement active, so a `DELETE` proceeds without applying the schema's cascade at all. This is a hypothesis pending investigation in a focused branch that reproduces it locally and tests the correction -- not a proven root cause. Cleanup for the verification pass that found this was completed through targeted calls to the existing `DELETE` endpoints (season, lineup plans, players, teams) rather than relying on cascade; no staging database reset or replacement occurred. See section 25's "Staging verification (2026-09-17)" above for the pass that found this. |
 
 ## Recommended Next Branches
 
@@ -2708,11 +2774,23 @@ see the fix/warning detail in `doc/domains/matches/README.md`.
 Blocker section above and Known Gaps rows #6/#7/#8/#10/#11/#12/#13/#15) --
 no longer listed here as pending branches. Known Gap #9 ("Generate
 Schedule" undo) is closed as a documented decision, not a code branch --
-see row #9 above. No actionable product-test-readiness branches remain
-from this checklist. Everything else already known before the
-2026-08-23 pass (dashboard gate demo data, staging health-check endpoint
-choice, merge UI, the `.codex/skills/` script drift) remains
-backlog-level, unchanged by any run since.
+see row #9 above.
+
+**New highest-priority branch: `sqlite-foreign-key-cascade-enforcement`**
+(Known Gap #19, discovered 2026-09-17). Deleting a league or season can
+remove the parent row while leaving dependent seasons, teams, players,
+and lineup plans orphaned while the expected SQLite foreign-key cascades
+did not run. This is High severity -- it risks
+silent data inconsistency on any real parent-record deletion, not just
+during test cleanup -- and should be picked up before other
+product-readiness work, with a focused branch that reproduces it locally,
+confirms (or rules out) the per-connection `PRAGMA foreign_keys`
+hypothesis, and adds regression tests before any correction ships.
+
+Everything else already known before the 2026-08-23 pass (dashboard gate
+demo data, staging health-check endpoint choice, merge UI, the
+`.codex/skills/` script drift) remains backlog-level, unchanged by any
+run since.
 
 ---
 
