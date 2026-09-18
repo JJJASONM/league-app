@@ -2741,6 +2741,118 @@ than touching the shared Fixture Scoresheet League.
   followed. No API keys or secrets are recorded here or elsewhere in
   this checklist.
 
+### 26. SQLite Foreign-Key Cascade Enforcement -- Staging Verification (2026-09-17)
+
+Dedicated staging verification for the `sqlite-foreign-key-cascade-enforcement`
+fix (Known Gap #19), run against deployed commit `11a02a6` on
+`http://league-staging.local`. No browser available in this developer's
+tool session -- every result below is a direct API call plus a read-only
+SQLite integrity check against the live staging database file.
+
+1. **Scenario A -- season deletion -- PASS.** Built a disposable league, a
+   3-team season (bye requests require an odd team count), 1 player, a
+   season rule, a skipped week, a bye request, a real generated 3-match
+   schedule, and a lineup plan, all through existing API routes. After
+   `DELETE /api/seasons/{id}`: the season 404s; lineup plans, season
+   rules, skipped weeks, bye requests, and matches for that season are
+   all empty; the parent league and the team both still return 200; the
+   player still returns 200, still assigned to the surviving team.
+2. **Scenario B -- league deletion -- PASS.** Same fixture shape under a
+   second disposable league. After `DELETE /api/leagues/{id}`: the
+   league, season, and team all 404; lineup plans and matches for that
+   season are empty; the player still returns 200 with `team_id: null`,
+   confirming `ON DELETE SET NULL` through the real deployed API, not
+   just the regression test.
+3. **Connection-pool exercise.** Before each delete, roughly 20 concurrent
+   reads were fanned out across 5 endpoints to give the connection pool
+   an opportunity to use more than one connection. This does not by
+   itself prove every live connection's `PRAGMA foreign_keys` value --
+   that is proven by the deployed
+   `TestForeignKeysPragma_EnabledOnEveryPooledConnection` regression
+   test. What this staging pass proves is that the deployed application
+   now executes the expected cascade/SET NULL behavior end-to-end
+   through the real API; the regression test proves the underlying
+   per-connection PRAGMA configuration that makes it possible.
+4. **Integrity check found pre-existing violations, remediated
+   separately.** After Scenario A and Scenario B's own disposable
+   fixtures had already been fully created, verified, and cleaned up
+   (both disposable leagues and both disposable players confirmed 404),
+   a read-only `PRAGMA foreign_key_check` against
+   `C:\inetpub\league-staging\data\league.db` returned 27 violations
+   across two clusters -- both predating this verification pass and both
+   predating the `11a02a6` deploy:
+   - League id 6 (deleted before the fix existed) had left season id 9,
+     teams 23/24, and their full set of season-owned children (1 match
+     with 6 `match_results`/9 `round_results`, 3 `lineup_plans`, 2
+     `season_teams`, 6 `season_rosters`) intact and orphaned -- this is
+     the "Substitute Verify Season" fixture from the 2026-09-02
+     Substitute Workflow Phase 1 staging pass (section 21).
+   - Season id 10 (deleted before the fix took effect) had left 2
+     `season_teams` rows and 6 `season_rosters` rows behind, referencing
+     a season, 2 teams, and 6 players that no longer existed at all --
+     this is the fixture from the 2026-09-17 Default Lineup staging pass
+     that originally surfaced Known Gap #19 (section 25).
+
+   Per the original fix task's explicit instruction not to auto-clean
+   existing orphaned data, this verification pass stopped at the
+   integrity check and reported the evidence rather than deleting
+   anything. A follow-up remediation pass, approved separately, then:
+   1. Before any write, copied the staging database to
+      `C:\inetpub\league-staging\backups\league_2026-09-17_200438.db`
+      plus its `-wal`/`-shm` sidecars. The application was not stopped
+      for this copy, so it was a best-effort live three-file copy, not a
+      transactionally guaranteed atomic SQLite snapshot -- the
+      post-remediation checks below validate the live database itself,
+      not the internal consistency of this backup copy.
+   2. Re-captured the complete `PRAGMA foreign_key_check` output and
+      confirmed, row by row, that every violation and every legitimate
+      child row it would cascade (matches, lineup_plans, season_teams,
+      season_rosters, match_results, round_results) belonged exclusively
+      to the two clusters above -- no shared or product data was
+      touched.
+   3. The 27 violation records corresponded to only 11 physical orphan
+      rows (`season_rosters` and `season_teams` rows each have 3 foreign
+      keys, so each one produces 3 violation records). Ran one explicit
+      transaction with `PRAGMA foreign_keys=ON` and directly deleted
+      those 11 rows by exact ID: `season_rosters` ids 180-185 (6),
+      `season_teams` ids 59-60 (2), `seasons` id 9 (1), `teams` ids
+      23-24 (2). No other row was targeted directly. The schema's own
+      `ON DELETE CASCADE`/`SET NULL` then removed 27 further dependent
+      rows as a consequence, separately from the 11 direct deletes:
+      `season_teams` ids 57-58 and `season_rosters` ids 174-179 (season
+      9's own registration/roster rows), 1 match (id 42), 3
+      `lineup_plans`, 6 `match_results` and 9 `round_results` (both
+      cascaded transitively from that match), and `team_id` cleared to
+      `NULL` (not deleted) on the 7 players who were still validly
+      assigned to teams 23/24. `PRAGMA foreign_key_check` returned zero
+      rows inside the transaction before it was committed.
+   4. Confirmed post-commit: `PRAGMA foreign_key_check` returns zero
+      rows; `PRAGMA integrity_check` returns `ok`; `GET /api/leagues`
+      returns only the 3 expected shared leagues (Demo Pool League, Demo
+      9-Ball League, Fixture Scoresheet League), and the Fixture
+      Scoresheet League's own row is unchanged; the 7 preserved players
+      (formerly on teams 23/24) show `team_id: null` rather than having
+      been deleted; and both `GET /api/leagues` and `GET /api/players`
+      return 200.
+
+   No product data was touched -- every deleted or cascaded row traced
+   back to one of the two disposable clusters above, confirmed by exact
+   row ID before deletion, with a fresh backup taken first. This
+   cleanup removed leftover data from before the fix was deployed; it is
+   separate from, and does not change, Scenarios A and B above, which
+   are the proof that the deployed fix itself prevents any *new* row
+   from being orphaned this way.
+5. **Cleanup.** Both disposable leagues (Scenario A and B), their
+   seasons, teams, and lineup plans are gone; both disposable players
+   were individually deleted after confirming `team_id` was cleared by
+   the cascade. The shared Fixture Scoresheet League and the two demo
+   leagues are unchanged. Disposable `league_admin` bootstrap users
+   created during this pass and its remediation remain on staging (5
+   total across several verification/debugging attempts), per the
+   no-delete-user-endpoint convention every prior staging pass has
+   followed. No API keys or secrets are recorded here or elsewhere in
+   this checklist.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |
@@ -2763,7 +2875,7 @@ than touching the shared Fixture Scoresheet League.
 | 16 | No Sub control for a lineup slot resolved only from already-scored round results (no known `lineup_plans` row for it) -- retroactively substituting a played match raises different questions this phase doesn't answer -- discovered 2026-09-02 during Substitute Workflow Phase 1 | Low (known/tracked) | `web/domains/matches/match-entry-page-component.js` | Open -- explicitly deferred, not bundled into Substitute Workflow Phase 1 |
 | 17 | Weekly Summary's `player_stats` array (now carrying `is_sub`/`sub_for_name` as of Substitute Workflow Phase 1) is still not rendered in that screen at all -- pre-existing since Weekly Summary Phase 1, not a regression -- discovered 2026-09-02 | Low (known/tracked) | `web/domains/weekly-summary/weekly-summary-page-component.js` | Open -- explicitly deferred, not bundled into Substitute Workflow Phase 1 |
 | 18 | Player Overview's schedule section won't show a substitute's one-off match for a different team (schedule resolves via the player's own team for the season, not the team they subbed for) -- discovered 2026-09-02 during Substitute Workflow Phase 1 | Low (known/tracked, accepted) | `handlers/api_player_overview_handler.go` | Open -- explicitly accepted as a limitation, not the "big player-history redesign" this phase was told not to force |
-| 19 | Deleting a league or season could remove the parent row while leaving cascade-owned dependent rows (seasons, teams, lineup plans, and other season/league-owned rows) orphaned, because SQLite's `foreign_keys` pragma was enabled on only one connection instead of every connection in `database/sql`'s pool -- discovered 2026-09-17 during default-lineup staging verification cleanup | ~~High~~ | `db/db.go` SQLite connection initialization and the league/season delete paths | **Fixed 2026-09-17** by `sqlite-foreign-key-cascade-enforcement`. **Root cause confirmed** (previously only a working hypothesis): a new test (`TestForeignKeysPragma_EnabledOnEveryPooledConnection`) held multiple concurrent `*sql.Conn` connections right after `db.Init` and queried `PRAGMA foreign_keys` on each -- the connection `db.Init`'s startup `Exec` call happened to configure returned `1`, but every additional pooled connection returned `0`, proving foreign-key enforcement was never applied pool-wide (SQLite does not persist `foreign_keys` in the database file the way it does `journal_mode`). **Fix:** `db.Init` now opens the database as `<path>?_pragma=foreign_keys(1)`; `modernc.org/sqlite`'s driver re-applies a DSN's `_pragma` query parameters to every connection it opens (confirmed by reading that package's `Driver.Open`/`applyQueryParams` source directly, not assumed), so every pooled connection now enforces foreign keys -- confirmed by the same multi-connection test now passing. **Corrected schema semantics (per PM clarification -- the original write-up above incorrectly treated players as orphaned):** players are never expected to be deleted when their team or league is -- `players.team_id` is declared `ON DELETE SET NULL`, not `CASCADE` -- so a surviving player with `team_id` cleared to `NULL` after its team is deleted is the correct, intended outcome, not orphaned data. Only surviving seasons, teams, and lineup_plans (and other league/season-owned rows) after their parent is deleted are defects. Three new regression tests cover the three schema behaviors separately. `TestForeignKeyEnforcement_SeasonDelete_CascadesSeasonOwnedRows` and `_LeagueDelete_CascadesSeasonsTeamsAndOwnedRows` exercise their real `SeasonService.DeleteSeason`/`SeasonStore` and `LeagueService.DeleteLeague`/`LeagueStore` delete paths respectively. `_TeamDelete_PlayersSurviveWithTeamIDCleared` deliberately uses a direct SQL `DELETE FROM teams` instead of `TeamService`/`TeamStore`, because `TeamStore.DeleteTeam` already performs an explicit `UPDATE players SET team_id=NULL` of its own before deleting the team row -- going through that path would prove the *application code* clears `team_id`, not that the *schema's* `ON DELETE SET NULL` action does, which is what this regression is actually about. All three tests deliberately hold a separate connection open first so the delete under test cannot reuse the single already-correctly-configured `db.Init` connection -- confirmed necessary by temporarily reverting the fix and observing all three fail without that connection-forcing step (a straight-line sequential test otherwise reuses one connection throughout and never exercises the bug). All three also assert `PRAGMA foreign_key_check` reports zero violations. No existing data was reset, rewritten, or auto-cleaned; the fix only changes how future connections are configured. See `doc/architecture-decisions.md`'s "SQLite foreign-key enforcement is a per-connection invariant" Decision History entry and `doc/roadmap.md`'s Completed entry for full detail. |
+| 19 | Deleting a league or season could remove the parent row while leaving cascade-owned dependent rows (seasons, teams, lineup plans, and other season/league-owned rows) orphaned, because SQLite's `foreign_keys` pragma was enabled on only one connection instead of every connection in `database/sql`'s pool -- discovered 2026-09-17 during default-lineup staging verification cleanup | ~~High~~ | `db/db.go` SQLite connection initialization and the league/season delete paths | **Fixed 2026-09-17** by `sqlite-foreign-key-cascade-enforcement`. **Root cause confirmed** (previously only a working hypothesis): a new test (`TestForeignKeysPragma_EnabledOnEveryPooledConnection`) held multiple concurrent `*sql.Conn` connections right after `db.Init` and queried `PRAGMA foreign_keys` on each -- the connection `db.Init`'s startup `Exec` call happened to configure returned `1`, but every additional pooled connection returned `0`, proving foreign-key enforcement was never applied pool-wide (SQLite does not persist `foreign_keys` in the database file the way it does `journal_mode`). **Fix:** `db.Init` now opens the database as `<path>?_pragma=foreign_keys(1)`; `modernc.org/sqlite`'s driver re-applies a DSN's `_pragma` query parameters to every connection it opens (confirmed by reading that package's `Driver.Open`/`applyQueryParams` source directly, not assumed), so every pooled connection now enforces foreign keys -- confirmed by the same multi-connection test now passing. **Corrected schema semantics (per PM clarification -- the original write-up above incorrectly treated players as orphaned):** players are never expected to be deleted when their team or league is -- `players.team_id` is declared `ON DELETE SET NULL`, not `CASCADE` -- so a surviving player with `team_id` cleared to `NULL` after its team is deleted is the correct, intended outcome, not orphaned data. Only surviving seasons, teams, and lineup_plans (and other league/season-owned rows) after their parent is deleted are defects. Three new regression tests cover the three schema behaviors separately. `TestForeignKeyEnforcement_SeasonDelete_CascadesSeasonOwnedRows` and `_LeagueDelete_CascadesSeasonsTeamsAndOwnedRows` exercise their real `SeasonService.DeleteSeason`/`SeasonStore` and `LeagueService.DeleteLeague`/`LeagueStore` delete paths respectively. `_TeamDelete_PlayersSurviveWithTeamIDCleared` deliberately uses a direct SQL `DELETE FROM teams` instead of `TeamService`/`TeamStore`, because `TeamStore.DeleteTeam` already performs an explicit `UPDATE players SET team_id=NULL` of its own before deleting the team row -- going through that path would prove the *application code* clears `team_id`, not that the *schema's* `ON DELETE SET NULL` action does, which is what this regression is actually about. All three tests deliberately hold a separate connection open first so the delete under test cannot reuse the single already-correctly-configured `db.Init` connection -- confirmed necessary by temporarily reverting the fix and observing all three fail without that connection-forcing step (a straight-line sequential test otherwise reuses one connection throughout and never exercises the bug). All three also assert `PRAGMA foreign_key_check` reports zero violations. No existing data was reset, rewritten, or auto-cleaned; the fix only changes how future connections are configured. See `doc/architecture-decisions.md`'s "SQLite foreign-key enforcement is a per-connection invariant" Decision History entry and `doc/roadmap.md`'s Completed entry for full detail. **Staging-verified 2026-09-17** against deployed commit `11a02a6`: both season and league deletion cascade correctly end-to-end through the real API, and player `SET NULL` is confirmed through the real API, not just the regression test -- see section 26. That same pass found and, after PM approval, remediated 27 pre-existing foreign-key violations left behind by disposable fixtures created before this fix was deployed (a fresh backup was taken first, and the exact row inventory was confirmed before any delete); no product data was affected. See section 26 for full evidence. |
 
 ## Recommended Next Branches
 
