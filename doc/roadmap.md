@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-09-17
+**Last reviewed:** 2026-09-19
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -26,15 +26,91 @@ Stabilize current admin workflows
 
 ## Now
 
+**Users / Roles / Authentication -- promoted to Now 2026-09-18, PM
+correction round accepted 2026-09-19.**
+Personal API keys were an implementation bridge, not the intended human
+sign-in experience; the application must be testable by multiple real
+people with distinct identities and permissions. A discovery pass
+(branch `user-auth-roles-discovery`) produced the full design; Phase 1
+(branch `user-auth-roles-phase-1-login-access`) implemented the first
+complete vertical slice: email/password identity (Argon2id, measured
+parameters, no hardcoded cost constant), server-managed sessions with
+CSRF protection, scoped `role_assignments` (system_admin global,
+league_admin per-league, both DB-CHECK-enforced), a centralized
+`auth.Authorize` policy, a real browser login screen (with a password
+setup mode and an "Use Admin Key instead" link) with Player View/Admin
+View workspace switching, and Users Admin extensions for email-identity
+account provisioning and lifecycle (setup tokens, deactivate/reactivate,
+revoke keys). Existing personal API keys remain fully functional
+throughout, including through a one-time, empirically-verified schema
+migration (`db.migrateUsersAndAPIKeys`) that moves API-key credentials
+off the `users` table into a dedicated `user_api_keys` table and
+backfills `role_assignments` from every legacy flat `role` value.
+
+A PM correction round (2026-09-19) found the initial handoff
+operationally incomplete and fixed it: session authentication now works
+on every protected route family, not only league/season CRUD (players,
+teams, complete season setup, schedule/pushback, lineups, match scoring/
+approval, week close/reopen, finances, handicap apply, backup, user
+administration, and Player Overview all now go through the same
+`auth.Authorize` call, scoped to each route's own resource -- a League A
+admin can no longer read or mutate League B's data through any of these
+routes); league creation's creator self-grant is now a real, single
+database transaction (`sqlite.LeagueSelfGrantStore`), not a compensating
+create-then-grant-then-delete sequence; the users-table migration now
+creates its four auth child tables only after the table it depends on
+has its final shape, matching its own documented ordering; and the
+migration explicitly preserves `sqlite_sequence`'s historical high-water
+mark even when the highest-id row was deleted before migration ran. See
+`doc/domains/users/README.md`'s "PM correction round (2026-09-19)"
+section for full detail.
+
+A second correction round (also 2026-09-19) closed five narrower gaps:
+player create/update/merge, match team assignment, and lineup save now
+validate every RELATED resource's real league (not only the primary one
+first checked), closing several related-resource cross-league bypasses;
+an unassigned player is now explicitly system_admin-only on every route
+(fixing an accidental 400 on bodyless `DELETE /api/players/{id}`); the
+session-authorization gate no longer falls open when only part of the
+auth stack is wired; the Apply route no longer requires the static
+`LEAGUE_ADMIN_TOKEN` to be configured when session/Bearer auth is
+available; and the users-migration `sqlite_sequence` restoration now
+covers a rebuild that copies zero rows (every legacy user deleted before
+migration). See `doc/domains/users/README.md`'s "PM final authorization
+corrections (round 2, 2026-09-19)" section for full detail.
+
+A third correction round (also 2026-09-19) closed two remaining defects:
+an active password session now always takes precedence over a stored
+legacy Admin Key -- both `web/lib/api-client.js` (never attaches the Admin
+Key while a session is active, and login clears any stored key) and
+`handlers/api_auth_middleware.go`'s `resolveIdentity` (checks the session
+cookie before a Bearer header) now enforce this, so the identity a
+browser tab displays can never diverge from the identity its requests
+execute as; and a player update that would persist `team_id = NULL`
+(explicit `null`, or simply omitting the field under the endpoint's
+full-PUT semantics) is now system_admin-only, closing a path where a
+league_admin could authorize against their own player and then silently
+unassign them. See `doc/domains/users/README.md`'s "PM final credential-
+precedence and player-unassignment corrections (round 3, 2026-09-19)"
+section for full detail.
+
+Explicitly deferred, not oversights (see
+`doc/domains/users/README.md`'s Phase 1 section for the full list and
+reasoning): self-registration and automatic player-email matching,
+pending player-link review, email verification/delivery, the captain
+role, and two-team player score approval.
+
+---
+
 The whole-app admin-screen and product-test-readiness chunk is complete
-(see Completed / Largely Completed below). **No actionable Now item
-remains.** Known Gap #9 (the last actionable finding, "Generate Schedule"
-undo) was closed 2026-09-11 as a documented decision, not a code change --
-see `doc/testing/product-smoke-test-checklist.md`'s Known Gap #9 and the
-Completed / Largely Completed entry below. Product test readiness moves
-to a closed/monitoring posture: nothing left to schedule, only a short
-list of low-severity items to watch in case a real workflow (not just
-the smoke checklist) hits one of them.
+(see Completed / Largely Completed below). Known Gap #9 (the last
+actionable finding from that chunk, "Generate Schedule" undo) was closed
+2026-09-11 as a documented decision, not a code change -- see
+`doc/testing/product-smoke-test-checklist.md`'s Known Gap #9 and the
+Completed / Largely Completed entry below. That chunk of product test
+readiness remains in a closed/monitoring posture: nothing left to
+schedule there, only a short list of low-severity items to watch in
+case a real workflow (not just the smoke checklist) hits one of them.
 
 - Product test-readiness monitoring (no action required unless a real
   workflow hits one of these):

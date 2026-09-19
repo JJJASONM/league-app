@@ -1,19 +1,33 @@
 package handlers
 
-import "net/http"
+import (
+	"net/http"
+
+	"league_app/backend/domains/auth"
+)
 
 // registerSeasonSetupRoutes mounts season CRUD, activation, rules,
 // skipped-weeks, bye-requests, and season team/roster routes onto mux.
-// GET reads are unprotected; mutations are gated by clearanceAuth.
-// lineupMgr is optional (nil when unwired, e.g. in tests that don't need
-// it) -- it only feeds the checklist's non-blocking default-lineup
-// warning; every other route in this function is unaffected by it.
-func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, ruleMgr RuleManager, lineupMgr LineupManager, applyAuth ApplyAuthResolver) {
+// GET reads are unprotected. lineupMgr is optional (nil when unwired,
+// e.g. in tests that don't need it) -- it only feeds the checklist's
+// non-blocking default-lineup warning; every other route in this
+// function is unaffected by it.
+//
+// Every mutation in this function is gated by guardedLeagueAdminAction,
+// scoped to the season's owning league via seasonIDPathScope -- every
+// route here carries the season id as its {id} path parameter, including
+// create (from the body's league_id, via createSeasonScope) and every
+// nested route (rules, skipped-weeks, bye-requests, season-teams,
+// roster), since {id} always resolves to the same season regardless of
+// which nested {rid}/{sid}/{bid}/{tid}/{pid} follows it.
+func registerSeasonSetupRoutes(mux *http.ServeMux, deps Dependencies, seasonMgr SeasonManager, ruleMgr RuleManager, lineupMgr LineupManager) {
+	scope := seasonIDPathScope(seasonMgr)
+
 	mux.HandleFunc("GET /api/seasons", func(w http.ResponseWriter, r *http.Request) {
 		listSeasons(w, r, seasonMgr)
 	})
 	mux.HandleFunc("POST /api/seasons",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, createSeasonScope, func(w http.ResponseWriter, r *http.Request) {
 			createSeason(w, r, seasonMgr)
 		}),
 	)
@@ -21,17 +35,17 @@ func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, rule
 		getSeason(w, r, seasonMgr)
 	})
 	mux.HandleFunc("PUT /api/seasons/{id}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			updateSeason(w, r, seasonMgr)
 		}),
 	)
 	mux.HandleFunc("DELETE /api/seasons/{id}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			deleteSeason(w, r, seasonMgr)
 		}),
 	)
 	mux.HandleFunc("POST /api/seasons/{id}/activate",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			activateSeason(w, r, seasonMgr)
 		}),
 	)
@@ -40,17 +54,17 @@ func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, rule
 		listSeasonRules(w, r, ruleMgr)
 	})
 	mux.HandleFunc("POST /api/seasons/{id}/rules",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			createSeasonRule(w, r, ruleMgr)
 		}),
 	)
 	mux.HandleFunc("PUT /api/seasons/{id}/rules/{rid}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			updateSeasonRule(w, r, ruleMgr)
 		}),
 	)
 	mux.HandleFunc("DELETE /api/seasons/{id}/rules/{rid}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			deleteSeasonRule(w, r, ruleMgr)
 		}),
 	)
@@ -59,12 +73,12 @@ func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, rule
 		listSkippedWeeks(w, r, seasonMgr)
 	})
 	mux.HandleFunc("POST /api/seasons/{id}/skipped-weeks",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			createSkippedWeek(w, r, seasonMgr)
 		}),
 	)
 	mux.HandleFunc("DELETE /api/seasons/{id}/skipped-weeks/{sid}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			deleteSkippedWeek(w, r, seasonMgr)
 		}),
 	)
@@ -73,17 +87,17 @@ func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, rule
 		listByeRequests(w, r, seasonMgr)
 	})
 	mux.HandleFunc("POST /api/seasons/{id}/bye-requests",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			createByeRequest(w, r, seasonMgr)
 		}),
 	)
 	mux.HandleFunc("PUT /api/seasons/{id}/bye-requests/{bid}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			updateByeRequest(w, r, seasonMgr)
 		}),
 	)
 	mux.HandleFunc("DELETE /api/seasons/{id}/bye-requests/{bid}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			deleteByeRequest(w, r, seasonMgr)
 		}),
 	)
@@ -92,7 +106,7 @@ func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, rule
 		listSeasonTeams(w, r, seasonMgr)
 	})
 	mux.HandleFunc("POST /api/seasons/{id}/teams",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			addSeasonTeam(w, r, seasonMgr)
 		}),
 	)
@@ -100,12 +114,12 @@ func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, rule
 		getPreviousSeasonTeams(w, r, seasonMgr)
 	})
 	mux.HandleFunc("PUT /api/seasons/{id}/teams/{tid}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			updateSeasonTeam(w, r, seasonMgr)
 		}),
 	)
 	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			removeSeasonTeam(w, r, seasonMgr)
 		}),
 	)
@@ -113,12 +127,12 @@ func registerSeasonSetupRoutes(mux *http.ServeMux, seasonMgr SeasonManager, rule
 		listSeasonRoster(w, r, seasonMgr)
 	})
 	mux.HandleFunc("POST /api/seasons/{id}/teams/{tid}/roster",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			addRosterPlayer(w, r, seasonMgr)
 		}),
 	)
 	mux.HandleFunc("DELETE /api/seasons/{id}/teams/{tid}/roster/{pid}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionSeasonSetup, scope, func(w http.ResponseWriter, r *http.Request) {
 			removeRosterPlayer(w, r, seasonMgr)
 		}),
 	)

@@ -13,12 +13,26 @@
 // it is reached directly (e.g. a stale tab, a role changed mid-session).
 //
 // New users may be created as system_admin, league_admin, or player
-// (Player Account Access Phase 1 -- requires linking an existing player).
-// "admin" is a legacy alias kept valid on existing rows but is not offered
-// here. This screen does not support editing, deactivating, or rotating
-// keys for any role, including player.
+// (Player Account Access Phase 1 -- requires linking an existing player),
+// via the legacy API-key path ("Add User (API Key)"). "admin" is a legacy
+// alias kept valid on existing rows but is not offered here.
+//
+// Users/Roles Phase 1 adds a second creation path, "Provision Email
+// Login" -- an email-identity account with no password and no API key,
+// paired with a one-time password setup token (issued from the row
+// menu) the account holder uses to choose their own password. The row
+// menu also supports deactivate/reactivate (deactivation immediately
+// revokes every session and API key for that account) and revoking API
+// keys without deactivating. Scoped role assignment (grant/revoke
+// league_admin for a specific league, or system_admin) is not yet
+// surfaced in this UI -- use the API directly
+// (POST /api/auth/admin/users/{id}/roles) until a later phase adds it
+// here.
 
-import { fetchUsers, createUser } from './users-api-service.js';
+import {
+  fetchUsers, createUser,
+  provisionUser, issueSetupToken, deactivateUser, reactivateUser, revokeAPIKeys,
+} from './users-api-service.js';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, ch =>
@@ -37,15 +51,20 @@ class UsersManagementPage extends HTMLElement {
     this.innerHTML = `
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h4 class="mb-0 fw-bold">Users</h4>
-        <button class="btn btn-primary btn-sm" data-action="add-user">
-          <i class="bi bi-plus-lg"></i> Add User
-        </button>
+        <div>
+          <button class="btn btn-outline-primary btn-sm me-2" data-action="provision-account">
+            <i class="bi bi-envelope-plus"></i> Provision Email Login
+          </button>
+          <button class="btn btn-primary btn-sm" data-action="add-user">
+            <i class="bi bi-plus-lg"></i> Add User (API Key)
+          </button>
+        </div>
       </div>
       <div class="card">
         <div class="card-body p-0">
           <table class="table table-hover mb-0">
             <thead><tr>
-              <th>Username</th><th>Role</th><th>Linked Player</th><th>Active</th><th>Created</th>
+              <th>Username</th><th>Email</th><th>Role</th><th>Linked Player</th><th>Active</th><th>Created</th><th></th>
             </tr></thead>
             <tbody class="um-tbody"></tbody>
           </table>
@@ -54,14 +73,26 @@ class UsersManagementPage extends HTMLElement {
       <div class="um-new-key-alert alert alert-success d-none mt-3" role="alert"></div>`;
 
     this.#ensureModal();
+    this.#ensureProvisionModal();
 
     document.getElementById('um-save-btn')
       .addEventListener('click', () => this.#saveUser());
     document.getElementById('um-role')
       .addEventListener('change', () => this.#toggleLinkedPlayerRow());
+    document.getElementById('um-provision-save-btn')
+      .addEventListener('click', () => this.#saveProvisionedAccount());
 
     this.addEventListener('click', e => {
       if (e.target.closest('[data-action="add-user"]')) { this.#openNewUser(); }
+      if (e.target.closest('[data-action="provision-account"]')) { this.#openProvisionAccount(); }
+
+      const row = e.target.closest('[data-user-id]');
+      if (!row) return;
+      const userId = parseInt(row.dataset.userId, 10);
+      if (e.target.closest('[data-row-action="setup-token"]')) this.#issueSetupToken(userId);
+      if (e.target.closest('[data-row-action="deactivate"]')) this.#toggleActive(userId, false);
+      if (e.target.closest('[data-row-action="reactivate"]')) this.#toggleActive(userId, true);
+      if (e.target.closest('[data-row-action="revoke-keys"]')) this.#revokeKeys(userId);
     });
   }
 
@@ -143,16 +174,132 @@ class UsersManagementPage extends HTMLElement {
     const tbody = this.querySelector('.um-tbody');
     if (!tbody) return;
     tbody.innerHTML = this.#users.map(u => `
-      <tr>
+      <tr data-user-id="${u.id}">
         <td class="fw-semibold">${esc(u.username)}</td>
+        <td class="text-muted small">${u.email ? esc(u.email) : '<span class="text-muted">-</span>'}</td>
         <td><span class="badge bg-secondary">${esc(u.role)}</span></td>
         <td class="text-muted small">${u.player_name ? esc(u.player_name) : '<span class="text-muted">-</span>'}</td>
         <td>${u.active
           ? '<span class="badge bg-success">Active</span>'
           : '<span class="badge bg-secondary">Inactive</span>'}</td>
         <td class="text-muted small">${esc(u.created_at)}</td>
+        <td class="text-end">
+          <div class="dropdown">
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="dropdown">
+              <i class="bi bi-three-dots"></i>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><a class="dropdown-item" href="#" data-row-action="setup-token">Issue Password Setup Token</a></li>
+              <li><a class="dropdown-item" href="#" data-row-action="revoke-keys">Revoke API Keys</a></li>
+              ${u.active
+                ? '<li><a class="dropdown-item text-danger" href="#" data-row-action="deactivate">Deactivate</a></li>'
+                : '<li><a class="dropdown-item" href="#" data-row-action="reactivate">Reactivate</a></li>'}
+            </ul>
+          </div>
+        </td>
       </tr>`).join('') ||
-      '<tr><td colspan="5" class="text-center text-muted py-3">No users yet</td></tr>';
+      '<tr><td colspan="7" class="text-center text-muted py-3">No users yet</td></tr>';
+  }
+
+  #ensureProvisionModal() {
+    if (document.getElementById('user-provision-modal')) return;
+    const el = document.createElement('div');
+    el.innerHTML = `
+<div class="modal fade" id="user-provision-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Provision Email Login Account</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted">
+          Creates an account with an email identity but no password. Issue a
+          one-time setup token afterward (from this account's row menu) and
+          share it with the person out of band so they can choose their own
+          password.
+        </p>
+        <div class="mb-3">
+          <label class="form-label">Email *</label>
+          <input type="email" class="form-control" id="um-provision-email" autocomplete="off">
+        </div>
+        <div class="mb-1">
+          <label class="form-label">Linked Player (optional)</label>
+          <select class="form-select" id="um-provision-player-id">
+            <option value="">(none)</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="um-provision-save-btn">Provision</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+    document.body.appendChild(el.firstElementChild);
+  }
+
+  #openProvisionAccount() {
+    document.getElementById('um-provision-email').value = '';
+    const sorted = [...this.#allPlayers].sort((a, b) => a.name.localeCompare(b.name));
+    document.getElementById('um-provision-player-id').innerHTML =
+      '<option value="">(none)</option>' +
+      sorted.map(p => `<option value="${p.id}">${esc(p.name)}${p.team_name ? ' - ' + esc(p.team_name) : ''}</option>`).join('');
+    this.querySelector('.um-new-key-alert')?.classList.add('d-none');
+    new bootstrap.Modal(document.getElementById('user-provision-modal')).show();
+  }
+
+  async #saveProvisionedAccount() {
+    const email = document.getElementById('um-provision-email').value.trim();
+    if (!email) { toast('Email is required', 'warning'); return; }
+    const body = { email };
+    const playerId = parseInt(document.getElementById('um-provision-player-id')?.value, 10);
+    if (playerId) body.player_id = playerId;
+    try {
+      await provisionUser(body);
+      bootstrap.Modal.getInstance(document.getElementById('user-provision-modal'))?.hide();
+      toast('Account provisioned -- issue a password setup token from its row menu');
+      this.#users = await fetchUsers();
+      this.#renderList();
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  }
+
+  async #issueSetupToken(userId) {
+    try {
+      const result = await issueSetupToken(userId);
+      const alertEl = this.querySelector('.um-new-key-alert');
+      if (alertEl) {
+        alertEl.classList.remove('d-none');
+        alertEl.innerHTML =
+          `One-time password setup token (copy it now -- it cannot be shown again; ` +
+          `share it out of band):<br><code class="user-select-all">${esc(result.setup_token)}</code>`;
+      }
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  }
+
+  async #toggleActive(userId, active) {
+    try {
+      await (active ? reactivateUser(userId) : deactivateUser(userId));
+      toast(active ? 'Account reactivated' : 'Account deactivated -- all sessions and API keys were revoked');
+      this.#users = await fetchUsers();
+      this.#renderList();
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  }
+
+  async #revokeKeys(userId) {
+    try {
+      await revokeAPIKeys(userId);
+      toast('API keys revoked for this account');
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
   }
 
   #openNewUser() {

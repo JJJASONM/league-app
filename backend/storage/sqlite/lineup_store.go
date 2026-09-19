@@ -58,6 +58,47 @@ func (s *LineupStore) ListLineupPlans(ctx context.Context, req matches.ListLineu
 // SaveTeamLineup atomically deletes all existing lineup slots for the
 // given season/team/week and inserts the new player set.
 // Zero player IDs are silently skipped (treated as empty slots).
+// SeasonInfo returns seasonID's league_id and teams_managed flag, or
+// found=false if no such season exists.
+func (s *LineupStore) SeasonInfo(ctx context.Context, seasonID int64) (int64, bool, bool, error) {
+	var leagueID int64
+	var teamsManaged int
+	err := s.db.QueryRowContext(ctx, `SELECT league_id, teams_managed FROM seasons WHERE id=?`, seasonID).
+		Scan(&leagueID, &teamsManaged)
+	if err == sql.ErrNoRows {
+		return 0, false, false, nil
+	}
+	if err != nil {
+		return 0, false, false, err
+	}
+	return leagueID, teamsManaged == 1, true, nil
+}
+
+// TeamLeagueID returns teamID's league_id, or found=false if no such team exists.
+func (s *LineupStore) TeamLeagueID(ctx context.Context, teamID int64) (int64, bool, error) {
+	var leagueID int64
+	err := s.db.QueryRowContext(ctx, `SELECT league_id FROM teams WHERE id=?`, teamID).Scan(&leagueID)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return leagueID, true, nil
+}
+
+// TeamParticipatesInSeason reports whether teamID is registered in
+// season_teams for seasonID.
+func (s *LineupStore) TeamParticipatesInSeason(ctx context.Context, seasonID, teamID int64) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM season_teams WHERE season_id=? AND team_id=?`, seasonID, teamID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (s *LineupStore) SaveTeamLineup(ctx context.Context, req matches.SaveLineupRequest) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -13,18 +13,25 @@ import (
 	"runtime"
 	"time"
 
+	"league_app/backend/domains/auth"
 	"league_app/backend/domains/finances"
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/leagues"
 	"league_app/backend/domains/matches"
 	"league_app/backend/domains/players"
 	"league_app/backend/domains/rules"
-	"league_app/backend/domains/teams"
 	"league_app/backend/domains/seasons"
+	"league_app/backend/domains/teams"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
 	"league_app/handlers"
 )
+
+// argon2TargetDuration is the calibration target for password hashing --
+// OWASP's general guidance band for a login-path hash with no other rate
+// limiting yet. CalibrateArgon2 measures actual hardware speed against
+// this target rather than using a hardcoded parameter constant.
+const argon2TargetDuration = 300 * time.Millisecond
 
 //go:embed web
 var webFiles embed.FS
@@ -120,24 +127,61 @@ func main() {
 	pushbackSvc := matches.NewPushbackService(pushbackStore)
 	financeStore := sqlite.NewFinanceStore(db.DB)
 	financeSvc := finances.NewFinanceService(financeStore)
+
+	// Users/Roles Phase 1: password hashing parameters are measured on
+	// this actual machine at startup, not a hardcoded constant -- see
+	// backend/domains/auth/password.go's CalibrateArgon2 doc comment.
+	argon2Params, argon2Measured, err := auth.CalibrateArgon2(argon2TargetDuration)
+	if err != nil {
+		log.Fatalf("argon2 calibration: %v", err)
+	}
+	log.Printf("argon2id calibrated: memory=%dKiB iterations=%d parallelism=%d (measured %s, target %s)",
+		argon2Params.Memory, argon2Params.Iterations, argon2Params.Parallelism, argon2Measured, argon2TargetDuration)
+
+	authUserStore := sqlite.NewAuthUserStore(db.DB)
+	roleAssignmentStore := sqlite.NewRoleAssignmentStore(db.DB)
+	sessionStore := sqlite.NewSessionStore(db.DB)
+	passwordSetupStore := sqlite.NewPasswordSetupTokenStore(db.DB)
+	apiKeyAdminStore := sqlite.NewUserAPIKeyAdminStore(db.DB)
+	authSvc := auth.NewSessionService(authUserStore, roleAssignmentStore, sessionStore, passwordSetupStore, argon2Params)
+
+	// INSECURE_LOCAL_COOKIES is an explicit, logged opt-in for same-computer
+	// HTTP testing only (session/CSRF cookies omit Secure so the browser
+	// will still send them over plain http://localhost). It must never be
+	// set for any deployment reachable remotely -- Secure cookies require
+	// HTTPS, and there is no way to safely infer "this is local" from
+	// request headers, so this is a deliberate, visible operator choice,
+	// not autodetected.
+	insecureLocalCookies := os.Getenv("INSECURE_LOCAL_COOKIES") == "1"
+	if insecureLocalCookies {
+		log.Println("WARNING: INSECURE_LOCAL_COOKIES=1 -- session and CSRF cookies will NOT have Secure set. This is only appropriate for same-computer HTTP testing and must never be used where the server is reachable remotely.")
+	}
+
 	deps := handlers.Dependencies{
-		HandicapSvc:     hcSvc,
-		HandicapApplier: hcSvc,
-		AdminToken:      os.Getenv("LEAGUE_ADMIN_TOKEN"),
-		ApplyAuth:       sqlite.NewApplyAuthStore(db.DB),
-		WeekMgr:         weekSvc,
-		RoundMgr:        roundSvc,
-		RuleMgr:         ruleSvc,
-		LeagueMgr:       leagueSvc,
-		PlayerMgr:       playerSvc,
-		TeamMgr:         teamSvc,
-		SeasonMgr:       seasonSvc,
-		MatchMgr:        matchSvc,
-		ScheduleMgr:     scheduleSvc,
-		LineupMgr:       lineupSvc,
+		HandicapSvc:      hcSvc,
+		HandicapApplier:  hcSvc,
+		AdminToken:       os.Getenv("LEAGUE_ADMIN_TOKEN"),
+		ApplyAuth:        sqlite.NewApplyAuthStore(db.DB),
+		WeekMgr:          weekSvc,
+		RoundMgr:         roundSvc,
+		RuleMgr:          ruleSvc,
+		LeagueMgr:        leagueSvc,
+		PlayerMgr:        playerSvc,
+		TeamMgr:          teamSvc,
+		SeasonMgr:        seasonSvc,
+		MatchMgr:         matchSvc,
+		ScheduleMgr:      scheduleSvc,
+		LineupMgr:        lineupSvc,
 		PushbackMgr:      pushbackSvc,
 		PushbackApplyMgr: pushbackSvc,
 		FinanceMgr:       financeSvc,
+
+		AuthMgr:              authSvc,
+		RoleAssignmentMgr:    roleAssignmentStore,
+		AuthUserMgr:          authUserStore,
+		APIKeyMgr:            apiKeyAdminStore,
+		LeagueSelfGrantMgr:   sqlite.NewLeagueSelfGrantStore(db.DB),
+		InsecureLocalCookies: insecureLocalCookies,
 	}
 
 	// API routes

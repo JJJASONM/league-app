@@ -162,6 +162,32 @@ func (s *MatchStore) IsSeasonClosedForMatch(ctx context.Context, matchID int64) 
 	return closed == 1, nil
 }
 
+// SeasonLeagueID returns seasonID's league_id, or found=false if no such season exists.
+func (s *MatchStore) SeasonLeagueID(ctx context.Context, seasonID int64) (int64, bool, error) {
+	var leagueID int64
+	err := s.db.QueryRowContext(ctx, `SELECT league_id FROM seasons WHERE id=?`, seasonID).Scan(&leagueID)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return leagueID, true, nil
+}
+
+// TeamLeagueID returns teamID's league_id, or found=false if no such team exists.
+func (s *MatchStore) TeamLeagueID(ctx context.Context, teamID int64) (int64, bool, error) {
+	var leagueID int64
+	err := s.db.QueryRowContext(ctx, `SELECT league_id FROM teams WHERE id=?`, teamID).Scan(&leagueID)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return leagueID, true, nil
+}
+
 // normMatchDatePtr truncates a date pointer to YYYY-MM-DD, discarding any time
 // component added by the SQLite driver when it coerces DATE columns to time.Time.
 func normMatchDatePtr(s *string) *string {

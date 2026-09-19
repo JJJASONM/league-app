@@ -48,6 +48,23 @@ type LineupStore interface {
 	// domainerr.NotFound when no row matches.
 	GetLineupPlan(ctx context.Context, id int64) (models.LineupPlan, error)
 
+	// SeasonInfo returns seasonID's league_id and its teams_managed flag,
+	// or found=false if no such season exists. Used by SaveTeamLineup to
+	// validate that the requested team belongs to the season's own league
+	// (PM correction: a related-resource team_id from the request body
+	// must never be allowed to attach a different league's team to a
+	// season's lineup), and, for teams_managed seasons, that it actually
+	// participates in the season.
+	SeasonInfo(ctx context.Context, seasonID int64) (leagueID int64, teamsManaged bool, found bool, err error)
+
+	// TeamLeagueID returns teamID's league_id, or found=false if no such
+	// team exists.
+	TeamLeagueID(ctx context.Context, teamID int64) (leagueID int64, found bool, err error)
+
+	// TeamParticipatesInSeason reports whether teamID is registered in
+	// season_teams for seasonID.
+	TeamParticipatesInSeason(ctx context.Context, seasonID, teamID int64) (bool, error)
+
 	// FindMatchID returns the id of the match where teamID plays (home or
 	// away) in seasonID/weekNumber, or found=false when no such match
 	// exists yet. Used to look up lock state (season closed, week closed,

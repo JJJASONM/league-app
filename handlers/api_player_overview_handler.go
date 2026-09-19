@@ -34,14 +34,13 @@ import (
 // shared testServer() helper); when nil, money falls back to the old
 // Phase 1 "not tracked" placeholder instead of erroring.
 //
-// Access control (Player Account Access Phase 1): system_admin/admin/
-// league_admin may view any player's overview, unchanged from Phase 2's
-// money-integration correction. A resolved role="player" user may view
-// only the one player their account is linked to (models.User.PlayerID);
-// requesting any other player's overview is forbidden. Any other role is
-// forbidden. When no user is in the request context (ApplyAuth not wired,
-// e.g. the shared testServer() helper), access is left open -- see
-// checkPlayerOverviewAccess.
+// Access control (Player Account Access Phase 1, extended by Users/Roles
+// Phase 1's session support): enforced entirely at the routing layer by
+// playerOverviewAuth in api_player_overview_routes.go, before this
+// handler ever runs -- system_admin may view any player; a league_admin
+// may view only players in a league they are assigned to (or, under the
+// legacy Bearer-only fallback, any player at all); a linked player may
+// view only their own overview; any other identity is forbidden.
 func getPlayerOverview(
 	w http.ResponseWriter, r *http.Request,
 	playerMgr PlayerManager, seasonMgr SeasonManager, teamMgr TeamManager,
@@ -50,10 +49,6 @@ func getPlayerOverview(
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-	if !checkPlayerOverviewAccess(r, id) {
-		jsonError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -165,14 +160,13 @@ func getPlayerOverview(
 	jsonOK(w, overview)
 }
 
-// checkPlayerOverviewAccess enforces per-viewer access to Player Overview
-// (Player Account Access Phase 1): system_admin/admin/league_admin may view
-// any player's overview; a resolved role="player" user may view only their
-// own linked player_id; any other role is forbidden. When no user is in
-// the request context -- ApplyAuth is not wired, e.g. the shared
-// testServer() test helper, so requirePersonalKeyOnly was a passthrough --
-// access is left open, matching every other personal-key-protected route's
-// behavior under that same test setup.
+// checkPlayerOverviewAccess is the pre-Phase-1 flat, Bearer-only access
+// check: system_admin/admin/league_admin may view any player's overview; a
+// resolved role="player" user may view only their own linked player_id;
+// any other role is forbidden. Used only by playerOverviewAuth's legacy
+// fallback branch (deps.RoleAssignmentMgr nil, test-only) -- the real,
+// scoped path goes through auth.Authorize instead (see
+// api_player_overview_routes.go).
 func checkPlayerOverviewAccess(r *http.Request, requestedPlayerID int64) bool {
 	user := clearanceUserFromContext(r.Context())
 	if user == nil {

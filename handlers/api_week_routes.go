@@ -1,13 +1,20 @@
 package handlers
 
-import "net/http"
+import (
+	"net/http"
+
+	"league_app/backend/domains/auth"
+)
 
 // registerWeekRoutes mounts the week workflow routes onto mux: list, validate,
 // close, reopen, acknowledgments, advance-preview, and recap. GET reads are
-// unprotected; close and reopen are gated by clearanceAuth. Callers must
-// guard on deps.WeekMgr != nil before calling, matching the existing
-// registration guard in Register.
-func registerWeekRoutes(mux *http.ServeMux, weekMgr WeekManager, applyAuth ApplyAuthResolver) {
+// unprotected; close and reopen are gated by guardedLeagueAdminAction,
+// scoped to the season's league (the {id} path parameter is the season id
+// on every route here). Callers must guard on deps.WeekMgr != nil before
+// calling, matching the existing registration guard in Register.
+func registerWeekRoutes(mux *http.ServeMux, deps Dependencies, weekMgr WeekManager, seasonMgr SeasonManager) {
+	scope := seasonIDPathScope(seasonMgr)
+
 	mux.HandleFunc("GET /api/seasons/{id}/weeks", func(w http.ResponseWriter, r *http.Request) {
 		listWeeks(w, r, weekMgr)
 	})
@@ -15,12 +22,12 @@ func registerWeekRoutes(mux *http.ServeMux, weekMgr WeekManager, applyAuth Apply
 		validateWeekHandler(w, r, weekMgr)
 	})
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/close",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionWeekCloseReopen, scope, func(w http.ResponseWriter, r *http.Request) {
 			closeWeekHandler(w, r, weekMgr)
 		}),
 	)
 	mux.HandleFunc("POST /api/seasons/{id}/weeks/{week}/reopen",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionWeekCloseReopen, scope, func(w http.ResponseWriter, r *http.Request) {
 			reopenWeekHandler(w, r, weekMgr)
 		}),
 	)

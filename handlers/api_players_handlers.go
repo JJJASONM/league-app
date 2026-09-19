@@ -23,11 +23,28 @@ func listPlayers(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
 	jsonOK(w, list)
 }
 
-func createPlayer(w http.ResponseWriter, r *http.Request, mgr PlayerManager) {
+// createPlayer rejects a body.league_id that disagrees with body.team_id's
+// real, persisted league (PM correction: "reject a mismatch between body
+// league_id and the team's real league") -- a data-integrity check, not
+// an authorization decision (authorization, based on the team's real
+// league regardless of what body.league_id claims, already happened in
+// createPlayerScope before this handler ever runs).
+func createPlayer(w http.ResponseWriter, r *http.Request, mgr PlayerManager, teamMgr TeamManager) {
 	var body models.Player
 	if err := decode(r, &body); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
+	}
+	if body.TeamID != nil && body.LeagueID != 0 {
+		team, err := teamMgr.GetTeam(r.Context(), *body.TeamID)
+		if err != nil {
+			mapPlayerErr(w, err)
+			return
+		}
+		if team.LeagueID != body.LeagueID {
+			jsonError(w, "team does not belong to the specified league", http.StatusConflict)
+			return
+		}
 	}
 	created, err := mgr.CreatePlayer(r.Context(), players.CreatePlayerInput{
 		PlayerNumber: body.PlayerNumber,

@@ -25,18 +25,27 @@ func NewApplyAuthStore(db *sql.DB) *ApplyAuthStore {
 	return &ApplyAuthStore{db: db}
 }
 
-// ResolveApplyUserByAPIKey looks up an active user whose api_key_hash matches
-// SHA-256(apiKey). Returns nil, nil when no matching active user is found.
-// PlayerID is scanned (Player Account Access Phase 1) so downstream
-// ownership checks (e.g. Player Overview) can compare it against a
-// requested player id; PlayerName is left empty here (only ListApplyUsers
-// populates it, for the Users Admin screen's display).
+// ResolveApplyUserByAPIKey looks up an active user with a non-revoked
+// user_api_keys row whose key_hash matches SHA-256(apiKey). Returns nil,
+// nil when no matching active user/key is found. PlayerID is scanned
+// (Player Account Access Phase 1) so downstream ownership checks (e.g.
+// Player Overview) can compare it against a requested player id;
+// PlayerName is left empty here (only ListApplyUsers populates it, for
+// the Users Admin screen's display).
+//
+// Users/Roles Phase 1: API-key credentials moved off users.api_key_hash
+// (which could not support a password-only user while it remained NOT
+// NULL UNIQUE) into this separate user_api_keys table -- see
+// db.migrateUsersAndAPIKeys for the one-time migration. This query's
+// external behavior (and this method's signature) is unchanged for every
+// existing caller; only the underlying table changed.
 func (s *ApplyAuthStore) ResolveApplyUserByAPIKey(ctx context.Context, apiKey string) (*models.User, error) {
 	hash := hashAPIKey(apiKey)
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, username, role, player_id, active, created_at
-		FROM users
-		WHERE api_key_hash = ? AND active = 1
+		SELECT u.id, u.username, u.role, u.player_id, u.active, u.created_at
+		FROM users u
+		JOIN user_api_keys k ON k.user_id = u.id
+		WHERE k.key_hash = ? AND k.revoked_at IS NULL AND u.active = 1
 	`, hash)
 
 	var u models.User
@@ -69,14 +78,46 @@ func (s *ApplyAuthStore) CreateApplyUser(ctx context.Context, username, role str
 		return models.User{}, "", fmt.Errorf("generate api key: %w", err)
 	}
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.User{}, "", fmt.Errorf("create apply user: %w", err)
+	}
+	defer tx.Rollback()
+
 	var u models.User
 	var active int
-	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO users (username, api_key_hash, role, active)
-		VALUES (?, ?, ?, 1)
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO users (username, role, active)
+		VALUES (?, ?, 1)
 		RETURNING id, username, role, active, created_at
-	`, username, hash, role).Scan(&u.ID, &u.Username, &u.Role, &active, &u.CreatedAt)
-	if err != nil {
+	`, username, role).Scan(&u.ID, &u.Username, &u.Role, &active, &u.CreatedAt); err != nil {
+		return models.User{}, "", fmt.Errorf("create apply user: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO user_api_keys (user_id, key_hash, label) VALUES (?, ?, 'primary')
+	`, u.ID, hash); err != nil {
+		return models.User{}, "", fmt.Errorf("create apply user key: %w", err)
+	}
+	// Users/Roles Phase 1: this endpoint has no concept of league scope
+	// (its body is just {username, role}), so a role='system_admin' or
+	// legacy 'admin' user -- both global by definition -- gets a matching
+	// global role_assignments row immediately, keeping this the working
+	// bootstrap path for the very first system_admin on a fresh install
+	// (nothing else can grant that first row). A role='league_admin' user
+	// created here gets NO role_assignments row: league_admin now
+	// requires a concrete league, which this endpoint cannot supply --
+	// use POST /api/auth/admin/users/{id}/roles afterward (system_admin
+	// only) to grant a specific league. This is a real, disclosed
+	// behavior change for this legacy endpoint, not a bug: creating a
+	// "league_admin" here no longer grants any scoped access on its own.
+	if role == "system_admin" || role == "admin" {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO role_assignments (user_id, role_code, league_id) VALUES (?, 'system_admin', NULL)
+		`, u.ID); err != nil {
+			return models.User{}, "", fmt.Errorf("create apply user role assignment: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return models.User{}, "", fmt.Errorf("create apply user: %w", err)
 	}
 	u.Active = active == 1
@@ -96,15 +137,28 @@ func (s *ApplyAuthStore) CreateApplyPlayerUser(ctx context.Context, username str
 		return models.User{}, "", fmt.Errorf("generate api key: %w", err)
 	}
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.User{}, "", fmt.Errorf("create apply player user: %w", err)
+	}
+	defer tx.Rollback()
+
 	var u models.User
 	var active int
 	var pid sql.NullInt64
-	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO users (username, api_key_hash, role, player_id, active)
-		VALUES (?, ?, 'player', ?, 1)
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO users (username, role, player_id, active)
+		VALUES (?, 'player', ?, 1)
 		RETURNING id, username, role, player_id, active, created_at
-	`, username, hash, playerID).Scan(&u.ID, &u.Username, &u.Role, &pid, &active, &u.CreatedAt)
-	if err != nil {
+	`, username, playerID).Scan(&u.ID, &u.Username, &u.Role, &pid, &active, &u.CreatedAt); err != nil {
+		return models.User{}, "", fmt.Errorf("create apply player user: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO user_api_keys (user_id, key_hash, label) VALUES (?, ?, 'primary')
+	`, u.ID, hash); err != nil {
+		return models.User{}, "", fmt.Errorf("create apply player user key: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return models.User{}, "", fmt.Errorf("create apply player user: %w", err)
 	}
 	u.Active = active == 1
@@ -122,7 +176,7 @@ func (s *ApplyAuthStore) ListApplyUsers(ctx context.Context) ([]models.User, err
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.id, u.username, u.role, u.player_id,
 		       COALESCE(p.first_name || ' ' || p.last_name, ''),
-		       u.active, u.created_at
+		       u.active, u.created_at, u.email
 		FROM users u
 		LEFT JOIN players p ON p.id = u.player_id
 		ORDER BY u.id
@@ -137,12 +191,16 @@ func (s *ApplyAuthStore) ListApplyUsers(ctx context.Context) ([]models.User, err
 		var u models.User
 		var active int
 		var playerID sql.NullInt64
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &playerID, &u.PlayerName, &active, &u.CreatedAt); err != nil {
+		var email sql.NullString
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &playerID, &u.PlayerName, &active, &u.CreatedAt, &email); err != nil {
 			return nil, fmt.Errorf("scan apply user: %w", err)
 		}
 		u.Active = active == 1
 		if playerID.Valid {
 			u.PlayerID = &playerID.Int64
+		}
+		if email.Valid {
+			u.Email = &email.String
 		}
 		users = append(users, u)
 	}

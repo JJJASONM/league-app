@@ -63,7 +63,7 @@ func (n *noopRuleMgr) Upsert(_ context.Context, r models.SeasonRule) (models.Sea
 func (n *noopRuleMgr) Update(_ context.Context, _ int64, _, _ string) (models.SeasonRule, error) {
 	return models.SeasonRule{}, nil
 }
-func (n *noopRuleMgr) Delete(_ context.Context, _ int64) error               { return nil }
+func (n *noopRuleMgr) Delete(_ context.Context, _ int64) error { return nil }
 
 // noopSeasonMgr satisfies handlers.SeasonManager for tests that only exercise
 // non-season handler logic.
@@ -76,7 +76,7 @@ func (n *noopSeasonMgr) Checklist(_ context.Context, _ int64) (models.SetupCheck
 func (n *noopSeasonMgr) PreviousSeason(_ context.Context, _ int64) (seasons.PreviousSeasonResult, error) {
 	return seasons.PreviousSeasonResult{Teams: []seasons.SeasonTeamEntry{}}, nil
 }
-func (n *noopSeasonMgr) IsDraft(_ context.Context, _ int64) (bool, error) { return true, nil }
+func (n *noopSeasonMgr) IsDraft(_ context.Context, _ int64) (bool, error)      { return true, nil }
 func (n *noopSeasonMgr) MarkStaleIfScheduled(_ context.Context, _ int64) error { return nil }
 func (n *noopSeasonMgr) AddTeam(_ context.Context, _ int64, _ seasons.AddTeamRequest) (models.SeasonTeam, error) {
 	return models.SeasonTeam{}, nil
@@ -185,7 +185,7 @@ func (n *noopPlayerMgr) CreatePlayer(_ context.Context, _ players.CreatePlayerIn
 func (n *noopPlayerMgr) UpdatePlayer(_ context.Context, _ int64, _ players.UpdatePlayerInput) error {
 	return nil
 }
-func (n *noopPlayerMgr) DeletePlayer(_ context.Context, _ int64) error { return nil }
+func (n *noopPlayerMgr) DeletePlayer(_ context.Context, _ int64) error    { return nil }
 func (n *noopPlayerMgr) MergePlayers(_ context.Context, _, _ int64) error { return nil }
 
 // noopTeamMgr satisfies handlers.TeamManager for tests that only exercise
@@ -221,6 +221,9 @@ func (n *noopLineupMgr) SetSubstitute(_ context.Context, _ matches.SetSubstitute
 	return models.LineupPlan{}, nil
 }
 func (n *noopLineupMgr) ClearSubstitute(_ context.Context, _ int64) (models.LineupPlan, error) {
+	return models.LineupPlan{}, nil
+}
+func (n *noopLineupMgr) GetLineupPlan(_ context.Context, _ int64) (models.LineupPlan, error) {
 	return models.LineupPlan{}, nil
 }
 

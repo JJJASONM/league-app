@@ -1,10 +1,12 @@
-// Schedule mutation route auth tests: POST /api/matches/generate and
-// POST /api/seasons/{id}/schedule/pushback-apply are gated by personal-key-only
-// Bearer auth + league_admin role check (Phase 2).
-//
-// POST /api/seasons/{id}/schedule/pushback-preview is intentionally left
-// unprotected (read-only semantics despite POST method) and is verified here
-// to confirm it requires no Authorization header.
+// Schedule mutation route auth tests: POST /api/matches/generate,
+// POST /api/seasons/{id}/schedule/pushback-preview, and
+// POST /api/seasons/{id}/schedule/pushback-apply are all gated by
+// guardedLeagueAdminAction (session or Bearer, scoped to the season's
+// league). pushback-preview was previously left intentionally
+// unprotected (read-only semantics despite POST method); PM's Phase 1
+// correction review required scoping "schedule generation and pushback"
+// as one route family, since an unscoped preview still discloses another
+// league's season schedule data.
 package handlers
 
 import (
@@ -232,10 +234,11 @@ func TestScheduleRoute_PushbackApply_SystemAdmin_ReachesHandler(t *testing.T) {
 	}
 }
 
-// TestScheduleRoute_PushbackPreview_NoAuth_ReachesHandler confirms that
-// POST /api/seasons/{id}/schedule/pushback-preview is intentionally unprotected.
-// It accepts no Authorization header and returns 200.
-func TestScheduleRoute_PushbackPreview_NoAuth_ReachesHandler(t *testing.T) {
+// TestScheduleRoute_PushbackPreview_NoHeader_Returns401 confirms
+// pushback-preview now requires authentication like pushback-apply and
+// schedule generation -- a Phase 1 correction review change from its
+// previous "intentionally unprotected" behavior.
+func TestScheduleRoute_PushbackPreview_NoHeader_Returns401(t *testing.T) {
 	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: &models.User{ID: 1, Role: "league_admin"}}
 	mux := http.NewServeMux()
 	Register(mux, t.TempDir(), scheduleMutationDeps(auth))
@@ -243,10 +246,27 @@ func TestScheduleRoute_PushbackPreview_NoAuth_ReachesHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/seasons/1/schedule/pushback-preview",
 		strings.NewReader(`{"cutoff_week":1,"weeks_to_add":1}`))
 	req.Header.Set("Content-Type", "application/json")
-	// No Authorization header - this route is deliberately unprotected.
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestScheduleRoute_PushbackPreview_ValidLeagueAdmin_ReachesHandler proves
+// the route still works normally for an authorized league_admin key.
+func TestScheduleRoute_PushbackPreview_ValidLeagueAdmin_ReachesHandler(t *testing.T) {
+	auth := &stubApplyAuth{resolveKey: "my-key", resolveUser: &models.User{ID: 1, Role: "league_admin"}}
+	mux := http.NewServeMux()
+	Register(mux, t.TempDir(), scheduleMutationDeps(auth))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/seasons/1/schedule/pushback-preview",
+		strings.NewReader(`{"cutoff_week":1,"weeks_to_add":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer my-key")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Errorf("want 200 (pushback-preview is unprotected read-only route), got %d: %s", w.Code, w.Body.String())
+		t.Errorf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 }

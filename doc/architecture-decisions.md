@@ -1,7 +1,7 @@
 # League App Architecture Decisions
 
 **Status:** Target design
-**Last reviewed:** 2026-09-17
+**Last reviewed:** 2026-09-19
 
 This document consolidates approved product and architecture decisions. It
 describes the target model, not necessarily the schema currently implemented in
@@ -540,3 +540,91 @@ introduced, whoever wires it up must re-verify this invariant explicitly
 rather than assuming a single startup pragma is sufficient -- it is not,
 for any connection-pooling `database/sql` driver where a pragma is a
 per-connection setting.
+
+### 2026-09-18 - Centralized authorization policy and scoped-role model are cross-domain
+
+**Status:** accepted
+
+Users/Roles/Authentication Phase 1 introduced `auth.Authorize(identity,
+action, scope)` (`backend/domains/auth/authz.go`) as the single
+authorization decision point for every route this phase touches or will
+touch. This is a cross-domain invariant for the same reason the
+foreign-key entry above is: no domain's own handler code should
+re-implement a role check inline (`identity.role == "..."` scattered
+through handlers, as the pre-Phase-1 `clearanceAuth` model effectively
+required for any new nuance) -- every domain that gains authorization
+finer than "any league_admin, anywhere" resolves its resource's
+authoritative `league_id` (directly, or via a lookup on a child
+identifier such as `season_id`/`team_id`/`match_id`/`player_id`) and
+calls `Authorize`, never a bespoke check.
+
+`role_assignments`' own schema is the second half of this invariant: a
+CHECK constraint plus two partial unique indexes prove, at the database
+layer, that `system_admin` is always global, `league_admin` is always
+scoped to one concrete league, and `player` is never representable as a
+role_assignments row (it is `users.player_id`, a 1:1 identity link, not
+a repeatable grant) -- these are proven at the database layer precisely
+so that no future domain's code can accidentally construct an invalid
+combination, mirroring how the foreign-key invariant above is enforced
+by the schema/connection layer rather than trusted to application code.
+
+**Decision:** any new authorization need, in any domain, adds a new
+`auth.Action` and a scope-resolution function at the route-registration
+call site, and calls the existing `Authorize` entry point -- it does not
+add a new inline role-string comparison, and it does not model a new
+kind of "role" outside `role_assignments`' existing `system_admin`/
+`league_admin` shape without first revisiting this decision (a captain
+role, if ever added, is exactly the kind of change that belongs here,
+not as an ad hoc string check). Phase 1 wired this into league and
+season create/update/delete only, conditionally on
+`Dependencies.AuthMgr`/`RoleAssignmentMgr` being non-nil so every
+existing deployment/test that has not wired the new auth domain keeps
+its prior flat-`clearanceAuth` behavior unchanged; migrating the
+remaining legacy `clearanceAuth` routes onto `Authorize` is future work,
+not yet scheduled, and should follow this same pattern rather than a new
+one.
+
+### 2026-09-19 - `Authorize` now covers every protected route; a narrow, deliberate cross-domain transaction exception
+
+**Status:** accepted
+
+Two follow-ups to the entry above, from PM's Phase 1 correction review:
+
+**`Authorize` is no longer conditional on route family.** The entry
+above described `Authorize` as wired into "league and season create/
+update/delete only," with every other route staying on the old flat
+`clearanceAuth`/`systemAdminAuth` chain -- which meant a
+session-authenticated user could not use most of the application at all
+(that chain was Bearer-only), and league scope was not enforced outside
+those two families. Every mutation route now goes through
+`guardedLeagueAdminAction`/`guardedSystemAdminAction`
+(`handlers/api_auth_middleware.go`), which resolve identity from either a
+session cookie or a Bearer key and call `Authorize` the same way in both
+cases. The "conditional on `Dependencies.AuthMgr`/`RoleAssignmentMgr`
+being non-nil" fallback described above still exists, but only as
+`guardedAction`'s degenerate-test-config branch (`RoleAssignmentMgr` nil
+-- never true in `main.go`), not as a route-family boundary; there is one
+authorization policy for real traffic, evaluated identically everywhere.
+
+**`LeagueSelfGrantStore` is a deliberate, narrow exception to
+domain separation, not a precedent.** League creation's "atomically
+grants the creator league_admin access" rule needs the `leagues` insert
+and the `role_assignments` insert to commit or fail together.
+`LeagueService`/`LeagueStore` and the role-assignment store are separate
+domains by this codebase's convention (see AGENTS.md), and the original
+Phase 1 implementation respected that by composing them in the handler
+with a compensating delete on grant failure -- which left a real, if
+narrow, crash window (a league could exist with no admin able to manage
+it). `backend/storage/sqlite/league_self_grant_store.go` instead performs
+both inserts in one `*sql.Tx`, since both tables live in the same
+physical SQLite database and a real transaction is available without any
+generic cross-domain transaction framework. **Decision:** this is
+approved for this one workflow only, where a normal domain-boundary
+composition cannot express a hard atomicity requirement the product
+explicitly needs. It is not a precedent for merging `LeagueService` and
+the role-assignment store generally, and it is not a template to reach
+for casually -- a future workflow with a similar hard-atomicity need
+should get its own narrowly-scoped store function named for that
+workflow (as this one is), not a shared generic "cross-domain
+transaction" helper, unless a third such need appears and the pattern is
+revisited deliberately.

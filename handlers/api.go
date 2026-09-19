@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"reflect"
 
+	"league_app/backend/domains/auth"
 	"league_app/backend/domains/rules"
 	"league_app/backend/validation"
 	"league_app/db"
@@ -26,8 +27,12 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	if v := reflect.ValueOf(deps.HandicapSvc); v.Kind() == reflect.Ptr && v.IsNil() {
 		panic("handlers.Register: deps.HandicapSvc must not be a typed nil")
 	}
-	// Guard HandicapApplier only when the Apply route will be mounted.
-	// When AdminToken is empty the route is not registered, so a nil applier is fine.
+	// Guard HandicapApplier only when AdminToken signals a deliberate
+	// intent to use the Apply route (this narrow trigger is intentional --
+	// see the Apply-route mounting condition further down, which is
+	// broader: deps.ApplyAuth alone is wired by many unrelated tests that
+	// have nothing to do with handicap-apply and must not be forced to
+	// also wire HandicapApplier just to avoid a panic here).
 	if deps.AdminToken != "" {
 		if deps.HandicapApplier == nil {
 			panic("handlers.Register: deps.HandicapApplier must not be nil when LEAGUE_ADMIN_TOKEN is set")
@@ -69,18 +74,23 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	// Health-check route registration lives in api_health_routes.go.
 	registerHealthRoute(mux)
 
+	// Users/Roles Phase 1 login/logout/me/password-setup and
+	// account-administration routes live in api_auth_routes.go. Only
+	// mounted when deps.AuthMgr is non-nil.
+	registerAuthRoutes(mux, deps)
+
 	// Leagues, players, and teams route registration live in
 	// api_leagues_routes.go, api_players_routes.go, and api_teams_routes.go.
-	registerLeagueRoutes(mux, deps.LeagueMgr, deps.ApplyAuth)
-	registerPlayerRoutes(mux, deps.PlayerMgr, deps.ApplyAuth)
-	registerTeamRoutes(mux, deps.TeamMgr, deps.ApplyAuth)
+	registerLeagueRoutes(mux, deps)
+	registerPlayerRoutes(mux, deps)
+	registerTeamRoutes(mux, deps)
 
 	// Season CRUD, activation, rules, skipped-weeks, bye-requests, and season
 	// team/roster route registration live in api_season_setup_routes.go.
 	// seasonMgr is also used later by the round-results block and by
 	// registerSeasonCloseRoutes below.
 	seasonMgr := deps.SeasonMgr
-	registerSeasonSetupRoutes(mux, seasonMgr, deps.RuleMgr, deps.LineupMgr, deps.ApplyAuth)
+	registerSeasonSetupRoutes(mux, deps, seasonMgr, deps.RuleMgr, deps.LineupMgr)
 
 	// Player Overview route registration lives in
 	// api_player_overview_routes.go. Handler-level composition across
@@ -93,7 +103,7 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	// (deps.ApplyAuth) since the money integration above -- see
 	// registerPlayerOverviewRoute's doc comment.
 	if deps.MatchMgr != nil && deps.RoundMgr != nil {
-		registerPlayerOverviewRoute(mux, deps.PlayerMgr, seasonMgr, deps.TeamMgr, deps.MatchMgr, deps.RoundMgr, deps.FinanceMgr, deps.RuleMgr, deps.ApplyAuth)
+		registerPlayerOverviewRoute(mux, deps, deps.PlayerMgr, seasonMgr, deps.TeamMgr, deps.MatchMgr, deps.RoundMgr, deps.FinanceMgr, deps.RuleMgr)
 	}
 
 	// Finance route registration lives in api_finances_routes.go. Handler-
@@ -106,29 +116,29 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	// domains, ALL four finance routes (reads and writes) are gated by
 	// clearanceAuth.
 	if deps.FinanceMgr != nil && seasonMgr != nil && deps.RuleMgr != nil && deps.RoundMgr != nil {
-		registerFinanceRoutes(mux, deps.FinanceMgr, seasonMgr, deps.RuleMgr, deps.RoundMgr, deps.ApplyAuth)
+		registerFinanceRoutes(mux, deps, deps.FinanceMgr, seasonMgr, deps.RuleMgr, deps.RoundMgr)
 	}
 
 	// Match read and assignment route registration lives in api_match_routes.go.
 	// Scoped to ?season_id= (season implies league).
 	if deps.MatchMgr != nil {
-		registerMatchRoutes(mux, deps.MatchMgr, deps.ApplyAuth)
+		registerMatchRoutes(mux, deps, deps.MatchMgr, seasonMgr)
 	}
 	// Schedule generation and pushback route registration live in
 	// api_schedule_routes.go.
 	if deps.ScheduleMgr != nil {
-		registerScheduleGenerateRoute(mux, deps.ScheduleMgr, deps.ApplyAuth)
+		registerScheduleGenerateRoute(mux, deps, deps.ScheduleMgr, seasonMgr)
 	}
 	if deps.PushbackMgr != nil {
-		registerPushbackPreviewRoute(mux, deps.PushbackMgr)
+		registerPushbackPreviewRoute(mux, deps, deps.PushbackMgr, seasonMgr)
 	}
 	if deps.PushbackApplyMgr != nil {
-		registerPushbackApplyRoute(mux, deps.PushbackApplyMgr, deps.ApplyAuth)
+		registerPushbackApplyRoute(mux, deps, deps.PushbackApplyMgr, seasonMgr)
 	}
 
 	// Lineup plan route registration lives in api_lineup_routes.go.
 	if deps.LineupMgr != nil {
-		registerLineupRoutes(mux, deps.LineupMgr, deps.ApplyAuth)
+		registerLineupRoutes(mux, deps, deps.LineupMgr, seasonMgr)
 	}
 
 	// Rule definitions — developer-owned, served by the backend
@@ -138,50 +148,63 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	// Routes are registered only when a WeekManager is wired in (always in production,
 	// conditionally in tests that don't exercise week routes).
 	if deps.WeekMgr != nil {
-		registerWeekRoutes(mux, deps.WeekMgr, deps.ApplyAuth)
+		registerWeekRoutes(mux, deps, deps.WeekMgr, seasonMgr)
 	}
 	hcSvc := deps.HandicapSvc
 	mux.HandleFunc("GET /api/seasons/{id}/handicap-recommendations", func(w http.ResponseWriter, r *http.Request) {
 		getHandicapRecommendations(w, r, hcSvc)
 	})
 
-	// Apply route — only mounted when LEAGUE_ADMIN_TOKEN is configured.
-	// Dual-tier auth: personal API key (ApplyAuth) checked first; AdminToken is the fallback.
-	if deps.AdminToken != "" {
+	// Apply route -- mounted whenever a real handicap applier AND at
+	// least one supported authentication path are available: session/
+	// scoped roles (AuthMgr/RoleAssignmentMgr), a personal Bearer key
+	// resolver (ApplyAuth), or the static AdminToken fallback. PM
+	// correction: this used to be gated on AdminToken alone, so a
+	// deployment relying purely on session login (no LEAGUE_ADMIN_TOKEN
+	// configured at all) lost this route entirely, even for an otherwise
+	// fully-authorized session-authenticated league_admin/system_admin.
+	// Dual-tier auth within requireApplyAuthOrScopedAction: personal API
+	// key or session (scoped to the season's league) checked first; the
+	// static AdminToken remains a global, unscoped fallback for
+	// unattended automation, preserved and optional.
+	hasHandicapApplyAuthPath := deps.AdminToken != "" || deps.ApplyAuth != nil || deps.AuthMgr != nil || deps.RoleAssignmentMgr != nil
+	if deps.HandicapApplier != nil && hasHandicapApplyAuthPath {
 		applier := deps.HandicapApplier
 		mux.HandleFunc("POST /api/seasons/{id}/handicap-apply",
-			requireApplyAuth(deps.AdminToken, deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			requireApplyAuthOrScopedAction(deps, auth.ActionHandicapApply, seasonIDPathScope(seasonMgr), func(w http.ResponseWriter, r *http.Request) {
 				postHandicapApply(w, r, applier)
 			}),
 		)
 		log.Println("Apply route: MOUNTED")
 	} else {
-		log.Println("Apply route: NOT MOUNTED - LEAGUE_ADMIN_TOKEN not set")
+		log.Println("Apply route: NOT MOUNTED - no handicap applier or authentication path configured")
 	}
 
 	// User management. POST/GET /api/users accept either the static admin
 	// token (kept as a bootstrap path -- it is the only way to create the
-	// first system_admin user) or a resolved personal key with
-	// system_admin/admin role (Users Admin Screen Phase 1). Both routes are
-	// mounted whenever ApplyAuth is wired, independent of AdminToken --
-	// requireAdminTokenOrSystemAdminAuth only honors the static-token path
-	// when AdminToken is actually configured, so a system_admin's personal
-	// key still works when it is not. GET /api/users/me resolves the
-	// caller's own identity from any valid personal key, no role check, no
-	// static-token fallback.
+	// first system_admin user), a session, or a resolved personal key with
+	// system_admin/admin role (Users Admin Screen Phase 1) via
+	// requireAdminTokenOrGuardedSystemAdminAction. Both routes are mounted
+	// whenever ApplyAuth is wired, independent of AdminToken -- the
+	// static-token path is only honored when AdminToken is actually
+	// configured, so a system_admin's personal key or session still works
+	// when it is not. GET /api/users/me resolves the caller's own identity
+	// from any valid personal key, no role check, no static-token fallback
+	// -- unchanged, since /api/auth/me is this endpoint's session-aware
+	// successor.
 	if deps.ApplyAuth != nil {
-		auth := deps.ApplyAuth
+		applyAuth := deps.ApplyAuth
 		mux.HandleFunc("GET /api/users/me",
-			requirePersonalKeyAuth(auth, getMe),
+			requirePersonalKeyAuth(applyAuth, getMe),
 		)
 		mux.HandleFunc("POST /api/users",
-			requireAdminTokenOrSystemAdminAuth(deps.AdminToken, auth, func(w http.ResponseWriter, r *http.Request) {
-				postUser(w, r, auth, deps.PlayerMgr)
+			requireAdminTokenOrGuardedSystemAdminAction(deps, func(w http.ResponseWriter, r *http.Request) {
+				postUser(w, r, applyAuth, deps.PlayerMgr)
 			}),
 		)
 		mux.HandleFunc("GET /api/users",
-			requireAdminTokenOrSystemAdminAuth(deps.AdminToken, auth, func(w http.ResponseWriter, r *http.Request) {
-				listUsers(w, r, auth)
+			requireAdminTokenOrGuardedSystemAdminAction(deps, func(w http.ResponseWriter, r *http.Request) {
+				listUsers(w, r, applyAuth)
 			}),
 		)
 	}
@@ -189,20 +212,21 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 	// Match results, rounds, standings, and player-stats route registration
 	// live in api_match_results_routes.go. Gated on RoundMgr.
 	if deps.RoundMgr != nil {
-		registerMatchResultsRoutes(mux, deps.RoundMgr, seasonMgr, deps.ApplyAuth)
+		registerMatchResultsRoutes(mux, deps, deps.RoundMgr, seasonMgr, deps.MatchMgr)
 	}
 
 	// Season close, close-preview, and reopen route registration live in
 	// api_season_close_routes.go. Requires both WeekMgr (ListWeeks) and
 	// RoundMgr (GetStandings).
 	if deps.WeekMgr != nil && deps.RoundMgr != nil {
-		registerSeasonCloseRoutes(mux, seasonMgr, deps.WeekMgr, deps.RoundMgr, deps.ApplyAuth)
+		registerSeasonCloseRoutes(mux, deps, seasonMgr, deps.WeekMgr, deps.RoundMgr)
 	}
 
 	// Backup -- system-admin only (Phase 6). league_admin is rejected here,
-	// unlike the clearanceAuth-wrapped routes above.
+	// unlike the guardedLeagueAdminAction-wrapped routes above. Session or
+	// Bearer, via guardedSystemAdminAction.
 	mux.HandleFunc("POST /api/backup",
-		systemAdminAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedSystemAdminAction(deps, auth.ActionBackup, noScope, func(w http.ResponseWriter, r *http.Request) {
 			path, err := db.Backup(dataDir)
 			if err != nil {
 				jsonError(w, err.Error(), 500)

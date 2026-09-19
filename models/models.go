@@ -13,16 +13,16 @@ type League struct {
 
 // Player represents a league member.
 type Player struct {
-	ID           int64     `json:"id"`
-	PlayerNumber string    `json:"player_number"` // two-digit code e.g. "42"; locked once set
-	FirstName    string    `json:"first_name"`
-	LastName     string    `json:"last_name"`
-	Name         string    `json:"name"`            // computed: FirstName + " " + LastName
-	Phone        string    `json:"phone,omitempty"`
-	Email        string    `json:"email,omitempty"`
-	TeamID       *int64    `json:"team_id"`
-	TeamName     string    `json:"team_name,omitempty"`
-	LeagueID     int64     `json:"league_id,omitempty"`
+	ID           int64  `json:"id"`
+	PlayerNumber string `json:"player_number"` // two-digit code e.g. "42"; locked once set
+	FirstName    string `json:"first_name"`
+	LastName     string `json:"last_name"`
+	Name         string `json:"name"` // computed: FirstName + " " + LastName
+	Phone        string `json:"phone,omitempty"`
+	Email        string `json:"email,omitempty"`
+	TeamID       *int64 `json:"team_id"`
+	TeamName     string `json:"team_name,omitempty"`
+	LeagueID     int64  `json:"league_id,omitempty"`
 	// Handicap meaning depends on game format:
 	//   8-ball: Diff rating = (games won − games lost) / matches played
 	//   9-ball: race-to number (e.g. 5, 7)
@@ -52,12 +52,12 @@ type Season struct {
 	LeagueID      int64     `json:"league_id"`
 	Name          string    `json:"name"`
 	StartDate     *string   `json:"start_date"`
-	EndDate       *string   `json:"end_date"`       // computed after schedule generation
+	EndDate       *string   `json:"end_date"` // computed after schedule generation
 	Active        bool      `json:"active"`
 	ScheduleType  string    `json:"schedule_type"`
-	NumWeeks      int       `json:"num_weeks"`       // used for "custom" and "blanket" types
-	ScheduleStale bool      `json:"schedule_stale"`  // true when season_teams changed after generation
-	TeamsManaged  bool      `json:"teams_managed"`   // false = legacy season; true = explicit team management
+	NumWeeks      int       `json:"num_weeks"`              // used for "custom" and "blanket" types
+	ScheduleStale bool      `json:"schedule_stale"`         // true when season_teams changed after generation
+	TeamsManaged  bool      `json:"teams_managed"`          // false = legacy season; true = explicit team management
 	ActivatedAt   *string   `json:"activated_at,omitempty"` // set once on first activation; persistent setup lock
 	ClosedAt      *string   `json:"closed_at,omitempty"`    // set when season is officially closed
 	CreatedAt     time.Time `json:"created_at"`
@@ -67,15 +67,15 @@ type Season struct {
 // SeasonName is an editable draft snapshot of the team name for this season.
 // CaptainID must reference a player on this team's season roster.
 type SeasonTeam struct {
-	ID          int64   `json:"id"`
-	SeasonID    int64   `json:"season_id"`
-	TeamID      int64   `json:"team_id"`
-	TeamName    string  `json:"team_name"`              // from teams table (permanent)
-	TeamNumber  string  `json:"team_number,omitempty"`  // from teams table
-	SeasonName  string  `json:"season_name"`            // season-specific snapshot
-	CaptainID   *int64  `json:"captain_id"`
-	CaptainName string  `json:"captain_name,omitempty"`
-	RosterCount int     `json:"roster_count"`
+	ID          int64  `json:"id"`
+	SeasonID    int64  `json:"season_id"`
+	TeamID      int64  `json:"team_id"`
+	TeamName    string `json:"team_name"`             // from teams table (permanent)
+	TeamNumber  string `json:"team_number,omitempty"` // from teams table
+	SeasonName  string `json:"season_name"`           // season-specific snapshot
+	CaptainID   *int64 `json:"captain_id"`
+	CaptainName string `json:"captain_name,omitempty"`
+	RosterCount int    `json:"roster_count"`
 }
 
 // SeasonRosterEntry is one player on a team's season roster.
@@ -396,8 +396,8 @@ type RoundResult struct {
 	HandicapPtsUsed  *int     `json:"handicap_pts_used,omitempty"`
 	HandicapToUsed   *string  `json:"handicap_to_used,omitempty"`
 	// Computed on read — not stored:
-	HandicapPts   int    `json:"handicap_pts,omitempty"`  // balls spotted
-	HandicapTo    string `json:"handicap_to,omitempty"`   // "home"|"away"|""
+	HandicapPts   int    `json:"handicap_pts,omitempty"`   // balls spotted
+	HandicapTo    string `json:"handicap_to,omitempty"`    // "home"|"away"|""
 	HomeTotalPts  int    `json:"home_total_pts,omitempty"` // raw + handicap if applicable
 	AwayTotalPts  int    `json:"away_total_pts,omitempty"`
 	PairingWinner string `json:"pairing_winner,omitempty"` // "home"|"away"|""
@@ -408,7 +408,7 @@ type RoundResult struct {
 // Status is "closed" after a successful POST /api/seasons/{id}/weeks/{week}/close.
 type WeekSummary struct {
 	WeekNumber     int     `json:"week_number"`
-	Status         string  `json:"status"`          // "open" | "closed"
+	Status         string  `json:"status"` // "open" | "closed"
 	ClosedAt       *string `json:"closed_at,omitempty"`
 	MatchCount     int     `json:"match_count"`
 	CompletedCount int     `json:"completed_count"` // matches with completed=1 (scores entered)
@@ -509,12 +509,12 @@ type HandicapReviewRec struct {
 	// Calculated values -- nil when IncludedRacks == 0
 	LifetimeHC    *float64 `json:"lifetime_hc"`
 	LifetimeRacks int      `json:"lifetime_racks"`
-	WindowHC      *float64 `json:"window_hc"`    // raw window value, before cap
+	WindowHC      *float64 `json:"window_hc"` // raw window value, before cap
 	WindowRacks   int      `json:"window_racks"`
 
 	// Recommendation -- nil when non-actionable (no_data/admin_hold/below_threshold)
 	RecommendedHC *float64 `json:"recommended_hc"` // capped window value
-	ChangeAmount  *float64 `json:"change_amount"`   // recommended_hc - assigned_hc
+	ChangeAmount  *float64 `json:"change_amount"`  // recommended_hc - assigned_hc
 
 	// Reason: "" | "no_data" | "admin_hold" | "below_threshold" | "capped" | "no_change"
 	Reason string `json:"reason"`
@@ -541,9 +541,9 @@ type HandicapReviewResponse struct {
 // Recommendations is populated only when method is "game_diff_average" and closed
 // match data exists. It is absent (omitempty) for "manual_review" and "kicker_average_preview".
 type AdvancePreviewHandicap struct {
-	Method          string             `json:"method"`
-	Status          string             `json:"status"`
-	Message         string             `json:"message"`
+	Method          string              `json:"method"`
+	Status          string              `json:"status"`
+	Message         string              `json:"message"`
 	Recommendations []PlayerHandicapRec `json:"recommendations,omitempty"`
 }
 
@@ -702,6 +702,9 @@ type User struct {
 	PlayerID   *int64 `json:"player_id,omitempty"`
 	PlayerName string `json:"player_name,omitempty"`
 	CreatedAt  string `json:"created_at"`
+	// Email is Users/Roles Phase 1's password-login identity -- nil for
+	// legacy API-key-only accounts that have never had one provisioned.
+	Email *string `json:"email,omitempty"`
 }
 
 // CreateUserResponse is the one-time response body for POST /api/users.

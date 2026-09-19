@@ -1,50 +1,80 @@
 package handlers
 
-import "net/http"
+import (
+	"net/http"
+
+	"league_app/backend/domains/auth"
+)
 
 // registerPlayerOverviewRoute mounts GET /api/players/{id}/overview.
-// Protected by a personal API key (no static-token fallback) since Player
-// Overview Phase 2's money-integration correction, resolving the privacy
-// inconsistency flagged when the money integration first landed (see
-// PLAYERS-Q002 in doc/roadmap.md). Player Account Access Phase 1 widened
-// who may hold a key that passes this gate: system_admin/admin/league_admin
-// may view any player's overview (unchanged), and a new role="player" may
-// view only their own linked player's overview. Because that ownership
-// check needs the requested player id from the URL path -- not available
-// until Go's mux has matched the route -- this route uses
-// requirePersonalKeyOnly (auth only, no fixed role set) rather than
-// clearanceAuth, and getPlayerOverview itself enforces the role/ownership
-// rule once it has parsed the path id. Requires MatchMgr and RoundMgr
+// Protected by playerOverviewAuth, which accepts a session cookie or a
+// Bearer personal API key (PM's Phase 1 correction review: a
+// password-authenticated player logged into Player View could not
+// previously load this route at all, since it was gated by
+// requirePersonalKeyOnly -- Bearer-only). Access control: system_admin
+// may view any player; a league_admin may view only players in a league
+// they are assigned to; a linked player may view only their own overview;
+// any other identity is forbidden. Requires MatchMgr and RoundMgr
 // (schedule and stats); only registered when both are wired, matching the
 // nil-guard convention used by other cross-domain composition routes (e.g.
 // registerSeasonCloseRoutes). financeMgr may be nil (money falls back to
 // the Phase 1 placeholder); ruleMgr is always non-nil in production but is
-// passed through rather than assumed. When applyAuth is nil (e.g. the
-// shared testServer() test helper), requirePersonalKeyOnly is a passthrough
-// and the route remains open, matching every other personal-key-protected
-// route's behavior under that same test setup.
+// passed through rather than assumed.
 func registerPlayerOverviewRoute(
 	mux *http.ServeMux,
+	deps Dependencies,
 	playerMgr PlayerManager, seasonMgr SeasonManager, teamMgr TeamManager,
 	matchMgr MatchManager, roundMgr RoundManager, financeMgr FinanceManager, ruleMgr RuleManager,
-	applyAuth ApplyAuthResolver,
 ) {
-	mux.HandleFunc("GET /api/players/{id}/overview", requirePersonalKeyOnly(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/players/{id}/overview", playerOverviewAuth(deps, playerMgr, func(w http.ResponseWriter, r *http.Request) {
 		getPlayerOverview(w, r, playerMgr, seasonMgr, teamMgr, matchMgr, roundMgr, financeMgr, ruleMgr)
 	}))
 }
 
-// requirePersonalKeyOnly wraps h with personal-key auth (no static-token
-// fallback, matching every other clearance route) but does not restrict by
-// a fixed set of roles the way clearanceAuth does -- used by routes that
-// need per-resource ownership checks the middleware layer can't see (the
-// resource id lives in the URL path, resolved by the handler, not by this
-// wrapper). When resolver is nil, h is returned unmodified, matching
-// clearanceAuth's nil-resolver passthrough for test/minimal-dependency
-// setups.
-func requirePersonalKeyOnly(resolver ApplyAuthResolver, h http.HandlerFunc) http.HandlerFunc {
-	if resolver == nil {
-		return h
+// playerOverviewAuth resolves this route's per-resource scope (the
+// requested player's own league AND their own player id -- Player
+// Overview needs both: a league_admin's access depends on the player's
+// league, a player's access depends on the player id matching their own
+// link) and, when the scoping subsystem is wired, routes through the
+// single centralized auth.Authorize policy via requireAction, exactly
+// like every other guarded route in this phase. Uses the exact same
+// two-condition gate as guardedAction (PM correction: the original
+// version gated everything on `deps.ApplyAuth == nil` alone, which fell
+// open for a session-only configuration): fully open only when NOTHING
+// auth-related is wired at all; the flat, Bearer-only
+// checkPlayerOverviewAccess fallback only when session support AND
+// scoping were both never wired (ApplyAuth-only, test-only); otherwise
+// always routed through requireAction, which handles a nil ApplyAuth
+// gracefully on its own.
+func playerOverviewAuth(deps Dependencies, playerMgr PlayerManager, next http.HandlerFunc) http.HandlerFunc {
+	if deps.ApplyAuth == nil && deps.AuthMgr == nil && deps.RoleAssignmentMgr == nil {
+		return next
 	}
-	return requirePersonalKeyAuth(resolver, h)
+	if deps.AuthMgr == nil && deps.RoleAssignmentMgr == nil {
+		return requirePersonalKeyAuth(deps.ApplyAuth, func(w http.ResponseWriter, r *http.Request) {
+			id, err := pathID(r, "id")
+			if err != nil {
+				jsonError(w, "invalid id", http.StatusBadRequest)
+				return
+			}
+			if !checkPlayerOverviewAccess(r, id) {
+				jsonError(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			next(w, r)
+		})
+	}
+	scopeFn := func(r *http.Request) (auth.Scope, bool, error) {
+		id, err := pathID(r, "id")
+		if err != nil {
+			return auth.Scope{}, false, err
+		}
+		player, err := playerMgr.GetPlayer(r.Context(), id)
+		if err != nil {
+			return auth.Scope{}, false, nil
+		}
+		leagueID := player.LeagueID
+		return auth.Scope{LeagueID: &leagueID, PlayerID: &id}, true, nil
+	}
+	return requireAction(deps, auth.ActionPlayerOverviewOwn, scopeFn, next)
 }

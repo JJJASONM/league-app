@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"league_app/backend/domainerr"
@@ -37,6 +38,44 @@ func createLeague(w http.ResponseWriter, r *http.Request, mgr LeagueManager) {
 		mapLeagueErr(w, err)
 		return
 	}
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, l)
+}
+
+// createLeagueWithSelfGrant is createLeague plus the Users/Roles Phase 1
+// rule: "League creation atomically grants the creator league_admin
+// access to the new league. Other league admins do not automatically
+// receive access to that league." (product decisions 10-12). The league
+// insert and the creator's role_assignments grant commit together in a
+// single database transaction (sqlite.LeagueSelfGrantStore) -- either both
+// happen or neither does, with no compensating-delete crash window.
+func createLeagueWithSelfGrant(w http.ResponseWriter, r *http.Request, mgr LeagueSelfGrantManager) {
+	actor := identityFromContext(r.Context())
+	if actor == nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	var body struct {
+		Name       string `json:"name"`
+		GameFormat string `json:"game_format"`
+		DayOfWeek  string `json:"day_of_week"`
+	}
+	if err := decode(r, &body); err != nil {
+		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	l, err := mgr.CreateLeagueWithLeagueAdminGrant(r.Context(), leagues.CreateLeagueInput{
+		Name:       body.Name,
+		GameFormat: body.GameFormat,
+		DayOfWeek:  body.DayOfWeek,
+	}, actor.UserID)
+	if err != nil {
+		log.Printf("createLeagueWithSelfGrant: %v", err)
+		jsonError(w, "could not create league", http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, l)
 }

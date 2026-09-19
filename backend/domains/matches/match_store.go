@@ -36,4 +36,15 @@ type MatchStore interface {
 	// IsSeasonClosedForMatch returns true when the season containing matchID has
 	// closed_at set. Returns false when the match or season does not exist.
 	IsSeasonClosedForMatch(ctx context.Context, matchID int64) (bool, error)
+
+	// SeasonLeagueID returns seasonID's league_id, or found=false if no such
+	// season exists. Used by AssignMatchTeams to validate that an assigned
+	// team belongs to the match's own league (PM correction: a related-
+	// resource id from the request body must never be allowed to attach a
+	// different league's team to a match).
+	SeasonLeagueID(ctx context.Context, seasonID int64) (leagueID int64, found bool, err error)
+
+	// TeamLeagueID returns teamID's league_id, or found=false if no such
+	// team exists.
+	TeamLeagueID(ctx context.Context, teamID int64) (leagueID int64, found bool, err error)
 }

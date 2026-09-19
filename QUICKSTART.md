@@ -113,8 +113,78 @@ for the full smoke-test checklist this supports.
 7. `Player Stats` -> official individual stats from closed weeks only
 8. `Handicap` -> read-only season handicap review recommendations
 
-This reflects the implemented workflow today. Future phases still include auth,
-broader audit/history, and the eventual handicap apply UI.
+This reflects the implemented workflow today. Users/Roles/Authentication
+Phase 1 (see below) added real email+password login, sessions, and
+scoped roles; broader audit/history and the eventual handicap apply UI
+remain future phases.
+
+## Signing In (Users/Roles Phase 1)
+
+There is no self-registration yet -- a system_admin creates every
+account.
+
+1. **Bootstrap the first system_admin** (only needed once, on a fresh
+   install): use the existing static-token bootstrap,
+   `POST /api/users` with `Authorization: Bearer $LEAGUE_ADMIN_TOKEN`
+   and `{"username":"...", "role":"system_admin"}`. This still returns a
+   one-time API key (unchanged), and also grants that account a global
+   `system_admin` role assignment automatically, so it can immediately
+   use every account-administration action below.
+2. From the Users screen (or directly via the API as that system_admin),
+   **provision an email-identity account**: "Provision Email Login"
+   with an email and, optionally, a player to link.
+3. **Issue a one-time password setup token** for that account from its
+   row menu -- shown once, copy it and share it with the account holder
+   out of band (there is no email delivery in this phase).
+4. The account holder opens the app; with no session and no Admin Key
+   set, they see the login screen. They click "Have a setup token?",
+   enter the token plus a new password (and confirm it), and submit --
+   this calls `POST /api/auth/password-setup` for them. On success they
+   are returned to the sign-in form and log in normally with email +
+   that password.
+5. **system_admin** may then assign `league_admin` for one or more
+   leagues to any account via
+   `POST /api/auth/admin/users/{id}/roles` (`{"role_code":"league_admin",
+   "league_id":N}`), or `{"role_code":"system_admin"}` for another
+   system_admin. A league_admin may also create new leagues on their
+   own once they hold `league_admin` for at least one existing league
+   -- doing so automatically grants them access to the league they just
+   created.
+
+**Testing with multiple accounts on one computer:** browser cookies are
+per-profile, so open a separate browser profile (or a separate browser
+entirely) per account to hold simultaneous, independent sessions --
+Chrome/Edge "Add profile," Firefox "New Firefox Private Window" is NOT
+sufficient since private windows can share state in some configurations;
+use full separate profiles.
+
+**Local HTTP testing note:** session and CSRF cookies default to
+`Secure` (HTTPS-only), so logging in over plain `http://localhost` will
+not work unless you explicitly set `INSECURE_LOCAL_COOKIES=1` in the
+environment before starting the server. This is logged loudly at
+startup as a warning and must **never** be set for a deployment
+reachable by anyone other than the person at that same computer --
+there is no way to safely auto-detect "this is local," so it is a
+deliberate, visible opt-in every time.
+
+**API-key compatibility:** every personal API key created before this
+phase, and every one created via the legacy `POST /api/users` endpoint
+going forward, continues to work exactly as before -- pass it as
+`Authorization: Bearer <key>` on any route, no session or cookie
+involved, and no CSRF header needed. The Admin Key sidebar button
+remains available (inside the app shell, once signed in) as this
+secondary, bootstrap/automation-oriented path; it is just no longer the
+default screen a browser visitor sees. It is also reachable directly
+from the login screen itself via "Use Admin Key instead," for a browser
+that has neither a session nor a previously stored key.
+
+**Session vs. Admin Key precedence:** an active password session always
+takes precedence over a stored Admin Key, in the browser and on the
+server alike -- while a session is active, requests never attach the
+Admin Key even if one is still stored in that tab, so the identity
+signed in is always the identity every action runs as. Logging in with
+a password also clears any Admin Key stored in that browser tab. The
+Admin Key is used only when no session is active in that tab.
 
 ## Sharing
 

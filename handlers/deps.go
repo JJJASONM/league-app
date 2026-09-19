@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 
+	"league_app/backend/domains/auth"
 	"league_app/backend/domains/finances"
 	"league_app/backend/domains/handicaps"
 	"league_app/backend/domains/leagues"
@@ -63,6 +64,56 @@ type applyUserIDKey struct{}
 // route requests. Separate from applyUserIDKey so the two auth layers do not
 // share context state.
 type clearanceUserKey struct{}
+
+// identityContextKey is the context key for the resolved auth.Identity on
+// requests authenticated through requireAction (Users/Roles Phase 1's
+// centralized Authorize policy). Separate from clearanceUserKey/
+// applyUserIDKey -- this is a third, additive auth layer alongside the
+// existing two, not a replacement for either.
+type identityContextKey struct{}
+
+// AuthManager is the subset of auth.SessionService used by the new
+// Users/Roles Phase 1 auth endpoints and by requireAction's identity
+// resolution. Accepting an interface allows stub injection in tests.
+type AuthManager interface {
+	Login(ctx context.Context, email, password, userAgent, ipAddress string) (auth.LoginResult, error)
+	Logout(ctx context.Context, sessionToken string) error
+	ResolveSession(ctx context.Context, sessionToken string) (*auth.ResolvedSession, error)
+	Identity(ctx context.Context, userID int64) (auth.Identity, error)
+	IssuePasswordSetupToken(ctx context.Context, userID int64) (string, error)
+	CompletePasswordSetup(ctx context.Context, token, newPassword string) error
+	Deactivate(ctx context.Context, userID int64, apiKeys auth.APIKeyStore) error
+	Reactivate(ctx context.Context, userID int64) error
+}
+
+// RoleAssignmentManager is the subset of auth.RoleAssignmentStore used by
+// the users-admin handlers.
+type RoleAssignmentManager interface {
+	ListForUser(ctx context.Context, userID int64) ([]auth.Assignment, error)
+	Grant(ctx context.Context, userID int64, roleCode auth.RoleCode, leagueID *int64, createdByUserID *int64) error
+	Revoke(ctx context.Context, userID int64, roleCode auth.RoleCode, leagueID *int64) error
+}
+
+// LeagueSelfGrantManager creates a league and grants its creator
+// league_admin scope for it in a single database transaction (see
+// sqlite.LeagueSelfGrantStore) -- both succeed or neither does.
+type LeagueSelfGrantManager interface {
+	CreateLeagueWithLeagueAdminGrant(ctx context.Context, input leagues.CreateLeagueInput, creatorUserID int64) (models.League, error)
+}
+
+// AuthUserManager is the subset of auth.UserStore used by the users-admin
+// "provision user" action.
+type AuthUserManager interface {
+	ProvisionUser(ctx context.Context, username, normalizedEmail string, playerID *int64) (auth.UserRecord, error)
+	GetByID(ctx context.Context, id int64) (*auth.UserRecord, error)
+}
+
+// APIKeyManager is the subset of auth.APIKeyStore used directly by the
+// users-admin "revoke API keys" action (distinct from Deactivate's own
+// automatic revocation, which takes an auth.APIKeyStore parameter directly).
+type APIKeyManager interface {
+	RevokeAllForUser(ctx context.Context, userID int64) error
+}
 
 // WeekManager is the subset of matches.WeekService used by the week-workflow handlers.
 // Accepting an interface allows stub injection in tests.
@@ -126,6 +177,9 @@ type LineupManager interface {
 	ListLineupPlans(ctx context.Context, req matches.ListLineupPlansRequest) ([]models.LineupPlan, error)
 	SaveTeamLineup(ctx context.Context, req matches.SaveLineupRequest) error
 	DeleteLineupPlan(ctx context.Context, id int64) error
+	// GetLineupPlan returns one lineup plan row by id -- used by
+	// authorization scope resolution (plan -> season -> league).
+	GetLineupPlan(ctx context.Context, id int64) (models.LineupPlan, error)
 	// SetSubstitute and ClearSubstitute are Substitute Workflow Phase 1.
 	SetSubstitute(ctx context.Context, req matches.SetSubstituteRequest) (models.LineupPlan, error)
 	ClearSubstitute(ctx context.Context, id int64) (models.LineupPlan, error)
@@ -275,4 +329,33 @@ type Dependencies struct {
 	// FinanceMgr handles dues payments and season payouts (Financial Phase 1).
 	// Routes are registered only when non-nil.
 	FinanceMgr FinanceManager
+
+	// --- Users/Roles Phase 1 ---
+
+	// AuthMgr handles login/logout/session resolution/password setup.
+	// When nil, the /api/auth/* routes are not registered and every route
+	// that would otherwise use requireAction falls back to the existing
+	// Bearer-only clearanceAuth chain, so the app remains fully usable
+	// with API keys alone if this is left unwired.
+	AuthMgr AuthManager
+	// RoleAssignmentMgr handles scoped role grants/revocation.
+	RoleAssignmentMgr RoleAssignmentManager
+	// LeagueSelfGrantMgr performs the atomic "create league + grant
+	// creator league_admin" transaction. When scoped authorization is
+	// wired (AuthMgr/RoleAssignmentMgr non-nil) this must also be non-nil
+	// -- see registerLeagueRoutes.
+	LeagueSelfGrantMgr LeagueSelfGrantManager
+	// AuthUserMgr provisions new users with an email identity (Users Admin
+	// account-administration action).
+	AuthUserMgr AuthUserManager
+	// APIKeyMgr handles API-key revocation as its own explicit admin
+	// action (Deactivate revokes keys automatically; this is for revoking
+	// keys without deactivating the whole account).
+	APIKeyMgr APIKeyManager
+	// InsecureLocalCookies omits the Secure attribute from session/CSRF
+	// cookies -- an explicit, logged-at-startup opt-in for same-computer
+	// HTTP testing only (see main.go's INSECURE_LOCAL_COOKIES handling).
+	// Defaults to false (Secure cookies), which is required for any
+	// remote/HTTPS deployment.
+	InsecureLocalCookies bool
 }

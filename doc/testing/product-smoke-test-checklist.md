@@ -2853,6 +2853,301 @@ SQLite integrity check against the live staging database file.
    followed. No API keys or secrets are recorded here or elsewhere in
    this checklist.
 
+### 27. Users/Roles/Authentication Phase 1 (2026-09-18)
+
+Real email+password login, server-managed sessions with CSRF
+protection, scoped `role_assignments`, a centralized `auth.Authorize`
+policy, league creation with an atomic self-grant, and league/season-
+scoped authorization on league and season CRUD. Full design detail:
+`doc/domains/users/README.md`'s "Users/Roles/Authentication Phase 1
+Implementation" section. No browser available in this developer's tool
+session -- every item below is verified at the Go test/handler-
+integration level; browser-rendering items are marked NOT VERIFIED.
+
+**Backend authorization checks (all PASS, `go test ./... -count=1`):**
+
+1. **Migration -- PASS.** `db/migrate_users_api_keys_test.go` seeds the
+   exact literal pre-Phase-1 `users` schema (including the `api_key_hash
+   TEXT NOT NULL UNIQUE` column) with real data, then runs the actual
+   `db.Init` migration path. Confirms: every pre-existing user id,
+   username, role, active flag, and created_at value preserved exactly;
+   every old `api_key_hash` migrated exactly once into the new
+   `user_api_keys` table with no loss or duplication; the temporary
+   stash table and the old `api_key_hash` column are both gone
+   afterward; `role_assignments` correctly backfilled per legacy role
+   (`system_admin`/legacy `admin` -> one global row; `league_admin` ->
+   one row per league that existed at migration time); a freshly
+   created `role_assignments` row (proving the FK still resolves against
+   the renamed `users` table, not a dangling reference) cascades away
+   when its user is deleted; the AUTOINCREMENT sequence continues
+   correctly post-rebuild (no id collision); re-running migration a
+   second time is a no-op (idempotent).
+2. **Password hashing -- PASS.** Argon2id hash/verify round trip;
+   two hashes of the same password differ (fresh salt per call); a
+   strict decoder rejects a wrong version, out-of-range memory/
+   iterations/parallelism, and invalid base64 salt/hash segments (never
+   lets a corrupted or tampered stored value drive an expensive
+   computation with attacker-influenced cost); `NeedsRehash` correctly
+   flags a below-target stored hash; `CalibrateArgon2` measures real
+   hardware speed rather than using a hardcoded constant -- measured on
+   the primary development machine: memory=65536KiB, iterations=19,
+   parallelism=2, 358.1102ms against a 300ms target.
+3. **Sessions and CSRF -- PASS.** Login sets both an HttpOnly session
+   cookie and a non-HttpOnly, JS-readable CSRF cookie; a
+   session-cookie-authenticated mutating request without the
+   `X-CSRF-Token` header is rejected (403); the same request with the
+   correct header succeeds; a wrong CSRF token is rejected (403);
+   logout revokes only the current session, leaving a second concurrent
+   session for the same account valid; a Bearer-key-authenticated
+   mutating request needs no CSRF header at all and is unaffected.
+4. **Authorization policy -- PASS.** The full `auth.Authorize` matrix is
+   unit-tested directly (system_admin allowed everywhere; league_admin
+   allowed only for their own league, denied for any other; league
+   creation allowed for an existing league_admin or system_admin, denied
+   for a plain player; player-overview ownership; dual-role identities
+   get the union of both capabilities regardless of "workspace").
+   `role_assignments`' CHECK constraint rejects an invalid combination
+   via a direct raw INSERT (proving database-level, not just
+   application-level, enforcement); the partial unique indexes reject a
+   duplicate grant; deleting a league cascades its scoped assignments,
+   confirmed with the same forced-non-init-connection technique
+   `sqlite-foreign-key-cascade-enforcement` established (Known Gap #19).
+5. **End-to-end HTTP integration -- PASS**
+   (`handlers/api_auth_integration_test.go`, a real `httptest.Server`
+   with the full auth stack wired): login sets both cookies;
+   `GET /api/auth/me` reflects the real identity, role assignments, and
+   available workspaces; a league_admin scoped to League A can create a
+   season in League A but is denied (403) creating one in League B, and
+   is denied (403) updating League B's own metadata directly, and is
+   denied (403) a system-admin-only action; league creation atomically
+   grants the creator (tested as an already-system_admin account, which
+   still receives an explicit additional league_admin grant for the new
+   league per the "atomically grants the creator" rule applying
+   regardless of the creator's other roles) a league_admin assignment
+   for the newly created league; a plain player identity is denied
+   (403) attempting an admin mutation route directly; deactivating an
+   account invalidates its session immediately (a request one moment
+   later with the previously-valid cookie gets 401); a legacy personal
+   API key created before this phase (via the unchanged
+   `ApplyAuthStore.CreateApplyUser`) still successfully authenticates a
+   mutating request after migration, with no CSRF header needed.
+6. **Existing test suite -- PASS, unmodified.** Every pre-existing test
+   in every package (`handlers`, `backend/domains/*`,
+   `backend/storage/sqlite`, `db`, `logic`) continues to pass with no
+   changes to its own code, confirming that league/season create-
+   update-delete's new scoped-authorization path is fully inert
+   (falls back to the exact prior flat `clearanceAuth` behavior) in
+   every test/deployment configuration that has not wired
+   `Dependencies.AuthMgr`/`RoleAssignmentMgr`.
+
+### 27b. Users/Roles/Authentication Phase 1 -- PM correction round (2026-09-19)
+
+PM review of the section 27 handoff found it operationally incomplete:
+session authentication only worked on the new league/season CRUD routes,
+Player Overview still rejected sessions entirely, league creation's
+self-grant was a compensating action rather than a real transaction, and
+the users-table migration created its auth child tables in the wrong
+order relative to its own documented sequencing (harmless in practice at
+the time, but not a real guarantee). All four are fixed; see
+`doc/domains/users/README.md`'s "PM correction round (2026-09-19)"
+section for full detail. New verification, all PASS
+(`go test ./... -count=1`):
+
+7. **Every protected route family now accepts a session, scoped to its
+   own resource -- PASS** (new `handlers/api_auth_scoped_families_test.go`,
+   real HTTP against a full auth stack): a league_admin scoped to League
+   A succeeds creating a player, a team, saving a lineup, and generating
+   a schedule in League A, and is rejected (403) doing the same in League
+   B; a different league_admin (League B only) is rejected (403)
+   assigning a match that belongs to League A; reading and writing
+   finances, closing a week, activating a season, and adding a season
+   rule all follow the same own-league-succeeds/other-league-403 pattern.
+8. **Player Overview session access -- PASS** (new
+   `TestAuthIntegration_PlayerOverview_SessionAccess`): a player signed
+   in with email/password (no personal API key at all) loads their own
+   overview (200) and is denied (403) another player's; a league_admin
+   loads a player in their own assigned league (200) and is denied (403)
+   a player in a different league.
+9. **Password setup, full flow -- PASS** (new
+   `TestAuthIntegration_PasswordSetup_FullFlow`): a system_admin issues a
+   setup token over HTTP; the token is redeemed via
+   `POST /api/auth/password-setup`; the account then logs in with the
+   new password; replaying the same already-used token is rejected
+   (400).
+10. **League creation self-grant is a real transaction -- PASS**
+    (`backend/storage/sqlite/league_self_grant_store_test.go`, 3 new
+    tests): success commits both the league and the grant; a forced
+    grant failure (an FK violation from a nonexistent creator id) leaves
+    neither the league nor any role_assignments row behind; an unrelated
+    existing league_admin receives no automatic grant for the new
+    league. The existing HTTP-level `TestAuthIntegration_LeagueCreate_AtomicSelfGrant`
+    from section 27 still passes unchanged.
+11. **Migration ordering and historical AUTOINCREMENT sequence -- PASS**
+    (`db/migrate_users_api_keys_test.go`): the existing
+    `TestMigrateUsersAndAPIKeys_FromPrePhaseSchema` still passes against
+    the corrected creation order (auth child tables created only after
+    `users` has its final shape); a new
+    `TestMigrateUsersAndAPIKeys_PreservesHistoricalSequenceAfterHighIDDeletion`
+    seeds users up to a high id, deletes the highest-id row, runs
+    migration, and confirms the next inserted user's id is still greater
+    than that historical high-water mark -- proving `sqlite_sequence` is
+    preserved even when the row that set it no longer exists at
+    migration time.
+
+**Frontend additions (browser rendering NOT VERIFIED -- no browser in
+this developer's tool session; a server-level smoke test was performed
+instead -- see below):**
+
+- `[ ]` **NOT VERIFIED (no browser):** the login screen's "Have a setup
+  token?" link switches to setup mode; a valid token plus matching
+  passwords sets the password and returns to sign-in; a mismatched
+  confirmation or too-short password shows an inline error without
+  calling the API; an invalid/expired token shows the server's error.
+- `[ ]` **NOT VERIFIED (no browser):** the login screen's "Use Admin Key
+  instead" link opens the existing Admin Key modal; a valid key opens
+  the app shell; an invalid key leaves the login screen visible with an
+  error; clearing the key returns to the login screen when no session
+  exists.
+- **Server-level smoke test -- PASS:** the production binary was built
+  (`go build`) and run against a temporary data directory with
+  `INSECURE_LOCAL_COOKIES=1`; `GET /`, `GET /app.js`, and
+  `GET /domains/auth/login-page-component.js` all returned 200 (static
+  assets, including the new login-screen markup, are embedded and served
+  correctly); `POST /api/auth/login` with a nonexistent account returned
+  401 as expected. This confirms the server starts and serves the
+  updated frontend correctly; it does not exercise any JavaScript or
+  visual rendering, which remains NOT VERIFIED above.
+- `node --check` (via the `.mjs`-copy technique below) passed for every
+  changed/new frontend file this round:
+  `web/domains/auth/login-page-component.js`, `web/app.js`.
+
+**Frontend (browser rendering NOT VERIFIED -- no browser in this
+developer's tool session):**
+
+- `[ ]` **NOT VERIFIED (no browser):** an unauthenticated visitor sees
+  the login screen, not the app shell.
+- `[ ]` **NOT VERIFIED (no browser):** a successful login hides the
+  login screen and shows the app shell with the correct nav items for
+  the signed-in identity's role.
+- `[ ]` **NOT VERIFIED (no browser):** a dual-role (player + league_admin)
+  identity sees the workspace picker and switching it changes nav
+  visibility without signing out.
+- `[ ]` **NOT VERIFIED (no browser):** the Users Admin screen's
+  "Provision Email Login" flow and per-account row menu (issue setup
+  token, deactivate/reactivate, revoke API keys) render and function
+  correctly.
+- All underlying data/logic these screens render is proven correct at
+  the API/handler level above (`node --check`, applied via a `.mjs`
+  copy for every ES-module file touched -- see process note below,
+  passed on every changed/new frontend file: `web/lib/api-client.js`,
+  `web/app.js`, `web/domains/auth/*.js`,
+  `web/domains/users/users-management-page-component.js`,
+  `web/domains/users/users-api-service.js`).
+
+**Process note for future JS verification:** plain `node --check` on a
+file containing `import`/`export` statements does NOT reliably catch
+syntax errors after the first `import` line in this Node version (it
+appears to stop meaningfully validating once ESM syntax is detected in
+a `.js` file, returning exit 0 even for a file with a real syntax error
+later in it) -- confirmed empirically during this phase. The reliable
+check is to copy the file to a temporary `.mjs` path first, then run
+`node --check` against that copy; every ES-module file in this phase was
+verified this way, not with a bare `node --check web/domains/.../*.js`.
+Worth folding into this project's stated `node --check` convention.
+
+### 27c. Users/Roles/Authentication Phase 1 -- PM final authorization corrections (round 2, 2026-09-19)
+
+All PASS (`go test ./... -count=1`, 1405 tests total, 0 fail):
+
+12. **Related-resource cross-league validation -- PASS.** New unit tests
+    for `MatchService.AssignMatchTeams` (cross-league team rejected 409,
+    unknown team rejected 409, same-league teams succeed, nil team ids
+    skip validation) and `LineupService.SaveTeamLineup` (cross-league
+    team rejected, teams_managed season requires season_teams
+    participation, legacy season skips that check). Extended
+    `handlers/api_auth_scoped_families_test.go` with HTTP-level cases:
+    player create with a cross-league team_id/league_id mismatch (409);
+    unassigned-player create is system_admin-only; player update moving
+    a player between two same-league teams succeeds, cross-league move
+    is system_admin-only; player merge of two same-league players
+    succeeds, cross-league merge is system_admin-only; match-assign and
+    lineup-save both reject a cross-league related team even for
+    system_admin (a data-integrity invariant, not an authorization gap).
+13. **Unassigned-player route behavior -- PASS.** New
+    `TestAuthIntegration_UnassignedPlayerRoutes`: league_admin denied
+    (403) deleting an unassigned player; system_admin deletes one
+    successfully, with an explicit assertion that a bodyless `DELETE`
+    never produces a 400 (confirming the JSON-decode-EOF bug is gone);
+    league_admin denied (403) merging two unassigned players;
+    system_admin allowed.
+14. **Partial-wiring fail-closed behavior -- PASS.** New
+    `handlers/api_auth_partial_wiring_test.go`: a Dependencies with
+    `AuthMgr`/`RoleAssignmentMgr` wired and `ApplyAuth` nil still
+    requires a credential (401 with none presented, 403 for an
+    unresolvable Bearer key) while a valid session succeeds normally;
+    a Dependencies with `ApplyAuth`, `AuthMgr`, AND `RoleAssignmentMgr`
+    all nil (the legacy minimal-test shape) remains fully open, confirmed
+    directly against `Register`.
+15. **Handicap Apply mounts without the static token -- PASS.** New
+    `TestRegister_ApplyRoute_Mounted_WhenSessionAuthOnly_NoToken`: with
+    no `AdminToken` and no `ApplyAuth` configured, the route still exists
+    (401 with no credential, not 404) and a session-authenticated
+    system_admin reaches the real handler. The existing
+    `TestRegister_ApplyRoute_NotMounted_WhenTokenEmpty` still passes
+    unchanged (its Dependencies has no auth path at all, the one
+    condition where the route legitimately stays unmounted).
+16. **sqlite_sequence restoration covers an emptied table -- PASS.** New
+    `TestMigrateUsersAndAPIKeys_PreservesHistoricalSequenceWhenAllUsersDeleted`
+    seeds users up to a high id, deletes every user (not just the
+    highest-id one), migrates, inserts a new user, and confirms its id
+    exceeds the historical high-water mark -- proving the fix handles a
+    rebuild that copies zero rows, where no `sqlite_sequence` row existed
+    yet for the plain `UPDATE` from round 1 to match.
+
+Browser verification was not claimed or attempted this round.
+
+### 27d. Users/Roles/Authentication Phase 1 -- PM final credential-precedence and player-unassignment corrections (round 3, 2026-09-19)
+
+All PASS (`go test ./... -count=1`, full suite, 0 fail):
+
+17. **Session takes precedence over a stale/different Admin Key -- PASS.**
+    New `handlers/api_auth_credential_precedence_test.go`, all HTTP-level
+    against a real session cookie AND a real personal Bearer key attached
+    to the same request:
+    `TestCredentialPrecedence_SessionWinsOverDifferentSystemAdminBearerKey`
+    (a league_admin session plus a stale system_admin Bearer key calling
+    the system_admin-only `POST /api/backup` still gets 403 -- the
+    session's own lesser role governs, not the key's);
+    `TestCredentialPrecedence_PlayerSessionCannotGainSystemAdminFromStaleKey`
+    (same proof for a `role=player` session);
+    `TestCredentialPrecedence_LeagueAdminSessionScopedByOwnAssignment_NotStaleKey`
+    (a League A-scoped league_admin session succeeds creating a team in
+    League A and is still denied creating one in League B, even with a
+    stale Bearer key scoped to League B attached);
+    `TestCredentialPrecedence_BearerFallbackStillWorksWithNoSession` (a
+    Bearer key with no session cookie present still authenticates, the
+    fallback path unaffected);
+    `TestCredentialPrecedence_SessionMutationStillRequiresCSRF_EvenWithBearerAttached`
+    (a session-authenticated mutation with a Bearer header attached but
+    no CSRF header still gets 403 -- CSRF enforcement is not bypassed by
+    a Bearer header's mere presence once the session path is the one
+    actually taken).
+18. **Player update cannot silently unassign under a league_admin session
+    -- PASS.** New subtest `player update: league_admin cannot unassign,
+    system_admin can` under `TestAuthIntegration_ScopedFamilies`: a
+    league_admin gets 403 for both an explicit `team_id:null` body and a
+    body that omits `team_id` entirely, the player remains assigned to
+    their original team after each rejected attempt (verified by
+    re-fetching the player), and system_admin CAN unassign the same
+    player (verified `team_id` is nil afterward). New subtests
+    `league_admin denied update (assign) of an unassigned player` /
+    `system_admin allowed update (assign) of an unassigned player` under
+    `TestAuthIntegration_UnassignedPlayerRoutes` prove the mirror case:
+    assigning a team to an already-unassigned player is also
+    system_admin-only.
+
+Browser verification was not claimed or attempted this round.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |

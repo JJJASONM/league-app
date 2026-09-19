@@ -41,6 +41,35 @@
       box-shadow: none;
     }
     .league-picker select option { background: #1a2035; }
+    .workspace-picker {
+      padding: 0.4rem 0.9rem 0.4rem;
+      border-bottom: 1px solid #2a3550;
+    }
+    .workspace-picker label {
+      font-size: .67rem;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: #5a6a8a;
+      display: block;
+      margin-bottom: 3px;
+    }
+    .workspace-picker select {
+      background: #232e48;
+      color: #c8d0e0;
+      border: 1px solid #2e3c55;
+      font-size: .83rem;
+    }
+    .workspace-picker select option { background: #1a2035; }
+    .login-screen {
+      min-height: 100vh;
+      background: #1a2035;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 360px;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.25);
+    }
     .sidebar .nav-link {
       color: #8899bb;
       border-radius: 8px;

@@ -46,7 +46,10 @@ func (s *MatchService) GetMatch(ctx context.Context, id int64) (models.MatchDeta
 
 // AssignMatchTeams sets the home and away team IDs on the match.
 // Either value may be nil to NULL the column.
-// Returns domainerr.Conflict when the match is already completed.
+// Returns domainerr.Conflict when the match is already completed, or when
+// a non-nil team id does not belong to the match's own season's league
+// (PM correction: this invariant lives here, at the authoritative
+// backend service boundary, not only in frontend team-picker filtering).
 func (s *MatchService) AssignMatchTeams(ctx context.Context, id int64, homeTeamID, awayTeamID *int64) error {
 	if sc, err := s.store.IsSeasonClosedForMatch(ctx, id); err != nil {
 		return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")
@@ -58,12 +61,45 @@ func (s *MatchService) AssignMatchTeams(ctx context.Context, id int64, homeTeamI
 	if err != nil && !errors.Is(err, ErrMatchNotFound) {
 		return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")
 	}
-	if err == nil && d.Match.Completed {
-		return domainerr.New("MATCH_ALREADY_COMPLETED", domainerr.Conflict,
-			"match is completed; team assignments cannot be changed")
+	if err == nil {
+		if d.Match.Completed {
+			return domainerr.New("MATCH_ALREADY_COMPLETED", domainerr.Conflict,
+				"match is completed; team assignments cannot be changed")
+		}
+		if err := s.rejectCrossLeagueTeams(ctx, d.Match.SeasonID, homeTeamID, awayTeamID); err != nil {
+			return err
+		}
 	}
 	if err := s.store.AssignMatchTeams(ctx, id, homeTeamID, awayTeamID); err != nil {
 		return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")
+	}
+	return nil
+}
+
+// rejectCrossLeagueTeams returns domainerr.Conflict if any non-nil team id
+// does not belong to seasonID's own league. A season or team that cannot
+// be resolved at all is treated as a validation failure here too, rather
+// than silently allowing the assignment through.
+func (s *MatchService) rejectCrossLeagueTeams(ctx context.Context, seasonID int64, teamIDs ...*int64) error {
+	leagueID, found, err := s.store.SeasonLeagueID(ctx, seasonID)
+	if err != nil {
+		return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")
+	}
+	if !found {
+		return nil
+	}
+	for _, teamID := range teamIDs {
+		if teamID == nil {
+			continue
+		}
+		teamLeagueID, found, err := s.store.TeamLeagueID(ctx, *teamID)
+		if err != nil {
+			return domainerr.New("MATCH_ASSIGN_FAILED", domainerr.Internal, "assign teams failed")
+		}
+		if !found || teamLeagueID != leagueID {
+			return domainerr.New("MATCH_ASSIGN_CROSS_LEAGUE", domainerr.Conflict,
+				"team does not belong to this match's league")
+		}
 	}
 	return nil
 }

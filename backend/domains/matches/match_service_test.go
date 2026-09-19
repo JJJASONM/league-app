@@ -21,6 +21,16 @@ type stubMatchStore struct {
 	seasonClosed    bool
 	seasonClosedErr error
 
+	// seasonLeagueFound defaults to false, meaning "no season to validate
+	// against" -- rejectCrossLeagueTeams treats that as skip-validation,
+	// so every existing test above that never sets these fields keeps
+	// passing unchanged.
+	seasonLeagueID    int64
+	seasonLeagueFound bool
+	seasonLeagueErr   error
+	teamLeagueIDs     map[int64]int64
+	teamLeagueErr     error
+
 	// captured args
 	lastListReq    matches.ListMatchesRequest
 	lastGetID      int64
@@ -49,6 +59,18 @@ func (s *stubMatchStore) AssignMatchTeams(_ context.Context, id int64, home, awa
 }
 func (s *stubMatchStore) IsSeasonClosedForMatch(_ context.Context, _ int64) (bool, error) {
 	return s.seasonClosed, s.seasonClosedErr
+}
+
+func (s *stubMatchStore) SeasonLeagueID(_ context.Context, _ int64) (int64, bool, error) {
+	return s.seasonLeagueID, s.seasonLeagueFound, s.seasonLeagueErr
+}
+
+func (s *stubMatchStore) TeamLeagueID(_ context.Context, teamID int64) (int64, bool, error) {
+	if s.teamLeagueErr != nil {
+		return 0, false, s.teamLeagueErr
+	}
+	leagueID, ok := s.teamLeagueIDs[teamID]
+	return leagueID, ok, nil
 }
 
 func TestListMatches_ReturnsEmptySliceWhenNone(t *testing.T) {
@@ -213,6 +235,87 @@ func TestAssignMatchTeams_NotCompletedMatch_CallsStoreAssign(t *testing.T) {
 	}
 	if !stub.assignCalled {
 		t.Error("store AssignMatchTeams must be called for a non-completed match")
+	}
+}
+
+func TestAssignMatchTeams_CrossLeagueTeam_ReturnsConflictAndSkipsStore(t *testing.T) {
+	stub := &stubMatchStore{
+		getResult:         models.MatchDetail{Match: models.Match{ID: 1, SeasonID: 10, Completed: false}},
+		seasonLeagueID:    100,
+		seasonLeagueFound: true,
+		teamLeagueIDs:     map[int64]int64{5: 200}, // team 5 belongs to league 200, not 100
+	}
+	svc := matches.NewMatchService(stub)
+	home := int64(5)
+	err := svc.AssignMatchTeams(context.Background(), 1, &home, nil)
+	var de *domainerr.Err
+	if !errors.As(err, &de) {
+		t.Fatalf("want domainerr.Err, got %T: %v", err, err)
+	}
+	if de.Category != domainerr.Conflict {
+		t.Errorf("want Conflict category, got %v", de.Category)
+	}
+	if de.Code != "MATCH_ASSIGN_CROSS_LEAGUE" {
+		t.Errorf("want code MATCH_ASSIGN_CROSS_LEAGUE, got %q", de.Code)
+	}
+	if stub.assignCalled {
+		t.Error("store AssignMatchTeams must not be called for a cross-league team")
+	}
+}
+
+func TestAssignMatchTeams_UnknownTeam_ReturnsConflictAndSkipsStore(t *testing.T) {
+	stub := &stubMatchStore{
+		getResult:         models.MatchDetail{Match: models.Match{ID: 1, SeasonID: 10, Completed: false}},
+		seasonLeagueID:    100,
+		seasonLeagueFound: true,
+		teamLeagueIDs:     map[int64]int64{}, // team 5 does not exist
+	}
+	svc := matches.NewMatchService(stub)
+	home := int64(5)
+	err := svc.AssignMatchTeams(context.Background(), 1, &home, nil)
+	var de *domainerr.Err
+	if !errors.As(err, &de) {
+		t.Fatalf("want domainerr.Err, got %T: %v", err, err)
+	}
+	if de.Category != domainerr.Conflict {
+		t.Errorf("want Conflict category for an unresolvable team, got %v", de.Category)
+	}
+	if stub.assignCalled {
+		t.Error("store AssignMatchTeams must not be called for an unresolvable team")
+	}
+}
+
+func TestAssignMatchTeams_SameLeagueTeams_CallsStoreAssign(t *testing.T) {
+	stub := &stubMatchStore{
+		getResult:         models.MatchDetail{Match: models.Match{ID: 1, SeasonID: 10, Completed: false}},
+		seasonLeagueID:    100,
+		seasonLeagueFound: true,
+		teamLeagueIDs:     map[int64]int64{5: 100, 6: 100},
+	}
+	svc := matches.NewMatchService(stub)
+	home := int64(5)
+	away := int64(6)
+	if err := svc.AssignMatchTeams(context.Background(), 1, &home, &away); err != nil {
+		t.Fatalf("unexpected error for same-league teams: %v", err)
+	}
+	if !stub.assignCalled {
+		t.Error("want store AssignMatchTeams called for same-league teams")
+	}
+}
+
+func TestAssignMatchTeams_NilTeamIDsSkipLeagueValidation(t *testing.T) {
+	stub := &stubMatchStore{
+		getResult:         models.MatchDetail{Match: models.Match{ID: 1, SeasonID: 10, Completed: false}},
+		seasonLeagueID:    100,
+		seasonLeagueFound: true,
+		teamLeagueIDs:     map[int64]int64{},
+	}
+	svc := matches.NewMatchService(stub)
+	if err := svc.AssignMatchTeams(context.Background(), 1, nil, nil); err != nil {
+		t.Fatalf("unexpected error clearing both team ids: %v", err)
+	}
+	if !stub.assignCalled {
+		t.Error("want store AssignMatchTeams called when clearing both team ids")
 	}
 }
 

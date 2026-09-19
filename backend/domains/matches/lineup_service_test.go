@@ -13,12 +13,12 @@ import (
 // ── stub ──────────────────────────────────────────────────────────────────────
 
 type stubLineupStore struct {
-	listResult  []models.LineupPlan
-	listErr     error
-	saveErr     error
-	deleteErr   error
-	lastListReq matches.ListLineupPlansRequest
-	lastSaveReq matches.SaveLineupRequest
+	listResult   []models.LineupPlan
+	listErr      error
+	saveErr      error
+	deleteErr    error
+	lastListReq  matches.ListLineupPlansRequest
+	lastSaveReq  matches.SaveLineupRequest
 	lastDeleteID int64
 
 	getPlanResult  models.LineupPlan
@@ -38,6 +38,19 @@ type stubLineupStore struct {
 	lastPlayerInMatch struct {
 		seasonID, weekNumber, homeTeamID, awayTeamID, excludePlanID, playerID int64
 	}
+
+	// seasonInfoFound defaults to false, meaning "no season to validate
+	// against" -- validateTeamInSeasonLeague treats that as
+	// skip-validation, so every existing SaveTeamLineup test above that
+	// never sets these fields keeps passing unchanged.
+	seasonInfoLeagueID     int64
+	seasonInfoTeamsManaged bool
+	seasonInfoFound        bool
+	seasonInfoErr          error
+	teamLeagueIDs          map[int64]int64
+	teamLeagueErr          error
+	participatesResult     bool
+	participatesErr        error
 }
 
 func (s *stubLineupStore) ListLineupPlans(_ context.Context, req matches.ListLineupPlansRequest) ([]models.LineupPlan, error) {
@@ -71,6 +84,22 @@ func (s *stubLineupStore) SetSubstitute(_ context.Context, req matches.SetSubsti
 func (s *stubLineupStore) ClearSubstitute(_ context.Context, id int64) (models.LineupPlan, error) {
 	s.lastClearSubID = id
 	return s.clearSubResult, s.clearSubErr
+}
+
+func (s *stubLineupStore) SeasonInfo(_ context.Context, _ int64) (int64, bool, bool, error) {
+	return s.seasonInfoLeagueID, s.seasonInfoTeamsManaged, s.seasonInfoFound, s.seasonInfoErr
+}
+
+func (s *stubLineupStore) TeamLeagueID(_ context.Context, teamID int64) (int64, bool, error) {
+	if s.teamLeagueErr != nil {
+		return 0, false, s.teamLeagueErr
+	}
+	leagueID, ok := s.teamLeagueIDs[teamID]
+	return leagueID, ok, nil
+}
+
+func (s *stubLineupStore) TeamParticipatesInSeason(_ context.Context, _, _ int64) (bool, error) {
+	return s.participatesResult, s.participatesErr
 }
 
 func (s *stubLineupStore) PlayerInMatchLineup(_ context.Context, seasonID, weekNumber, homeTeamID, awayTeamID, excludePlanID, playerID int64) (bool, error) {
@@ -206,6 +235,84 @@ func TestLineupService_SaveTeamLineup_StoreErrorBecomesInternal(t *testing.T) {
 	}
 	if de.Category != domainerr.Internal {
 		t.Errorf("want Internal category, got %v", de.Category)
+	}
+}
+
+func TestLineupService_SaveTeamLineup_CrossLeagueTeam_RejectedAndSkipsStore(t *testing.T) {
+	stub := &stubLineupStore{
+		seasonInfoLeagueID: 100,
+		seasonInfoFound:    true,
+		teamLeagueIDs:      map[int64]int64{2: 200}, // team 2 belongs to league 200, not 100
+	}
+	svc := newLineupSvc(stub)
+	err := svc.SaveTeamLineup(context.Background(), matches.SaveLineupRequest{SeasonID: 5, TeamID: 2})
+	var de *domainerr.Err
+	if !errors.As(err, &de) {
+		t.Fatalf("want domainerr.Err, got %T: %v", err, err)
+	}
+	if de.Category != domainerr.Conflict {
+		t.Errorf("want Conflict category, got %v", de.Category)
+	}
+	if de.Code != "LINEUP_TEAM_CROSS_LEAGUE" {
+		t.Errorf("want code LINEUP_TEAM_CROSS_LEAGUE, got %q", de.Code)
+	}
+	if stub.lastSaveReq.SeasonID != 0 {
+		t.Error("store SaveTeamLineup must not be called for a cross-league team")
+	}
+}
+
+func TestLineupService_SaveTeamLineup_TeamsManagedSeason_TeamNotParticipating_Rejected(t *testing.T) {
+	stub := &stubLineupStore{
+		seasonInfoLeagueID:     100,
+		seasonInfoTeamsManaged: true,
+		seasonInfoFound:        true,
+		teamLeagueIDs:          map[int64]int64{2: 100},
+		participatesResult:     false,
+	}
+	svc := newLineupSvc(stub)
+	err := svc.SaveTeamLineup(context.Background(), matches.SaveLineupRequest{SeasonID: 5, TeamID: 2})
+	var de *domainerr.Err
+	if !errors.As(err, &de) {
+		t.Fatalf("want domainerr.Err, got %T: %v", err, err)
+	}
+	if de.Code != "LINEUP_TEAM_NOT_IN_SEASON" {
+		t.Errorf("want code LINEUP_TEAM_NOT_IN_SEASON, got %q", de.Code)
+	}
+}
+
+func TestLineupService_SaveTeamLineup_SameLeagueParticipatingTeam_CallsStore(t *testing.T) {
+	stub := &stubLineupStore{
+		seasonInfoLeagueID:     100,
+		seasonInfoTeamsManaged: true,
+		seasonInfoFound:        true,
+		teamLeagueIDs:          map[int64]int64{2: 100},
+		participatesResult:     true,
+	}
+	svc := newLineupSvc(stub)
+	req := matches.SaveLineupRequest{SeasonID: 5, TeamID: 2, WeekNumber: 1, PlayerIDs: []int64{9}}
+	if err := svc.SaveTeamLineup(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stub.lastSaveReq.TeamID != 2 {
+		t.Error("want store SaveTeamLineup called for a valid same-league participating team")
+	}
+}
+
+func TestLineupService_SaveTeamLineup_LegacyNonManagedSeason_SkipsParticipationCheck(t *testing.T) {
+	stub := &stubLineupStore{
+		seasonInfoLeagueID:     100,
+		seasonInfoTeamsManaged: false,
+		seasonInfoFound:        true,
+		teamLeagueIDs:          map[int64]int64{2: 100},
+		participatesResult:     false, // would fail if participation were checked
+	}
+	svc := newLineupSvc(stub)
+	req := matches.SaveLineupRequest{SeasonID: 5, TeamID: 2}
+	if err := svc.SaveTeamLineup(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error for a legacy (non-teams_managed) season: %v", err)
+	}
+	if stub.lastSaveReq.TeamID != 2 {
+		t.Error("want store SaveTeamLineup called for a legacy season regardless of season_teams participation")
 	}
 }
 

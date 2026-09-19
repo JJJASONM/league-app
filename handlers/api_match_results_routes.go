@@ -1,6 +1,10 @@
 package handlers
 
-import "net/http"
+import (
+	"net/http"
+
+	"league_app/backend/domains/auth"
+)
 
 // registerMatchResultsRoutes mounts match results, rounds, standings, and
 // player-stats routes onto mux. Kept together in one helper because all six
@@ -9,19 +13,24 @@ import "net/http"
 // mutations write -- splitting further would fragment one cohesive guard
 // block without a clear ownership boundary.
 //
-// Mutations are gated by clearanceAuth; GET reads are unprotected. The
-// season-closed-before-RosterEligible check inside saveRounds is handler
-// logic and is unaffected by this registration move. Callers must guard on
-// deps.RoundMgr != nil before calling, matching the existing registration
-// guard in Register.
-func registerMatchResultsRoutes(mux *http.ServeMux, roundMgr RoundManager, seasonMgr SeasonManager, applyAuth ApplyAuthResolver) {
+// Score-entry/correction mutations (results, rounds) are gated by
+// guardedLeagueAdminAction with ActionMatchScoreMutate; approval-workflow
+// mutations (approve/process/unapprove/unprocess) use ActionMatchApproval.
+// Both are scoped via match -> season -> league. GET reads are
+// unprotected. The season-closed-before-RosterEligible check inside
+// saveRounds is handler logic and is unaffected by this registration move.
+// Callers must guard on deps.RoundMgr != nil before calling, matching the
+// existing registration guard in Register.
+func registerMatchResultsRoutes(mux *http.ServeMux, deps Dependencies, roundMgr RoundManager, seasonMgr SeasonManager, matchMgr MatchManager) {
+	scope := matchIDPathScope(matchMgr, seasonMgr)
+
 	mux.HandleFunc("POST /api/matches/{id}/results",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionMatchScoreMutate, scope, func(w http.ResponseWriter, r *http.Request) {
 			submitResults(w, r, roundMgr)
 		}),
 	)
 	mux.HandleFunc("DELETE /api/matches/{id}/results",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionMatchScoreMutate, scope, func(w http.ResponseWriter, r *http.Request) {
 			clearResults(w, r, roundMgr)
 		}),
 	)
@@ -29,7 +38,7 @@ func registerMatchResultsRoutes(mux *http.ServeMux, roundMgr RoundManager, seaso
 		getRounds(w, r, roundMgr)
 	})
 	mux.HandleFunc("POST /api/matches/{id}/rounds",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionMatchScoreMutate, scope, func(w http.ResponseWriter, r *http.Request) {
 			saveRounds(w, r, roundMgr, seasonMgr)
 		}),
 	)
@@ -42,22 +51,22 @@ func registerMatchResultsRoutes(mux *http.ServeMux, roundMgr RoundManager, seaso
 
 	// Weekly Score Processing Phase 1A: match-level approval/processing.
 	mux.HandleFunc("POST /api/matches/{id}/approve",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionMatchApproval, scope, func(w http.ResponseWriter, r *http.Request) {
 			approveMatch(w, r, roundMgr)
 		}),
 	)
 	mux.HandleFunc("POST /api/matches/{id}/process",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionMatchApproval, scope, func(w http.ResponseWriter, r *http.Request) {
 			processMatch(w, r, roundMgr)
 		}),
 	)
 	mux.HandleFunc("POST /api/matches/{id}/unapprove",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionMatchApproval, scope, func(w http.ResponseWriter, r *http.Request) {
 			unapproveMatch(w, r, roundMgr)
 		}),
 	)
 	mux.HandleFunc("POST /api/matches/{id}/unprocess",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionMatchApproval, scope, func(w http.ResponseWriter, r *http.Request) {
 			unprocessMatch(w, r, roundMgr)
 		}),
 	)

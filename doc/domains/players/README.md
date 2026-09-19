@@ -676,3 +676,23 @@ role check into a shared `hasFinanceAdminRole(identity)` function in
 no auth logic was added inside the component. See "Privacy
 inconsistency -- resolved 2026-08-30" in "Player Overview Phase 2
 Implementation" above for full detail.
+
+### 2026-09-18 - Users/Roles/Authentication Phase 1: player/user separation unchanged
+
+**Status:** `accepted`
+
+Full detail lives in `doc/domains/users/README.md`'s "Users/Roles/
+Authentication Phase 1 Implementation" section, since the account/
+session/role model is owned by the users domain. Recorded here because
+it directly bears on this domain's core invariant: player records and
+user identities remain two separate tables with two separate
+lifecycles, exactly as the 2026-06-08 "Separate users and players"
+decision established. A player-facing user still reaches their own
+data exclusively through the existing `users.player_id` link -- Phase 1
+added real email+password login and browser sessions as a new way to
+*authenticate* that link, not a new way to *establish* it (self-
+registration and automatic player-email matching remain deferred, see
+the users-domain writeup). Players with no linked account at all --
+the common case for most roster/lineup/scoresheet/handicap/stats/
+finance history -- remain fully valid and untouched; nothing in Phase 1
+requires or nudges toward universal account creation.

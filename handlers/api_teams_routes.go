@@ -1,15 +1,22 @@
 package handlers
 
-import "net/http"
+import (
+	"net/http"
 
-// registerTeamRoutes mounts team CRUD routes onto mux, scoped to ?league_id=.
-// GET reads are unprotected; mutations are gated by clearanceAuth.
-func registerTeamRoutes(mux *http.ServeMux, teamMgr TeamManager, applyAuth ApplyAuthResolver) {
+	"league_app/backend/domains/auth"
+)
+
+// registerTeamRoutes mounts team CRUD routes onto mux, scoped to
+// ?league_id=. GET reads are unprotected; mutations are gated by
+// guardedLeagueAdminAction (session or Bearer, scoped to the team's
+// owning league -- see api_scope_resolvers.go).
+func registerTeamRoutes(mux *http.ServeMux, deps Dependencies) {
+	teamMgr := deps.TeamMgr
 	mux.HandleFunc("GET /api/teams", func(w http.ResponseWriter, r *http.Request) {
 		listTeams(w, r, teamMgr)
 	})
 	mux.HandleFunc("POST /api/teams",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionRosterMutate, createTeamScope, func(w http.ResponseWriter, r *http.Request) {
 			createTeam(w, r, teamMgr)
 		}),
 	)
@@ -17,12 +24,12 @@ func registerTeamRoutes(mux *http.ServeMux, teamMgr TeamManager, applyAuth Apply
 		getTeam(w, r, teamMgr)
 	})
 	mux.HandleFunc("PUT /api/teams/{id}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionRosterMutate, teamIDPathScope(teamMgr), func(w http.ResponseWriter, r *http.Request) {
 			updateTeam(w, r, teamMgr)
 		}),
 	)
 	mux.HandleFunc("DELETE /api/teams/{id}",
-		clearanceAuth(applyAuth, func(w http.ResponseWriter, r *http.Request) {
+		guardedLeagueAdminAction(deps, auth.ActionRosterMutate, teamIDPathScope(teamMgr), func(w http.ResponseWriter, r *http.Request) {
 			deleteTeam(w, r, teamMgr)
 		}),
 	)

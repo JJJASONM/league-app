@@ -9,10 +9,29 @@
       <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<div class="d-flex">
+
+<!-- Login screen (Users/Roles Phase 1): shown instead of the app shell
+     until a session or a legacy Admin Key resolves an identity. -->
+<div id="login-screen-container" class="d-none">
+  <login-page></login-page>
+</div>
+
+<div id="app-shell" class="d-flex d-none">
   <!-- Sidebar -->
   <nav class="sidebar d-flex flex-column py-2">
     <div class="brand">&#127921; <span>Pool</span> League</div>
+
+    <!-- Workspace switcher (Users/Roles Phase 1): only shown for an
+         identity with more than one available workspace (e.g. a
+         league_admin who is also a linked player). Switching changes
+         presentation only -- backend authorization is unaffected. -->
+    <div class="workspace-picker d-none" id="workspace-picker">
+      <label>Workspace</label>
+      <select class="form-select form-select-sm" id="workspace-select">
+        <option value="admin">Admin View</option>
+        <option value="player">Player View</option>
+      </select>
+    </div>
 
     <!-- League Switcher -->
     <div class="league-picker">
@@ -45,6 +64,7 @@
     </ul>
 
     <div class="mt-auto px-3 pb-3">
+      <button class="btn btn-sm btn-outline-secondary w-100 mb-2 d-none" data-action="sign-out" id="sign-out-btn"><i class="bi bi-box-arrow-right"></i> Sign Out</button>
       <button class="btn btn-sm btn-outline-secondary w-100 mb-2" data-action="manage-leagues"><i class="bi bi-gear"></i> Manage Leagues</button>
       <button class="btn btn-sm btn-outline-secondary w-100 mb-2" data-action="admin-key" id="admin-key-btn"><i class="bi bi-key"></i> <span id="admin-key-status">Admin Key</span></button>
       <button class="btn btn-sm btn-outline-secondary w-100" data-action="backup" id="backup-btn"><i class="bi bi-cloud-download"></i> Backup DB</button>
@@ -135,7 +155,7 @@
     </div>
 
   </div><!-- /main -->
-</div><!-- /flex -->
+</div><!-- /app-shell -->
 
 <!-- Toast container -->
 <div id="toast-container"></div>
@@ -262,5 +282,6 @@
     <script type="module" src="/domains/finances/finances-domain.js"></script>
     <script type="module" src="/domains/communications/communications-domain.js"></script>
     <script type="module" src="/domains/admin/admin-domain.js"></script>
+    <script type="module" src="/domains/auth/auth-domain.js"></script>
 </body>
 </html>

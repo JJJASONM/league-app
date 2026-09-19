@@ -38,7 +38,7 @@ func (n *noopRuleManager) Upsert(_ context.Context, r models.SeasonRule) (models
 func (n *noopRuleManager) Update(_ context.Context, _ int64, _, _ string) (models.SeasonRule, error) {
 	return models.SeasonRule{}, nil
 }
-func (n *noopRuleManager) Delete(_ context.Context, _ int64) error               { return nil }
+func (n *noopRuleManager) Delete(_ context.Context, _ int64) error { return nil }
 
 // noopSeasonMgr satisfies SeasonManager for tests that only exercise auth or
 // route-mounting logic and do not exercise season lifecycle endpoints.
@@ -51,7 +51,7 @@ func (n *noopSeasonMgr) Checklist(_ context.Context, _ int64) (models.SetupCheck
 func (n *noopSeasonMgr) PreviousSeason(_ context.Context, _ int64) (seasons.PreviousSeasonResult, error) {
 	return seasons.PreviousSeasonResult{Teams: []seasons.SeasonTeamEntry{}}, nil
 }
-func (n *noopSeasonMgr) IsDraft(_ context.Context, _ int64) (bool, error) { return true, nil }
+func (n *noopSeasonMgr) IsDraft(_ context.Context, _ int64) (bool, error)      { return true, nil }
 func (n *noopSeasonMgr) MarkStaleIfScheduled(_ context.Context, _ int64) error { return nil }
 func (n *noopSeasonMgr) AddTeam(_ context.Context, _ int64, _ seasons.AddTeamRequest) (models.SeasonTeam, error) {
 	return models.SeasonTeam{}, nil
@@ -156,7 +156,7 @@ func (n *noopPlayerMgr) CreatePlayer(_ context.Context, _ players.CreatePlayerIn
 func (n *noopPlayerMgr) UpdatePlayer(_ context.Context, _ int64, _ players.UpdatePlayerInput) error {
 	return nil
 }
-func (n *noopPlayerMgr) DeletePlayer(_ context.Context, _ int64) error { return nil }
+func (n *noopPlayerMgr) DeletePlayer(_ context.Context, _ int64) error    { return nil }
 func (n *noopPlayerMgr) MergePlayers(_ context.Context, _, _ int64) error { return nil }
 
 // noopTeamMgr satisfies TeamManager for tests that only exercise auth or
@@ -215,11 +215,14 @@ func (n *noopLineupMgr) SetSubstitute(_ context.Context, _ matches.SetSubstitute
 func (n *noopLineupMgr) ClearSubstitute(_ context.Context, _ int64) (models.LineupPlan, error) {
 	return models.LineupPlan{}, nil
 }
+func (n *noopLineupMgr) GetLineupPlan(_ context.Context, _ int64) (models.LineupPlan, error) {
+	return models.LineupPlan{}, nil
+}
 
 // stubApplyAuth satisfies ApplyAuthResolver for auth middleware tests.
 // ResolveKey maps a cleartext key to a user; zero-value returns nil (no match).
 type stubApplyAuth struct {
-	resolveKey  string      // cleartext key that resolves successfully
+	resolveKey  string // cleartext key that resolves successfully
 	resolveUser *models.User
 }
 
@@ -450,7 +453,11 @@ func TestRequireApplyAuth_InactiveKey_Returns403(t *testing.T) {
 // ─── Register() mounting tests ─────────────────────────────────────────────────
 
 // TestRegister_ApplyRoute_NotMounted_WhenTokenEmpty verifies that the Apply
-// route is absent when AdminToken is empty, returning 404 (not 401/403/405).
+// route is absent when AdminToken is empty AND no other authentication path
+// (ApplyAuth, AuthMgr, RoleAssignmentMgr) is wired either -- the one
+// condition under which the route has no way to authenticate anyone at all,
+// returning 404 (not 401/403/405). PM correction: mounting is no longer
+// gated on AdminToken alone (see TestRegister_ApplyRoute_Mounted_WhenSessionAuthOnly_NoToken).
 func TestRegister_ApplyRoute_NotMounted_WhenTokenEmpty(t *testing.T) {
 	mux := http.NewServeMux()
 	deps := Dependencies{

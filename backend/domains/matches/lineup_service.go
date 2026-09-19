@@ -52,11 +52,63 @@ func (s *LineupService) ListLineupPlans(ctx context.Context, req ListLineupPlans
 }
 
 // SaveTeamLineup atomically replaces all lineup slots for one team/week.
+// Returns domainerr.Conflict when req.TeamID does not belong to
+// req.SeasonID's own league, or (for a teams_managed season) is not
+// registered in that season's season_teams roster (PM correction: this
+// is the ORDINARY lineup's owning team/season relationship, which must
+// stay same-league and authoritative -- unlike SetSubstitute below, which
+// deliberately allows a substitute from another team/league and is
+// intentionally NOT subject to this check).
 func (s *LineupService) SaveTeamLineup(ctx context.Context, req SaveLineupRequest) error {
+	if err := s.validateTeamInSeasonLeague(ctx, req.SeasonID, req.TeamID); err != nil {
+		return err
+	}
 	if err := s.store.SaveTeamLineup(ctx, req); err != nil {
 		return domainerr.New("LINEUP_SAVE_FAILED", domainerr.Internal, "save lineup failed")
 	}
 	return nil
+}
+
+// validateTeamInSeasonLeague returns domainerr.Conflict if teamID does not
+// belong to seasonID's own league, or (when the season uses explicit team
+// management) is not registered in that season. A season or team that
+// cannot be resolved at all is treated as "nothing to validate against"
+// rather than an error, matching this codebase's existing not-found
+// handling for these routes.
+func (s *LineupService) validateTeamInSeasonLeague(ctx context.Context, seasonID, teamID int64) error {
+	leagueID, teamsManaged, found, err := s.store.SeasonInfo(ctx, seasonID)
+	if err != nil {
+		return domainerr.New("LINEUP_SAVE_FAILED", domainerr.Internal, "save lineup failed")
+	}
+	if !found {
+		return nil
+	}
+	teamLeagueID, found, err := s.store.TeamLeagueID(ctx, teamID)
+	if err != nil {
+		return domainerr.New("LINEUP_SAVE_FAILED", domainerr.Internal, "save lineup failed")
+	}
+	if !found || teamLeagueID != leagueID {
+		return domainerr.New("LINEUP_TEAM_CROSS_LEAGUE", domainerr.Conflict,
+			"team does not belong to this season's league")
+	}
+	if teamsManaged {
+		participates, err := s.store.TeamParticipatesInSeason(ctx, seasonID, teamID)
+		if err != nil {
+			return domainerr.New("LINEUP_SAVE_FAILED", domainerr.Internal, "save lineup failed")
+		}
+		if !participates {
+			return domainerr.New("LINEUP_TEAM_NOT_IN_SEASON", domainerr.Conflict,
+				"team is not participating in this season")
+		}
+	}
+	return nil
+}
+
+// GetLineupPlan returns one lineup plan row by id -- exposed publicly so
+// callers (e.g. handler-layer scope resolution for authorization) can
+// resolve a plan's owning season without duplicating the store lookup.
+func (s *LineupService) GetLineupPlan(ctx context.Context, id int64) (models.LineupPlan, error) {
+	return s.store.GetLineupPlan(ctx, id)
 }
 
 // DeleteLineupPlan removes a lineup plan by ID. Deleting a non-existent plan is not an error.
