@@ -168,18 +168,28 @@ func (s *ApplyAuthStore) CreateApplyPlayerUser(ctx context.Context, username str
 	return u, cleartext, nil
 }
 
-// ListApplyUsers returns all users, ordered by id. The api_key_hash column is
-// never included in the result. PlayerName is resolved via a LEFT JOIN for
-// linked (role=player) users -- a display convenience for the Users Admin
-// screen, empty for every other user.
+// ListApplyUsers returns all users, ordered by id, each with its real
+// role_assignments rows attached (User.Assignments -- Users/Roles Phase 1
+// UI correction: the Users Admin screen must show actual current access,
+// not the legacy flat Role column, once scoped assignments exist). The
+// api_key_hash column is never included in the result. PlayerName is
+// resolved via a LEFT JOIN for linked (role=player) users -- a display
+// convenience for the Users Admin screen, empty for every other user.
+//
+// This is a single query (LEFT JOIN role_assignments, one row per
+// assignment, collapsed back into each user's Assignments slice below) --
+// deliberately not one role_assignments query per user, which would be an
+// N+1 pattern against a screen that already lists every user at once.
 func (s *ApplyAuthStore) ListApplyUsers(ctx context.Context) ([]models.User, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.id, u.username, u.role, u.player_id,
 		       COALESCE(p.first_name || ' ' || p.last_name, ''),
-		       u.active, u.created_at, u.email
+		       u.active, u.created_at, u.email,
+		       ra.role_code, ra.league_id
 		FROM users u
 		LEFT JOIN players p ON p.id = u.player_id
-		ORDER BY u.id
+		LEFT JOIN role_assignments ra ON ra.user_id = u.id
+		ORDER BY u.id, ra.role_code, ra.league_id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("list apply users: %w", err)
@@ -187,22 +197,35 @@ func (s *ApplyAuthStore) ListApplyUsers(ctx context.Context) ([]models.User, err
 	defer rows.Close()
 
 	var users []models.User
+	var current *models.User
 	for rows.Next() {
 		var u models.User
 		var active int
 		var playerID sql.NullInt64
 		var email sql.NullString
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &playerID, &u.PlayerName, &active, &u.CreatedAt, &email); err != nil {
+		var roleCode sql.NullString
+		var assignmentLeagueID sql.NullInt64
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &playerID, &u.PlayerName, &active, &u.CreatedAt, &email, &roleCode, &assignmentLeagueID); err != nil {
 			return nil, fmt.Errorf("scan apply user: %w", err)
 		}
-		u.Active = active == 1
-		if playerID.Valid {
-			u.PlayerID = &playerID.Int64
+		if current == nil || current.ID != u.ID {
+			u.Active = active == 1
+			if playerID.Valid {
+				u.PlayerID = &playerID.Int64
+			}
+			if email.Valid {
+				u.Email = &email.String
+			}
+			users = append(users, u)
+			current = &users[len(users)-1]
 		}
-		if email.Valid {
-			u.Email = &email.String
+		if roleCode.Valid {
+			assignment := models.UserRoleAssignment{RoleCode: roleCode.String}
+			if assignmentLeagueID.Valid {
+				assignment.LeagueID = &assignmentLeagueID.Int64
+			}
+			current.Assignments = append(current.Assignments, assignment)
 		}
-		users = append(users, u)
 	}
 	return users, rows.Err()
 }

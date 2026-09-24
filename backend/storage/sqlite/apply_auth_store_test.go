@@ -4,8 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"league_app/backend/domains/auth"
 	"league_app/backend/storage/sqlite"
 	"league_app/db"
+	"league_app/models"
 )
 
 // newApplyAuthStore initialises a fresh DB in a temp dir and returns an
@@ -333,4 +335,105 @@ func TestApplyAuthStore_List_EmptyDB_ReturnsNilSlice(t *testing.T) {
 	if len(users) != 0 {
 		t.Errorf("want 0 users on empty db, got %d", len(users))
 	}
+}
+
+// findUser is a small helper for the Assignments tests below -- ListApplyUsers
+// makes no ordering guarantee beyond "by id," and these tests create users in
+// a specific order but only care about one at a time.
+func findUser(t *testing.T, users []models.User, username string) models.User {
+	t.Helper()
+	for _, u := range users {
+		if u.Username == username {
+			return u
+		}
+	}
+	t.Fatalf("user %q not found in %+v", username, users)
+	return models.User{}
+}
+
+// TestApplyAuthStore_List_PopulatesRealRoleAssignments proves PM's Users
+// screen correction (round 4): ListApplyUsers must return each user's REAL,
+// current role_assignments rows (User.Assignments) in the same query as the
+// user list itself -- one query, not one role_assignments lookup per user
+// (an N+1 pattern PM explicitly asked to avoid) -- so the Users Admin screen
+// can show actual current access instead of the legacy flat Role column.
+func TestApplyAuthStore_List_PopulatesRealRoleAssignments(t *testing.T) {
+	store := newApplyAuthStore(t)
+	roleStore := sqlite.NewRoleAssignmentStore(db.DB)
+	ctx := context.Background()
+
+	leagueA := seedLeagueForAssignments(t, "Assignments League A")
+	leagueB := seedLeagueForAssignments(t, "Assignments League B")
+
+	sysAdminUser, _, err := store.CreateApplyUser(ctx, "assign-sysadmin", "system_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser(system_admin): %v", err)
+	}
+	multiLeagueUser, _, err := store.CreateApplyUser(ctx, "assign-multileague", "league_admin")
+	if err != nil {
+		t.Fatalf("CreateApplyUser(league_admin): %v", err)
+	}
+	if err := roleStore.Grant(ctx, multiLeagueUser.ID, auth.RoleLeagueAdmin, &leagueA, nil); err != nil {
+		t.Fatalf("Grant league A: %v", err)
+	}
+	if err := roleStore.Grant(ctx, multiLeagueUser.ID, auth.RoleLeagueAdmin, &leagueB, nil); err != nil {
+		t.Fatalf("Grant league B: %v", err)
+	}
+	if _, _, err := store.CreateApplyUser(ctx, "assign-legacy-noaccess", "league_admin"); err != nil {
+		t.Fatalf("CreateApplyUser(legacy league_admin, no grant): %v", err)
+	}
+	playerID := seedPlayerForUser(t, "Assign", "Player")
+	if _, _, err := store.CreateApplyPlayerUser(ctx, "assign-player", playerID); err != nil {
+		t.Fatalf("CreateApplyPlayerUser: %v", err)
+	}
+
+	users, err := store.ListApplyUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListApplyUsers: %v", err)
+	}
+
+	sysAdmin := findUser(t, users, "assign-sysadmin")
+	if len(sysAdmin.Assignments) != 1 || sysAdmin.Assignments[0].RoleCode != "system_admin" || sysAdmin.Assignments[0].LeagueID != nil {
+		t.Errorf("want one global system_admin assignment, got %+v", sysAdmin.Assignments)
+	}
+	if sysAdmin.ID != sysAdminUser.ID {
+		t.Errorf("want matching user id, got %d vs %d", sysAdmin.ID, sysAdminUser.ID)
+	}
+
+	multiLeague := findUser(t, users, "assign-multileague")
+	if len(multiLeague.Assignments) != 2 {
+		t.Fatalf("want 2 league_admin assignments (multiple leagues), got %+v", multiLeague.Assignments)
+	}
+	for _, a := range multiLeague.Assignments {
+		if a.RoleCode != "league_admin" || a.LeagueID == nil {
+			t.Errorf("want a scoped league_admin assignment, got %+v", a)
+		}
+	}
+
+	legacyNoAccess := findUser(t, users, "assign-legacy-noaccess")
+	if len(legacyNoAccess.Assignments) != 0 {
+		t.Errorf("want zero assignments for a legacy league_admin never explicitly granted a league, got %+v", legacyNoAccess.Assignments)
+	}
+	if legacyNoAccess.Role != "league_admin" {
+		t.Errorf("want the legacy Role field preserved so the UI can render an explicit no-access label, got %q", legacyNoAccess.Role)
+	}
+
+	player := findUser(t, users, "assign-player")
+	if len(player.Assignments) != 0 {
+		t.Errorf("want zero role_assignments for a role=player user (access comes from player_id), got %+v", player.Assignments)
+	}
+	if player.PlayerID == nil || *player.PlayerID != playerID {
+		t.Errorf("want PlayerID %d, got %v", playerID, player.PlayerID)
+	}
+}
+
+// seedLeagueForAssignments inserts a minimal league row and returns its id.
+func seedLeagueForAssignments(t *testing.T, name string) int64 {
+	t.Helper()
+	res, err := db.DB.Exec(`INSERT INTO leagues (name) VALUES (?)`, name)
+	if err != nil {
+		t.Fatalf("seed league %s: %v", name, err)
+	}
+	id, _ := res.LastInsertId()
+	return id
 }

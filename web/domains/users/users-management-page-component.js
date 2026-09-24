@@ -2,10 +2,12 @@
 // and create new ones with an explicit role.
 //
 // Public API:
-//   refresh(allPlayers) -- (re)loads and renders the current user list.
-//     Called by the app shell when the Users section activates.
+//   refresh(allPlayers, allLeagues) -- (re)loads and renders the current
+//     user list. Called by the app shell when the Users section activates.
 //     allPlayers (Player Account Access Phase 1) populates the
-//     linked-player picker shown when role=player is selected.
+//     linked-player picker shown when role=player is selected. allLeagues
+//     (Users/Roles Phase 1 UI correction) resolves a league_admin
+//     assignment's league_id to a display name in the Access column.
 //
 // Visibility of the Users nav entry/section is gated by the shell on the
 // resolved current identity (system_admin/admin). This component does not
@@ -46,6 +48,7 @@ const MODAL_ID = 'user-modal';
 class UsersManagementPage extends HTMLElement {
   #users      = [];
   #allPlayers = [];
+  #allLeagues = [];
 
   connectedCallback() {
     this.innerHTML = `
@@ -64,7 +67,7 @@ class UsersManagementPage extends HTMLElement {
         <div class="card-body p-0">
           <table class="table table-hover mb-0">
             <thead><tr>
-              <th>Username</th><th>Email</th><th>Role</th><th>Linked Player</th><th>Active</th><th>Created</th><th></th>
+              <th>Username</th><th>Email</th><th>Access</th><th>Linked Player</th><th>Active</th><th>Created</th><th></th>
             </tr></thead>
             <tbody class="um-tbody"></tbody>
           </table>
@@ -96,8 +99,9 @@ class UsersManagementPage extends HTMLElement {
     });
   }
 
-  refresh(allPlayers) {
+  refresh(allPlayers, allLeagues) {
     this.#allPlayers = allPlayers ?? [];
+    this.#allLeagues = allLeagues ?? [];
     this.#load();
   }
 
@@ -170,6 +174,50 @@ class UsersManagementPage extends HTMLElement {
       `<tr><td colspan="5" class="text-center text-muted py-3">${esc(e.message)}</td></tr>`;
   }
 
+  // #formatAccess renders the Access column from the account's REAL,
+  // current access rather than the legacy flat role field (Users/Roles
+  // Phase 1 UI correction, staging-UI-isolation round): a session/email
+  // account's actual authorization comes entirely from its
+  // role_assignments rows (u.role_assignments, populated by
+  // ListApplyUsers's single query -- see backend/storage/sqlite/
+  // apply_auth_store.go) or, for role=player, from its linked player_id --
+  // never from u.role, which can disagree with reality (e.g. a
+  // league_admin created via the legacy endpoint with zero grants shows
+  // role="league_admin" but has no access at all; every new email-login
+  // account shows the legacy "admin" role regardless of its real scoped
+  // access). One badge per assignment (a league_admin may hold more than
+  // one league). Falls back to an explicit NO-ACCESS label (PM
+  // correction: "Legacy: <role>" alone could still read as granted
+  // access) only when there are no assignments AND no linked player --
+  // this covers both a genuine pre-Phase-1 account the migration
+  // backfill did not reach, and a newly created legacy league_admin
+  // account still awaiting its first scoped role grant. The legacy role
+  // string is shown only as parenthetical context, never as if it were
+  // current access.
+  #formatAccess(u) {
+    const assignments = u.role_assignments ?? [];
+    if (assignments.length > 0) {
+      return assignments.map(a => {
+        if (a.role_code === 'system_admin') {
+          return '<span class="badge bg-primary me-1">System Admin</span>';
+        }
+        if (a.role_code === 'league_admin') {
+          return `<span class="badge bg-info text-dark me-1">League Admin -- ${esc(this.#leagueName(a.league_id))}</span>`;
+        }
+        return `<span class="badge bg-secondary me-1">${esc(a.role_code)}</span>`;
+      }).join('');
+    }
+    if (u.player_id != null) {
+      return '<span class="badge bg-success">Player</span>';
+    }
+    return `<span class="badge bg-light text-muted border">No scoped access (legacy role: ${esc(u.role)})</span>`;
+  }
+
+  #leagueName(leagueId) {
+    const league = this.#allLeagues.find(l => l.id === leagueId);
+    return league ? league.name : `League #${leagueId}`;
+  }
+
   #renderList() {
     const tbody = this.querySelector('.um-tbody');
     if (!tbody) return;
@@ -177,7 +225,7 @@ class UsersManagementPage extends HTMLElement {
       <tr data-user-id="${u.id}">
         <td class="fw-semibold">${esc(u.username)}</td>
         <td class="text-muted small">${u.email ? esc(u.email) : '<span class="text-muted">-</span>'}</td>
-        <td><span class="badge bg-secondary">${esc(u.role)}</span></td>
+        <td>${this.#formatAccess(u)}</td>
         <td class="text-muted small">${u.player_name ? esc(u.player_name) : '<span class="text-muted">-</span>'}</td>
         <td>${u.active
           ? '<span class="badge bg-success">Active</span>'

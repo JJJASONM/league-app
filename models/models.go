@@ -705,6 +705,31 @@ type User struct {
 	// Email is Users/Roles Phase 1's password-login identity -- nil for
 	// legacy API-key-only accounts that have never had one provisioned.
 	Email *string `json:"email,omitempty"`
+	// Assignments is this user's real, current role_assignments rows --
+	// the authoritative access auth.Authorize actually grants, as opposed
+	// to the legacy flat Role field above (Users/Roles Phase 1 UI
+	// correction: the Users Admin screen must show this, not Role, once
+	// scoped assignments exist). Populated only by ListApplyUsers (one
+	// query, LEFT JOIN role_assignments -- see its own comment); every
+	// other User-returning call leaves this nil. Empty for a role=player
+	// user (player access comes from PlayerID, never a role_assignments
+	// row) and for any account with zero granted role_assignments rows --
+	// this covers both a pre-Phase-1 account the migration backfill did
+	// not reach and a newly created legacy league_admin account (the
+	// legacy POST /api/users endpoint does not auto-grant a league for
+	// that role) still awaiting its first scoped grant. Role remains the
+	// only signal for those, but callers must render it as "no current
+	// access," never as if Role itself were granted access.
+	Assignments []UserRoleAssignment `json:"role_assignments,omitempty"`
+}
+
+// UserRoleAssignment is one role_assignments row, shaped for the Users
+// Admin screen's display -- see User.Assignments. Mirrors
+// backend/domains/auth.Assignment's two fields without importing that
+// package here (models has no dependency on backend/domains/auth).
+type UserRoleAssignment struct {
+	RoleCode string `json:"role_code"`
+	LeagueID *int64 `json:"league_id,omitempty"`
 }
 
 // CreateUserResponse is the one-time response body for POST /api/users.

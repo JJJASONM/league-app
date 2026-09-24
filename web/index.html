@@ -34,30 +34,30 @@
     </div>
 
     <!-- League Switcher -->
-    <div class="league-picker">
+    <div class="league-picker admin-workspace-nav-item">
       <label>League</label>
       <select class="form-select form-select-sm" id="league-select">
         <option value="">Loading...</option>
       </select>
     </div>
 
-    <div class="active-season" id="active-season-label">No active season</div>
+    <div class="active-season admin-workspace-nav-item" id="active-season-label">No active season</div>
 
     <ul class="nav flex-column mt-1">
-      <li class="nav-item"><a class="nav-link active" href="#" data-section="dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link active" href="#" data-section="dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
       <li class="nav-item d-none" id="nav-item-league-admin"><a class="nav-link" href="#" data-section="league-admin"><i class="bi bi-clipboard2-pulse"></i> League Admin</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="seasons"><i class="bi bi-calendar3"></i> Seasons</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="teams"><i class="bi bi-people-fill"></i> Teams</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="players"><i class="bi bi-person-badge"></i> Players</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="seasons"><i class="bi bi-calendar3"></i> Seasons</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="teams"><i class="bi bi-people-fill"></i> Teams</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="players"><i class="bi bi-person-badge"></i> Players</a></li>
       <li class="nav-item d-none" id="nav-item-player-overview"><a class="nav-link" href="#" data-section="player-overview"><i class="bi bi-person-lines-fill"></i> Player Overview</a></li>
       <li class="nav-item d-none" id="nav-item-my-overview"><a class="nav-link" href="#" data-section="player-overview"><i class="bi bi-person-lines-fill"></i> My Overview</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="schedule"><i class="bi bi-calendar-week"></i> Schedule</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="lineup"><i class="bi bi-person-check"></i> Lineup</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="entry"><i class="bi bi-pencil-square"></i> Match Entry</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="weekly-summary"><i class="bi bi-clipboard-check"></i> Weekly Summary</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="standings"><i class="bi bi-trophy"></i> Standings</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="stats"><i class="bi bi-bar-chart-line"></i> Player Stats</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" data-section="handicap"><i class="bi bi-graph-up-arrow"></i> Handicap</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="schedule"><i class="bi bi-calendar-week"></i> Schedule</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="lineup"><i class="bi bi-person-check"></i> Lineup</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="entry"><i class="bi bi-pencil-square"></i> Match Entry</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="weekly-summary"><i class="bi bi-clipboard-check"></i> Weekly Summary</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="standings"><i class="bi bi-trophy"></i> Standings</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="stats"><i class="bi bi-bar-chart-line"></i> Player Stats</a></li>
+      <li class="nav-item admin-workspace-nav-item"><a class="nav-link" href="#" data-section="handicap"><i class="bi bi-graph-up-arrow"></i> Handicap</a></li>
       <li class="nav-item d-none" id="nav-item-users"><a class="nav-link" href="#" data-section="users"><i class="bi bi-person-gear"></i> Users</a></li>
       <li class="nav-item d-none" id="nav-item-finances"><a class="nav-link" href="#" data-section="finances"><i class="bi bi-cash-stack"></i> Financial</a></li>
       <li class="nav-item d-none" id="nav-item-communications"><a class="nav-link" href="#" data-section="communications"><i class="bi bi-chat-left-text"></i> Communication</a></li>
@@ -65,8 +65,8 @@
 
     <div class="mt-auto px-3 pb-3">
       <button class="btn btn-sm btn-outline-secondary w-100 mb-2 d-none" data-action="sign-out" id="sign-out-btn"><i class="bi bi-box-arrow-right"></i> Sign Out</button>
-      <button class="btn btn-sm btn-outline-secondary w-100 mb-2" data-action="manage-leagues"><i class="bi bi-gear"></i> Manage Leagues</button>
-      <button class="btn btn-sm btn-outline-secondary w-100 mb-2" data-action="admin-key" id="admin-key-btn"><i class="bi bi-key"></i> <span id="admin-key-status">Admin Key</span></button>
+      <button class="btn btn-sm btn-outline-secondary w-100 mb-2 admin-workspace-nav-item" data-action="manage-leagues"><i class="bi bi-gear"></i> Manage Leagues</button>
+      <button class="btn btn-sm btn-outline-secondary w-100 mb-2 admin-workspace-nav-item" data-action="admin-key" id="admin-key-btn"><i class="bi bi-key"></i> <span id="admin-key-status">Admin Key</span></button>
       <button class="btn btn-sm btn-outline-secondary w-100" data-action="backup" id="backup-btn"><i class="bi bi-cloud-download"></i> Backup DB</button>
     </div>
   </nav>

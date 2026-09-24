@@ -94,6 +94,28 @@ unassign them. See `doc/domains/users/README.md`'s "PM final credential-
 precedence and player-unassignment corrections (round 3, 2026-09-19)"
 section for full detail.
 
+Staging verification (branch `auth-phase-1-staging-ui-isolation-fixes`)
+confirmed the staging backend authorization matrix passed, and found
+three defects addressed and accepted in a fourth round (also
+2026-09-19). Two are FRONTEND
+identity/navigation defects: identity/workspace changes (sign-in,
+sign-out, an Admin Key set/clear, a workspace switch) now always
+navigate to an authorized default section instead of leaving a previous
+identity's screen as the still-visible active one; and Player View now
+actually hides every admin-only nav item, the active-season label, and
+sidebar control (not only the five that already had gating logic),
+making it "My Overview only" as designed. The third is an API
+RESPONSE-SHAPE GAP, not a frontend-only bug -- backend authorization for
+the Users list endpoint was already correct, but its response did not
+include each account's authoritative role assignments; the Users Admin
+screen now shows that real, current role_assignments-derived access
+instead of the legacy flat role column, resolved in the same query as
+the user list (no N+1), with an explicit no-scoped-access label (never a
+bare legacy role that could look like granted access) for an account
+with neither assignments nor a linked player. See
+`doc/domains/users/README.md`'s "staging UI isolation corrections (round
+4, 2026-09-19)" section for full detail.
+
 Explicitly deferred, not oversights (see
 `doc/domains/users/README.md`'s Phase 1 section for the full list and
 reasoning): self-registration and automatic player-email matching,

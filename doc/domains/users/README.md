@@ -1304,7 +1304,167 @@ converting old comment text to this codebase's ASCII-dash convention --
 zero non-ASCII characters were added. Browser verification was not
 attempted or claimed for this round.
 
-## Decision History
+## Users/Roles/Authentication Phase 1 -- staging UI isolation corrections (round 4, 2026-09-19)
+
+**Status:** `accepted`
+
+Staging verification (branch `auth-phase-1-staging-ui-isolation-fixes`)
+confirmed the backend session/scope authorization work from rounds 1-3 is
+correct -- the staging backend authorization matrix passed every check
+PM exercised. Sequential browser testing with three staging accounts (a
+system_admin, a league_admin scoped to one league, and a player linked
+to a player record) found three defects, not all of the same kind:
+- Findings 1 and 2 below are FRONTEND identity/navigation defects:
+  privileged content surviving an identity change, and Player View
+  exposing admin navigation and context. Backend authorization was never
+  in question for either.
+- Finding 3 below is an API RESPONSE-SHAPE GAP, not a frontend-only bug:
+  backend authorization itself was correct throughout, but the user-list
+  response did not include each account's authoritative role
+  assignments, so the correction spans the store query, the model/API
+  response shape, and the frontend rendering that consumes it.
+
+Plain-HTTP staging required `INSECURE_LOCAL_COOKIES=1`; that is an
+environment setting, not part of this branch.
+
+### 1. Privileged content survived an identity change
+
+**Root cause:** `web/app.js`'s `applyWorkspace(workspace)` is the single
+function every identity/workspace change already runs through
+(`applyWorkspacePicker` is called by `updateAuthGateUI` on every sign-in
+and post-sign-out re-resolve; the workspace `<select>` calls it directly
+for a dual-workspace switch) -- but it only forced navigation for the
+PLAYER workspace (`activateSection('player-overview')`). The ADMIN
+workspace branch toggled nav-item visibility only and left whichever
+section was already `.active` untouched. Signing out of a system_admin
+session that had the Users screen open, then signing in as a
+league_admin, hid the Users nav link (correct) but left the Users
+section's own DOM node as the still-`.active`, still-visible one --
+`.section` is `display:none` unless `.active` (see `web/styles.css`), so
+hiding the nav link alone never hid the content sitting beneath it.
+
+**Exact behavior changed:** `applyWorkspace` now always calls
+`activateSection(isPlayerWorkspace ? 'player-overview' : 'dashboard')`
+at the end, for BOTH branches, on every call -- not only when switching
+into Player View. Every identity resolution (sign-in, the re-resolve
+after sign-out, an Admin Key set/clear) and every explicit workspace
+switch now lands on an authorized default section, so no previous
+identity's or previous workspace's content can remain the visible one.
+Dashboard has no role gating and is the page's own hard-coded initial
+default section, making it a safe universal admin-workspace landing
+page.
+
+### 2. Player View showed the full admin navigation
+
+**Root cause:** only five nav items (League Admin, the admin Player
+Overview picker, Users, Financial, Communication) were ever individually
+gated by role/workspace. Every other nav item -- Dashboard, Seasons,
+Teams, Players, Schedule, Lineup, Match Entry, Weekly Summary,
+Standings, Player Stats, Handicap -- plus the League switcher, the
+active-season label, "Manage Leagues," and "Admin Key" sidebar controls
+had no visibility logic tied to workspace at all; they were always
+shown. A role=player identity in Player View therefore saw the entire
+admin shell around its one authorized screen -- including, in PM's own
+staging reproduction, the active-season label showing "Fixture
+Scoresheet Season" beside Rex Barlow's own Spring 2026 overview (missed
+in the first pass of this fix, since it sits outside the League switcher
+`<div>` it visually appears next to; corrected in PM re-review).
+
+**Exact behavior changed:** every one of those previously-ungated
+elements, INCLUDING `#active-season-label`, now carries a shared
+`admin-workspace-nav-item` class (`web/index.html`); `applyWorkspace`
+toggles `d-none` on all of them together, hidden whenever
+`isPlayerWorkspace` is true. Combined with fix #1's forced navigation to
+`player-overview`, a player-only identity now sees My Overview and
+nothing else -- matching "Player View is My Overview only" in this
+file's Phase 1 section. A dual-workspace identity (player-linked AND
+holding an admin role) still gets the workspace picker and switching
+correctly shows/hides the right set of controls in both directions
+(this was already correct for the five individually-gated items; it now
+also correctly restores the previously-always-shown items, active-season
+label included, when switching back to Admin View, since they are
+hidden only while actually in Player View). Backend authorization is
+unchanged and remains the actual enforcement boundary -- this is a
+UI-honesty fix, not a new access control.
+
+### 3. Users screen response shape was missing authoritative role assignments
+
+This is an API response-shape gap, not a frontend-only bug: backend
+authorization itself was correct the whole time (a league_admin and a
+player session were both already correctly rejected, 403, from
+`GET /api/users` -- see the new
+`TestUsersList_LeagueAdminAndPlayerSessions_CannotAccessAPI` below). The
+gap was that the response `GET /api/users` (a system_admin request)
+returned did not carry each account's authoritative `role_assignments`,
+so the only signal available to render was the legacy `users.role`
+column.
+
+**Root cause:** the Users Admin screen's Role column rendered
+`u.role` -- the legacy flat `users.role` column -- because
+`ApplyAuthStore.ListApplyUsers` never queried or returned
+`role_assignments` at all. Since Users/Roles Phase 1, actual
+authorization comes from `role_assignments` rows (or, for `role=player`,
+from `users.player_id`), which can and does disagree with the legacy
+column: every email-login account created this phase shows legacy role
+"admin" regardless of its real scoped access, and a `league_admin`
+created via the legacy `POST /api/users` endpoint with no subsequent
+grant has real access of NONE despite showing "league_admin."
+
+**Exact behavior changed:**
+- `models.User` gained `Assignments []UserRoleAssignment` (JSON
+  `role_assignments`, `omitempty`) -- each entry a `{role_code,
+  league_id}` pair mirroring a real `role_assignments` row.
+- `ApplyAuthStore.ListApplyUsers` (`backend/storage/sqlite/
+  apply_auth_store.go`) now LEFT JOINs `role_assignments` and populates
+  `Assignments` for every user in the SAME query as the user list itself
+  -- one query, not one role_assignments lookup per user (the N+1 pattern
+  PM explicitly asked to avoid). Every other `models.User`-returning call
+  (`CreateApplyUser`, `CreateApplyPlayerUser`, `ResolveApplyUserByAPIKey`,
+  `getMe`) is untouched and leaves `Assignments` nil/omitted -- this is
+  scoped to the Users Admin list endpoint only.
+- `web/domains/users/users-management-page-component.js`'s "Role" column
+  is now "Access," rendered by a new `#formatAccess(u)`: one badge per
+  real assignment (`System Admin`, or `League Admin -- <league name>`
+  resolved via a new `allLeagues` parameter to `refresh()`, multiple
+  badges when a league_admin holds more than one league); `Player` when
+  `player_id` is set and there are no admin assignments; an explicit
+  `No scoped access (legacy role: <role>)` badge ONLY when there are
+  neither assignments nor a linked player (PM re-review correction: an
+  earlier draft of this fallback read `Legacy: <role>`, which could
+  still look like granted access -- the legacy role is now shown only as
+  parenthetical context, never as if it conferred current access). This
+  fallback is not only a pre-Phase-1 account the migration backfill
+  never reached -- it also covers a newly created legacy `league_admin`
+  account (via `POST /api/users`) still awaiting its first scoped role
+  grant, since that endpoint does not auto-grant a league for that role.
+  `web/app.js` passes `state.allLeagues` (already loaded shell-wide)
+  through to `refresh()`.
+
+New/updated tests:
+- `backend/storage/sqlite/apply_auth_store_test.go`:
+  `TestApplyAuthStore_List_PopulatesRealRoleAssignments` -- one query
+  returns a system_admin's single global assignment, a league_admin's
+  TWO league assignments (multiple leagues), zero assignments for a
+  legacy league_admin never granted a league (Role field preserved), and
+  zero assignments for a role=player user. The three pre-existing
+  `TestApplyAuthStore_List_*` tests pass unchanged (a LEFT JOIN with no
+  matching role_assignments row still yields exactly one row per user,
+  so row counts are unaffected).
+- `handlers/api_users_access_display_test.go` (new):
+  `TestUsersList_ReturnsRealRoleAssignments_OverHTTP` proves the same
+  shape end-to-end over real HTTP (session-authenticated system_admin,
+  real sqlite stores); `TestUsersList_LeagueAdminAndPlayerSessions_
+  CannotAccessAPI` proves `GET /api/users` still rejects (403) both a
+  league_admin and a player session -- the API authorization matrix
+  itself was never in question, only the display.
+
+No JS test harness exists in this repository (only `node --check` for
+syntax; see `CLAUDE.md`'s Testing section) -- the section-reset and
+Player View nav-visibility changes (fixes #1 and #2) were verified by
+tracing `applyWorkspace`'s call sites and the new `admin-workspace-nav-item`
+class's coverage against every nav element in `web/index.html`, not by
+an automated test or by opening a browser. Browser verification was not
+performed or claimed for any part of this round.
 
 ### 2026-07-18 - Roles follow clearance workflows
 
@@ -1482,3 +1642,45 @@ state. Fixed by requiring system_admin for any update that would persist
 "Users/Roles/Authentication Phase 1 -- PM final credential-precedence and
 player-unassignment corrections (round 3, 2026-09-19)" above for full
 detail.
+
+### 2026-09-19 - Users/Roles/Authentication Phase 1: staging UI isolation corrections (round 4)
+
+**Status:** `accepted`
+
+Staging verification with three real accounts (system_admin,
+league_admin, player) confirmed the staging backend authorization matrix
+passed every check, but found three defects, not all the same kind. Two
+are frontend identity/navigation defects: (1) `web/app.js`'s
+`applyWorkspace` only forced navigation to a default section for the
+PLAYER workspace, so signing out of a system_admin session with Users
+open and signing back in as a league_admin hid the Users nav link but
+left the previous identity's full user table as the still-visible active
+section -- fixed by always navigating to an authorized default section
+(dashboard or player-overview) on every identity/workspace change, not
+only when entering Player View. (2) most nav items, the League switcher,
+the active-season label, and the Manage Leagues/Admin Key sidebar
+controls had no workspace-based visibility logic at all, so Player View
+showed the entire admin shell (including, per PM's staging repro, the
+active season name) around My Overview -- fixed by tagging every
+admin-only element, the active-season label included, with a shared
+`admin-workspace-nav-item` class and hiding all of them together in
+Player View, making Player View actually "My Overview only" as this
+file's Phase 1 section requires. The third is an API response-shape gap,
+not a frontend-only bug: backend authorization for `GET /api/users`
+itself was already correct (both a league_admin and a player session
+were already rejected), but the response it returned for a system_admin
+caller did not include each account's authoritative role_assignments, so
+the Users Admin screen's Role column had nothing to render but the
+legacy flat `users.role` column, which disagrees with reality once
+scoped role_assignments exist (every new email-login account showed
+legacy role "admin" regardless of its real access) -- fixed by having
+`ApplyAuthStore.ListApplyUsers` return each user's real role_assignments
+rows in the same query (no N+1), and having the Users screen render
+access from that structured data instead, falling back to an explicit
+`No scoped access (legacy role: <role>)` label -- never a bare legacy
+role that could look like granted access -- for an account with neither
+assignments nor a linked player (a pre-Phase-1 account the migration
+backfill did not reach, OR a newly created legacy `league_admin` account
+still awaiting its first scoped grant). See "Users/Roles/Authentication
+Phase 1 -- staging UI isolation corrections (round 4, 2026-09-19)" above
+for full detail.

@@ -65,7 +65,7 @@ function loadSection(sec) {
     case 'stats':     document.querySelector('stats-section')?.refresh(state.allSeasons); break;
     case 'handicap':  document.querySelector('handicaps-page')?.refresh(state.allSeasons, state.activeSeason); break;
     case 'users':
-      document.querySelector('users-management-page')?.refresh(state.allPlayers);
+      document.querySelector('users-management-page')?.refresh(state.allPlayers, state.allLeagues);
       break;
     case 'player-overview':
       document.querySelector('player-overview-page')?.refresh(
@@ -344,13 +344,47 @@ function applyWorkspacePicker(identity) {
   applyWorkspace(initial);
 }
 
-// applyWorkspace toggles nav visibility for the chosen workspace.
+// applyWorkspace toggles nav visibility for the chosen workspace and
+// always navigates to that workspace's authorized default section.
 // Presentation only -- see auth.Authorize on the backend for the actual
 // enforcement; this never grants or removes anything by itself.
+//
+// Staging UI-isolation correction: this is the single choke point every
+// identity/workspace change already ran through (applyWorkspacePicker is
+// called by updateAuthGateUI on every sign-in, sign-out-triggered
+// re-resolve, and Admin Key set/clear; the workspace <select> calls this
+// directly for a dual-workspace switch), so it is also where two prior
+// defects are fixed:
+//   1. It previously only forced navigation for the PLAYER workspace
+//      (activateSection('player-overview')); the ADMIN workspace left
+//      whatever section was already active untouched. Signing in as a
+//      league_admin right after a system_admin had the Users screen open
+//      hid the Users nav link but left the previous identity's full user
+//      table rendered and visible in the content area -- nav visibility
+//      alone is not enough. Now BOTH branches always activate an
+//      authorized default section, so no previous identity's content can
+//      remain the visible one after a sign-in, sign-out, or workspace
+//      switch.
+//   2. Only a handful of nav items (Users/Finances/Communications/League
+//      Admin/admin Player Overview) were ever hidden for Player View;
+//      every plain nav item (Dashboard, Seasons, Teams, Players,
+//      Schedule, Lineup, Match Entry, Weekly Summary, Standings, Player
+//      Stats, Handicap) plus the League switcher, the active-season
+//      label, Manage Leagues, and Admin Key controls stayed visible
+//      regardless of workspace (PM re-review round: the active-season
+//      label was missed in the first pass and leaked the admin
+//      workspace's currently-selected season, e.g. "Fixture Scoresheet
+//      Season," into a player's own view). Those are now all marked with
+//      the shared `admin-workspace-nav-item` class (see web/index.html)
+//      and hidden together here, so Player View is actually "My Overview
+//      only," matching the accepted Phase
+//      1 contract in doc/domains/users/README.md.
 function applyWorkspace(workspace) {
   window.localStorage.setItem(WORKSPACE_STORAGE_KEY, workspace);
   const identity = appContext.getState().currentIdentity;
   const isPlayerWorkspace = workspace === 'player';
+
+  document.querySelectorAll('.admin-workspace-nav-item').forEach(el => el.classList.toggle('d-none', isPlayerWorkspace));
 
   // Player View: only "My Overview" (already gated to a linked player_id
   // by isPlayerRole); every admin-only nav item is hidden regardless of
@@ -367,9 +401,7 @@ function applyWorkspace(workspace) {
   document.getElementById('nav-item-player-overview')?.classList.toggle('d-none', !canManageFinances);
   document.getElementById('backup-btn')?.classList.toggle('d-none', !canManageUsers);
 
-  if (isPlayerWorkspace) {
-    activateSection('player-overview');
-  }
+  activateSection(isPlayerWorkspace ? 'player-overview' : 'dashboard');
 }
 
 document.getElementById('workspace-select')?.addEventListener('change', (e) => applyWorkspace(e.target.value));

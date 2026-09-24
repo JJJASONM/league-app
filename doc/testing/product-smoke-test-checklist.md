@@ -3148,6 +3148,71 @@ All PASS (`go test ./... -count=1`, full suite, 0 fail):
 
 Browser verification was not claimed or attempted this round.
 
+### 27e. Users/Roles/Authentication Phase 1 -- staging UI isolation corrections (round 4, 2026-09-19)
+
+Staging accounts used: a system_admin, a league_admin scoped to Demo Pool
+League, and a player linked to a real player record (staging
+credentials/tokens deliberately not recorded here). The staging backend
+authorization matrix passed. Of the three defects below, items 19-20 are
+frontend identity/navigation defects (backend authorization was never in
+question); item 21 is an API RESPONSE-SHAPE GAP, not a frontend-only bug
+-- backend authorization for the Users list endpoint was already
+correct, but its response did not include each account's authoritative
+role assignments. Plain-HTTP staging required `INSECURE_LOCAL_COOKIES=1`;
+that is an environment setting, not part of this code branch.
+
+All PASS (`go test ./... -count=1`, full suite, 0 fail):
+
+19. **No privileged content survives an identity change -- code-verified,
+    not browser-tested.** `web/app.js`'s `applyWorkspace` now always calls
+    `activateSection(isPlayerWorkspace ? 'player-overview' : 'dashboard')`
+    on every identity/workspace change (sign-in, the post-sign-out
+    re-resolve, an Admin Key set/clear, an explicit workspace switch), not
+    only when entering Player View. Verified by tracing every call site of
+    `applyWorkspace`/`applyWorkspacePicker`/`updateAuthGateUI` to confirm
+    none can show the app shell without also running this reset. No JS
+    test harness exists in this repository (`node --check` covers syntax
+    only; see `CLAUDE.md`), so this is a code-review verification, not an
+    automated or browser test -- reported as such, not claimed otherwise.
+20. **Player View is My Overview only -- code-verified, not
+    browser-tested.** Every nav item without its own role-based gating
+    (Dashboard, Seasons, Teams, Players, Schedule, Lineup, Match Entry,
+    Weekly Summary, Standings, Player Stats, Handicap) plus the League
+    switcher, the active-season label (`#active-season-label` -- PM
+    re-review found this was missed in the first pass and leaked the
+    admin workspace's selected season into a player's own view), "Manage
+    Leagues," and "Admin Key" sidebar controls now carry a shared
+    `admin-workspace-nav-item` class (`web/index.html`), hidden together
+    by `applyWorkspace` whenever the resolved workspace is `player`.
+    Verified by cross-checking every `<li class="nav-item">`, the
+    active-season label, and admin sidebar button in `web/index.html`
+    against this class list, and confirming My Overview's own visibility
+    rule (`nav-item-my-overview`) is unchanged. Same node-syntax-only
+    caveat as item 19.
+21. **Users screen response now carries authoritative role assignments
+    (API response-shape gap, not a frontend-only bug) -- PASS (Go
+    tests).** New `TestApplyAuthStore_List_
+    PopulatesRealRoleAssignments` (`backend/storage/sqlite/
+    apply_auth_store_test.go`): a system_admin's single global
+    assignment, a league_admin's two league assignments (multiple
+    leagues), zero assignments for a legacy league_admin never granted a
+    league (legacy `Role` field preserved so the UI can render an
+    explicit no-access label, not treat the legacy role as granted
+    access), and zero assignments for a role=player user, all from the
+    SAME query as the user list (no role_assignments query per user).
+    New `handlers/
+    api_users_access_display_test.go`: `TestUsersList_
+    ReturnsRealRoleAssignments_OverHTTP` proves the same shape end-to-end
+    over real HTTP with a session-authenticated system_admin;
+    `TestUsersList_LeagueAdminAndPlayerSessions_CannotAccessAPI` confirms
+    `GET /api/users` still rejects (403) both a league_admin and a player
+    session unchanged. The three pre-existing `TestApplyAuthStore_List_*`
+    tests (return-all-users, does-not-expose-hash, empty-db) pass
+    unmodified, confirming legacy API-key-only accounts remain correctly
+    represented.
+
+Browser verification was not claimed or attempted this round.
+
 ## Known Gaps Summary
 
 | # | Gap | Severity | Where | Status |
