@@ -3148,70 +3148,113 @@ All PASS (`go test ./... -count=1`, full suite, 0 fail):
 
 Browser verification was not claimed or attempted this round.
 
-### 27e. Users/Roles/Authentication Phase 1 -- staging UI isolation corrections (round 4, 2026-09-19)
+### 27e. Users/Roles/Authentication Phase 1 -- staging UI isolation corrections (round 4, 2026-09-19; staging-verified 2026-09-24)
 
 Staging accounts used: a system_admin, a league_admin scoped to Demo Pool
-League, and a player linked to a real player record (staging
-credentials/tokens deliberately not recorded here). The staging backend
-authorization matrix passed. Of the three defects below, items 19-20 are
-frontend identity/navigation defects (backend authorization was never in
+League, and a player linked to a real player record, Rex Barlow (staging
+credentials/API keys/setup tokens/session tokens/CSRF tokens
+deliberately not recorded here). The staging backend authorization
+matrix passed. Of the three defects below, items 19-20 are frontend
+identity/navigation defects (backend authorization was never in
 question); item 21 is an API RESPONSE-SHAPE GAP, not a frontend-only bug
 -- backend authorization for the Users list endpoint was already
 correct, but its response did not include each account's authoritative
-role assignments. Plain-HTTP staging required `INSECURE_LOCAL_COOKIES=1`;
-that is an environment setting, not part of this code branch.
+role assignments. Plain-HTTP staging was started with
+`INSECURE_LOCAL_COOKIES=1` so browser sessions could persist -- this is
+staging environment configuration, not an application-code change.
 
-All PASS (`go test ./... -count=1`, full suite, 0 fail):
+**Deployment evidence (2026-09-24):** deployed commit `bc2387c` (`Auth
+Phase 1: isolate workspaces and show scoped access`) to
+`http://league-staging.local`, executable
+`C:\inetpub\league-staging\app\league_app.exe`, process id `21068`. A
+database backup was taken before deployment:
+`C:\inetpub\league-staging\backups\league_2026-09-24_173630.db`. The
+full deployment test/build pipeline passed. Health check after
+deployment: `GET /healthz` -> `200 {"status":"ok"}`. No seed or database
+reset was performed -- verification ran against existing staging data.
 
-19. **No privileged content survives an identity change -- code-verified,
-    not browser-tested.** `web/app.js`'s `applyWorkspace` now always calls
+All PASS -- items 19-20 browser-verified on staging 2026-09-24 (Go tests
+below remain the automated regression coverage; `go test ./... -count=1`
+full suite, 0 fail):
+
+19. **No privileged content survives an identity change -- PASS,
+    browser-verified on staging 2026-09-24.** `web/app.js`'s
+    `applyWorkspace` now always calls
     `activateSection(isPlayerWorkspace ? 'player-overview' : 'dashboard')`
     on every identity/workspace change (sign-in, the post-sign-out
     re-resolve, an Admin Key set/clear, an explicit workspace switch), not
-    only when entering Player View. Verified by tracing every call site of
-    `applyWorkspace`/`applyWorkspacePicker`/`updateAuthGateUI` to confirm
-    none can show the app shell without also running this reset. No JS
-    test harness exists in this repository (`node --check` covers syntax
-    only; see `CLAUDE.md`), so this is a code-review verification, not an
-    automated or browser test -- reported as such, not claimed otherwise.
-20. **Player View is My Overview only -- code-verified, not
-    browser-tested.** Every nav item without its own role-based gating
-    (Dashboard, Seasons, Teams, Players, Schedule, Lineup, Match Entry,
-    Weekly Summary, Standings, Player Stats, Handicap) plus the League
-    switcher, the active-season label (`#active-season-label` -- PM
-    re-review found this was missed in the first pass and leaked the
-    admin workspace's selected season into a player's own view), "Manage
-    Leagues," and "Admin Key" sidebar controls now carry a shared
-    `admin-workspace-nav-item` class (`web/index.html`), hidden together
-    by `applyWorkspace` whenever the resolved workspace is `player`.
-    Verified by cross-checking every `<li class="nav-item">`, the
-    active-season label, and admin sidebar button in `web/index.html`
-    against this class list, and confirming My Overview's own visibility
-    rule (`nav-item-my-overview`) is unchanged. Same node-syntax-only
-    caveat as item 19.
+    only when entering Player View. Staging reproduction, same browser
+    tab throughout (the exact sequence that exercises the stale-DOM
+    defect): signed in as system_admin, opened Users, confirmed the full
+    user table was visible; signed out; signed in as the league_admin
+    scoped to Demo Pool League. Observed after league-admin sign-in: the
+    application landed on Dashboard; Users was absent from navigation;
+    Backup was absent; the previously rendered Users table was no longer
+    visible; league-admin workflow navigation remained available. No
+    stale privileged content from the prior system_admin session
+    survived the identity change. (Code-level verification -- tracing
+    every call site that can show the app shell -- also stands
+    unchanged; no JS test harness exists in this repository, see
+    `CLAUDE.md`.)
+20. **Player View is My Overview only -- PASS, browser-verified on
+    staging 2026-09-24.** Every nav item without its own role-based
+    gating (Dashboard, Seasons, Teams, Players, Schedule, Lineup, Match
+    Entry, Weekly Summary, Standings, Player Stats, Handicap) plus the
+    League switcher, the active-season label (`#active-season-label`),
+    "Manage Leagues," and "Admin Key" sidebar controls now carry a
+    shared `admin-workspace-nav-item` class (`web/index.html`), hidden
+    together by `applyWorkspace` whenever the resolved workspace is
+    `player`. Staging reproduction: signed in with the linked player
+    test account. Observed: the sidebar displayed only My Overview and
+    Sign Out; the league selector was hidden; the active-season shell
+    label was hidden; Dashboard, Seasons, Teams, Players, Schedule,
+    Lineup, Match Entry, Weekly Summary, Standings, Player Stats,
+    Handicap, Users, Financial, Communication, Manage Leagues, Admin
+    Key, and Backup were not visible; Player Overview automatically
+    loaded Rex Barlow (#51, Eight Is Enough, Spring 2026) with schedule
+    and dues information rendered. Final recheck: signed out the
+    league_admin and signed back in as the same linked player in the
+    same browser tab -- the application landed directly on Rex Barlow's
+    Player Overview again, the sidebar again contained only My Overview
+    and Sign Out, and no admin navigation, league selector, or
+    active-season label reappeared, confirming the workspace transition
+    is repeatable in both directions without stale DOM or stale shell
+    context.
 21. **Users screen response now carries authoritative role assignments
-    (API response-shape gap, not a frontend-only bug) -- PASS (Go
-    tests).** New `TestApplyAuthStore_List_
-    PopulatesRealRoleAssignments` (`backend/storage/sqlite/
-    apply_auth_store_test.go`): a system_admin's single global
-    assignment, a league_admin's two league assignments (multiple
-    leagues), zero assignments for a legacy league_admin never granted a
-    league (legacy `Role` field preserved so the UI can render an
-    explicit no-access label, not treat the legacy role as granted
+    (API response-shape gap, not a frontend-only bug) -- PASS (Go tests
+    and browser-verified on staging 2026-09-24).** New
+    `TestApplyAuthStore_List_PopulatesRealRoleAssignments`
+    (`backend/storage/sqlite/apply_auth_store_test.go`): a system_admin's
+    single global assignment, a league_admin's two league assignments
+    (multiple leagues), zero assignments for a legacy league_admin never
+    granted a league (legacy `Role` field preserved so the UI can render
+    an explicit no-access label, not treat the legacy role as granted
     access), and zero assignments for a role=player user, all from the
     SAME query as the user list (no role_assignments query per user).
-    New `handlers/
-    api_users_access_display_test.go`: `TestUsersList_
-    ReturnsRealRoleAssignments_OverHTTP` proves the same shape end-to-end
-    over real HTTP with a session-authenticated system_admin;
-    `TestUsersList_LeagueAdminAndPlayerSessions_CannotAccessAPI` confirms
-    `GET /api/users` still rejects (403) both a league_admin and a player
-    session unchanged. The three pre-existing `TestApplyAuthStore_List_*`
-    tests (return-all-users, does-not-expose-hash, empty-db) pass
-    unmodified, confirming legacy API-key-only accounts remain correctly
-    represented.
+    New `handlers/api_users_access_display_test.go`:
+    `TestUsersList_ReturnsRealRoleAssignments_OverHTTP` proves the same
+    shape end-to-end over real HTTP with a session-authenticated
+    system_admin; `TestUsersList_LeagueAdminAndPlayerSessions_
+    CannotAccessAPI` confirms `GET /api/users` still rejects (403) both
+    a league_admin and a player session unchanged. The three
+    pre-existing `TestApplyAuthStore_List_*` tests (return-all-users,
+    does-not-expose-hash, empty-db) pass unmodified, confirming legacy
+    API-key-only accounts remain correctly represented. Staging
+    reproduction: signed in as the system administrator (full
+    administrator navigation rendered; Users opened successfully).
+    Observed: the table heading reads "Access," not "Role"; the test
+    system administrator displayed `System Admin`; the test league
+    administrator displayed `League Admin -- Demo Pool League`; the test
+    player displayed `Player` with linked player `Rex Barlow`; existing
+    multi-league administrator accounts displayed one badge per assigned
+    league; existing linked-player accounts displayed `Player`; the
+    screen no longer displayed the misleading legacy "admin" value for
+    the new email-login test accounts.
 
-Browser verification was not claimed or attempted this round.
+Browser verification was performed on staging on 2026-09-24 (evidence
+above); this correction round is staging-verified and closed. No seed or
+database reset was performed during verification, and the pre-deployment
+backup listed above was not restored -- staging data was left as found.
 
 ## Known Gaps Summary
 
