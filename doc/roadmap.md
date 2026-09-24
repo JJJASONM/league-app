@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-09-19
+**Last reviewed:** 2026-09-24
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -26,101 +26,18 @@ Stabilize current admin workflows
 
 ## Now
 
-**Users / Roles / Authentication -- promoted to Now 2026-09-18, PM
-correction round accepted 2026-09-19.**
-Personal API keys were an implementation bridge, not the intended human
-sign-in experience; the application must be testable by multiple real
-people with distinct identities and permissions. A discovery pass
-(branch `user-auth-roles-discovery`) produced the full design; Phase 1
-(branch `user-auth-roles-phase-1-login-access`) implemented the first
-complete vertical slice: email/password identity (Argon2id, measured
-parameters, no hardcoded cost constant), server-managed sessions with
-CSRF protection, scoped `role_assignments` (system_admin global,
-league_admin per-league, both DB-CHECK-enforced), a centralized
-`auth.Authorize` policy, a real browser login screen (with a password
-setup mode and an "Use Admin Key instead" link) with Player View/Admin
-View workspace switching, and Users Admin extensions for email-identity
-account provisioning and lifecycle (setup tokens, deactivate/reactivate,
-revoke keys). Existing personal API keys remain fully functional
-throughout, including through a one-time, empirically-verified schema
-migration (`db.migrateUsersAndAPIKeys`) that moves API-key credentials
-off the `users` table into a dedicated `user_api_keys` table and
-backfills `role_assignments` from every legacy flat `role` value.
+No active implementation lane is in progress. User Auth / Roles Phase 1
+(promoted to Now 2026-09-18) is complete, corrected, deployed, and
+staging/browser-verified as of 2026-09-24 -- see its entry in Completed
+/ Largely Completed below for the full record and
+`doc/domains/users/README.md` for implementation detail. Now no longer
+carries any active login, session, scoped-role, Player View, or Users
+access-display work; that is done, not in progress.
 
-A PM correction round (2026-09-19) found the initial handoff
-operationally incomplete and fixed it: session authentication now works
-on every protected route family, not only league/season CRUD (players,
-teams, complete season setup, schedule/pushback, lineups, match scoring/
-approval, week close/reopen, finances, handicap apply, backup, user
-administration, and Player Overview all now go through the same
-`auth.Authorize` call, scoped to each route's own resource -- a League A
-admin can no longer read or mutate League B's data through any of these
-routes); league creation's creator self-grant is now a real, single
-database transaction (`sqlite.LeagueSelfGrantStore`), not a compensating
-create-then-grant-then-delete sequence; the users-table migration now
-creates its four auth child tables only after the table it depends on
-has its final shape, matching its own documented ordering; and the
-migration explicitly preserves `sqlite_sequence`'s historical high-water
-mark even when the highest-id row was deleted before migration ran. See
-`doc/domains/users/README.md`'s "PM correction round (2026-09-19)"
-section for full detail.
-
-A second correction round (also 2026-09-19) closed five narrower gaps:
-player create/update/merge, match team assignment, and lineup save now
-validate every RELATED resource's real league (not only the primary one
-first checked), closing several related-resource cross-league bypasses;
-an unassigned player is now explicitly system_admin-only on every route
-(fixing an accidental 400 on bodyless `DELETE /api/players/{id}`); the
-session-authorization gate no longer falls open when only part of the
-auth stack is wired; the Apply route no longer requires the static
-`LEAGUE_ADMIN_TOKEN` to be configured when session/Bearer auth is
-available; and the users-migration `sqlite_sequence` restoration now
-covers a rebuild that copies zero rows (every legacy user deleted before
-migration). See `doc/domains/users/README.md`'s "PM final authorization
-corrections (round 2, 2026-09-19)" section for full detail.
-
-A third correction round (also 2026-09-19) closed two remaining defects:
-an active password session now always takes precedence over a stored
-legacy Admin Key -- both `web/lib/api-client.js` (never attaches the Admin
-Key while a session is active, and login clears any stored key) and
-`handlers/api_auth_middleware.go`'s `resolveIdentity` (checks the session
-cookie before a Bearer header) now enforce this, so the identity a
-browser tab displays can never diverge from the identity its requests
-execute as; and a player update that would persist `team_id = NULL`
-(explicit `null`, or simply omitting the field under the endpoint's
-full-PUT semantics) is now system_admin-only, closing a path where a
-league_admin could authorize against their own player and then silently
-unassign them. See `doc/domains/users/README.md`'s "PM final credential-
-precedence and player-unassignment corrections (round 3, 2026-09-19)"
-section for full detail.
-
-Staging verification (branch `auth-phase-1-staging-ui-isolation-fixes`)
-confirmed the staging backend authorization matrix passed, and found
-three defects addressed and accepted in a fourth round (also
-2026-09-19). Two are FRONTEND
-identity/navigation defects: identity/workspace changes (sign-in,
-sign-out, an Admin Key set/clear, a workspace switch) now always
-navigate to an authorized default section instead of leaving a previous
-identity's screen as the still-visible active one; and Player View now
-actually hides every admin-only nav item, the active-season label, and
-sidebar control (not only the five that already had gating logic),
-making it "My Overview only" as designed. The third is an API
-RESPONSE-SHAPE GAP, not a frontend-only bug -- backend authorization for
-the Users list endpoint was already correct, but its response did not
-include each account's authoritative role assignments; the Users Admin
-screen now shows that real, current role_assignments-derived access
-instead of the legacy flat role column, resolved in the same query as
-the user list (no N+1), with an explicit no-scoped-access label (never a
-bare legacy role that could look like granted access) for an account
-with neither assignments nor a linked player. See
-`doc/domains/users/README.md`'s "staging UI isolation corrections (round
-4, 2026-09-19)" section for full detail.
-
-Explicitly deferred, not oversights (see
-`doc/domains/users/README.md`'s Phase 1 section for the full list and
-reasoning): self-registration and automatic player-email matching,
-pending player-link review, email verification/delivery, the captain
-role, and two-team player score approval.
+This roadmap does not silently promote a Later item into Now or Next --
+none of the Later items below have been started, and no branch exists
+for any of them. The next discovery candidate is a PM decision, not a
+standing default.
 
 ---
 
@@ -196,8 +113,18 @@ stable.
   - Address deferred workflow gaps that are already known but not
     architecture-critical.
 
-- Roles, permissions, and API access implementation.
-  - `USERS-Q001` resolved 2026-07-27. Discovery complete; see
+- Roles, permissions, and API access implementation -- **historical
+  foundation work, superseded by User Auth / Roles Phase 1** (see
+  Completed / Largely Completed above). The incremental, personal-key-
+  only `clearanceAuth` rollout below (Phases 1-6, 2026-07-28 to
+  2026-08-08) was this project's first route-auth pass and remains an
+  accurate record of when each route family first gained ANY auth. It
+  no longer describes the current mechanism: every route family listed
+  here, plus every other protected mutation route, now goes through the
+  unified, scoped `auth.Authorize` policy via session or Bearer
+  credential (User Auth / Roles Phase 1, 2026-09-18 onward).
+  - `USERS-Q001` resolved 2026-07-27, superseded 2026-09-24 by User Auth
+    / Roles Phase 1; see Resolved Questions below and
     `doc/domains/users/README.md`.
   - Phase 1 wired 2026-07-28: clearance routes (`close/reopen week`,
     `close/reopen season`) gated by personal-key-only auth + league_admin role.
@@ -220,10 +147,14 @@ stable.
     rejected). Distinct from the league_admin-allowing check used in Phases
     1-5 because backup is a system-level operation, not league-admin setup
     work.
-  - No unprotected admin mutation routes remain from this rollout.
-    `handicap-apply` retains its dual-tier `requireApplyAuth` (personal key +
-    static token fallback) by design; no change planned until a focused
-    attribution/auth cleanup phase.
+  - No unprotected admin mutation routes remained from this rollout.
+    **Superseded:** `handicap-apply` no longer depends solely on its
+    dual-tier `requireApplyAuth` (personal key + static token) -- User
+    Auth / Roles Phase 1's correction rounds also wired it onto session/
+    scoped-role auth, so it mounts whenever the handicap service and at
+    least one of session/scoped-roles, a personal Bearer key, or the
+    static token is available; the static token remains supported, just
+    no longer required.
   - For future online score entry, prefer rostered players assigned to the
     match over a generic scorekeeper role (deferred to MATCHES-Q002).
   - Users Admin Screen Phase 1 implemented 2026-08-26: `POST/GET
@@ -235,10 +166,11 @@ stable.
     league_admin) and an Admin Key modal identity indicator were added to
     the frontend. See `doc/domains/users/README.md`'s "Users Admin Screen
     Phase 1 Implementation" section for full detail.
-  - Browser sessions and JWTs remain deferred. Building a users management
-    screen was the condition previously named as the trigger to revisit
-    this -- that revisit was explicitly declined for this phase; personal
-    API keys remain the mechanism.
+  - **Superseded 2026-09-18 by User Auth / Roles Phase 1** (see Completed
+    / Largely Completed above): real email/password login and browser
+    sessions with CSRF protection are implemented, replacing personal API
+    keys as the primary human sign-in mechanism. Personal API keys remain
+    supported for compatibility and admin/automation workflows.
 
 - Player record maintenance.
   - Build a merge UI (preview, confirm) on top of the safe-merge backend after
@@ -275,14 +207,20 @@ admin workflows are stable.
   - Use it across week close, reopen, handicap apply, roster changes, schedule
     changes, and season close.
 
-- Users screen and account management.
-  - Roles and permissions are resolved at the design level (USERS-Q001
-    resolved 2026-07-27). Route auth implementation is incremental; see Then.
-  - Account linking (users.player_id) deferred until online score entry,
-    attribution display, or a users screen creates the concrete need.
-  - No email invitation workflow selected; admin-provisioned accounts only.
-  - A users screen waits for route-level auth to be wired and a concrete
-    account-management workflow to be defined.
+- Account management -- genuinely deferred items only. The Users Admin
+  screen, player-to-user linking, email/password login, browser
+  sessions, Player My Overview access, and scoped role assignments/
+  access display are all implemented (User Auth / Roles Phase 1 -- see
+  Completed / Largely Completed above); this entry no longer describes
+  them as future work. What remains deferred:
+  - Self-registration.
+  - Email verification and automated email delivery.
+  - An automated password-reset delivery workflow (a system_admin can
+    already issue a one-time password-setup token by hand; only
+    automated delivery of that token is deferred).
+  - Automatic player matching by email.
+  - Broader invitation/account-onboarding UX beyond an admin issuing a
+    setup token out of band.
 
 - Online score entry workflow.
   - Resolve `MATCHES-Q002`.
@@ -338,6 +276,64 @@ admin workflows are stable.
 
 These areas are no longer "next" work, though they may still receive focused
 follow-up.
+
+- User Auth / Roles Phase 1: real login, sessions, scoped roles, and
+  UI isolation (2026-09-18 to 2026-09-24, commits `14f5a57`, `bc2387c`,
+  `3def8a7`; resolves `USERS-Q001`). Personal API keys were an
+  implementation bridge, not the intended human sign-in experience; a
+  discovery pass (branch `user-auth-roles-discovery`) produced the full
+  role/access design.
+  - `14f5a57` ("Auth Phase 1: add session login and scoped roles"): real
+    email/password login (Argon2id), server-managed browser sessions
+    with CSRF protection, scoped `role_assignments` (system_admin
+    global, league_admin per-league), a centralized `auth.Authorize`
+    policy applied across every protected route family (players, teams,
+    season setup, schedule/pushback, lineups, match scoring/approval,
+    week close/reopen, finances, handicap apply, backup, user
+    administration, Player Overview), and linked player accounts
+    (`role=player`) -- plus three same-day PM correction rounds closing
+    related-resource cross-league bypasses, a partial-auth-wiring
+    fail-open gap, the Apply route's static-token dependency, a
+    migration `sqlite_sequence` gap, session-vs-Admin-Key credential
+    precedence, and a player-unassignment gap.
+  - `bc2387c` ("Auth Phase 1: isolate workspaces and show scoped
+    access"): closed three staging-found defects -- privileged content
+    no longer survives a sign-in/sign-out/workspace-switch identity
+    change; Player View is genuinely restricted to My Overview (every
+    admin-only nav item, the active-season label, and admin sidebar
+    control hidden); and the Users Admin screen shows each account's
+    authoritative `role_assignments`-derived access (system_admin /
+    league_admin with league scope(s) / player) instead of the legacy
+    flat role column, with an explicit no-scoped-access label when
+    neither applies.
+  - `3def8a7` ("Docs: record auth UI isolation staging verification"):
+    records the staging deployment and browser verification below.
+  - **Deployed and browser-verified on staging 2026-09-24**: deployed
+    commit `bc2387c`, `GET /healthz` confirmed healthy, and all three
+    UI corrections confirmed in a real browser across sequential
+    identity changes in one tab (system_admin -> league_admin ->
+    player), with no seed or database reset performed.
+  - The correction rounds fixed real backend authorization/scope defects
+    (related-resource cross-league bypasses, partial-auth-wiring
+    fail-open behavior, and a player-unassignment authorization gap)
+    alongside frontend identity-isolation/navigation defects and an API
+    response-shape gap -- not one category alone. The final backend
+    authorization scope matrix passed after these correction rounds; the
+    final accepted and deployed state passed the complete authorization
+    matrix.
+  - System administrators, league administrators, and players now each
+    receive distinct, correctly scoped access and a distinct application
+    view (Admin View vs. Player View). Personal API keys remain
+    supported for compatibility and admin/automation workflows, as a
+    fallback behind an active session, not a parallel identity.
+  - Explicitly deferred, not oversights: self-registration and automatic
+    player-email matching, email verification/delivery, an automated
+    password-reset delivery workflow, the captain role, and two-team
+    player score approval.
+  - Full implementation detail, every correction round, and all test
+    evidence: `doc/domains/users/README.md` (Phase 1 Implementation
+    through the staging UI isolation corrections round) and
+    `doc/testing/product-smoke-test-checklist.md` sections 27-27e.
 
 - SQLite foreign-key cascade enforcement (2026-09-17, Known Gap #19).
   Staging verification found a league/season delete could remove the
@@ -1481,10 +1477,10 @@ follow-up.
 
 | ID | Area | Resolution |
 | --- | --- | --- |
-| `USERS-Q001` | Users | Resolved 2026-07-27 - Admin-provisioned accounts; two-role model (system_admin, league_admin); personal API keys continue; player link deferred; route auth wires incrementally per phase. **Update 2026-09-03:** the deferred player link is now implemented as a third role, `role=player`, in Player Account Access Phase 1 -- still on the same API-key bridge, not browser sessions/JWTs. |
+| `USERS-Q001` | Users | Resolved 2026-07-27 - Admin-provisioned accounts; two-role model (system_admin, league_admin); personal API keys continue; player link deferred; route auth wires incrementally per phase. **Update 2026-09-03:** the deferred player link is now implemented as a third role, `role=player`, in Player Account Access Phase 1 -- still on the same API-key bridge, not browser sessions/JWTs. **Update 2026-09-24 (User Auth / Roles Phase 1, superseding the API-key bridge above):** real email/password authentication and browser sessions with CSRF protection are implemented; system_admin and league_admin are scoped `role_assignments` (league_admin per-league), and `role=player` is a linked player account with no admin assignment -- each producing a distinct, correctly scoped application view. A Users Admin screen supports account provisioning and lifecycle (setup tokens, deactivate/reactivate, revoke keys) and shows each account's authoritative access. Personal API keys remain supported as a compatibility/automation path, strictly as a fallback behind an active session. Deployed and browser-verified on staging 2026-09-24. See `doc/domains/users/README.md` and `doc/testing/product-smoke-test-checklist.md` sections 27-27e. |
 | `MATCHES-Q001` | Matches | Resolved 2026-08-25 - Two new admin-attested match-level states (`approved`, `processed`) added underneath Close Week, not a single review status; processed matches count toward handicap eligibility before week close; real captain/player login approval deferred. See Weekly Score Processing Phase 1A. |
 | `PLAYERS-Q001` | Players | Resolved 2026-07-14 - Phase 1 quick-add uses at least one name, diff rating default 0, and optional team; duplicate detection and INCOMPLETE status deferred. |
-| `PLAYERS-Q002` | Players / Finances | Resolved 2026-08-30 - Player Overview is protected with `clearanceAuth` while it exposes dues/payment status. Player-facing access to a player's own money/stat/schedule view remains deferred until real player login/permissions exist. **Update 2026-09-03:** player-facing access to one's own Player Overview is now implemented via `role=player` (Player Account Access Phase 1) -- still API-key V1, not full login/permissions. |
+| `PLAYERS-Q002` | Players / Finances | Resolved 2026-08-30 - Player Overview is protected with `clearanceAuth` while it exposes dues/payment status. Player-facing access to a player's own money/stat/schedule view remains deferred until real player login/permissions exist. **Update 2026-09-03:** player-facing access to one's own Player Overview is now implemented via `role=player` (Player Account Access Phase 1), on the same personal-API-key access model as every other role at that time, not yet the browser-session login model. **Update 2026-09-24 (User Auth / Roles Phase 1):** replaced that personal-API-key-only model with real email/password login and browser sessions; a linked player can access only their own Player Overview, through Player View / My Overview, while admin access remains governed by scoped system_admin or league_admin role assignments. Staging/browser-verified 2026-09-24. |
 | `CODES-Q001` | Codes | Resolved 2026-07-14 - behavior-driving codes remain developer-owned constants; DB-backed code tables deferred. |
 | `SCHEDULES-Q001` | Schedules | Resolved 2026-07-13 - preview policy and enforcement complete. |
 
