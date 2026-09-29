@@ -253,11 +253,19 @@ func TestUnprocessMatch_Success_ClearsProcessingPreservesApproval(t *testing.T) 
 }
 
 // --- Score edits blocked after approval/processing ---
+//
+// These now exercise mapScoreEditGuardErr rather than a service-layer
+// pre-check: PM's atomicity correction removed the pre-transaction
+// checkMatchEditable call (it could not close the race between reading
+// match state and writing it) in favor of a transaction-scoped conditional
+// guard (AdvanceScoreRevisionForEdit) that re-verifies everything at write
+// time. The stub simulates that guard's outcome directly via
+// bumpRevisionErr, exactly as the real SQLite guard would return it.
 
 func TestSaveRounds_Approved_ReturnsConflict(t *testing.T) {
-	approvedAt := "2026-08-01 00:00:00"
 	store := &stubRoundStore{
-		approvalState: matches.MatchApprovalState{Exists: true, Completed: true, ApprovedAt: &approvedAt},
+		approvalState:   matches.MatchApprovalState{Exists: true, Completed: true},
+		bumpRevisionErr: matches.ErrGuardAdminAccepted,
 	}
 	svc := newTestRoundSvc(store)
 	err := svc.SaveRounds(context.Background(), matches.SaveRoundsInput{MatchID: 1})
@@ -265,12 +273,9 @@ func TestSaveRounds_Approved_ReturnsConflict(t *testing.T) {
 }
 
 func TestSaveRounds_Processed_ReturnsConflict(t *testing.T) {
-	approvedAt := "2026-08-01 00:00:00"
-	processedAt := "2026-08-02 00:00:00"
 	store := &stubRoundStore{
-		approvalState: matches.MatchApprovalState{
-			Exists: true, Completed: true, ApprovedAt: &approvedAt, ProcessedAt: &processedAt,
-		},
+		approvalState:   matches.MatchApprovalState{Exists: true, Completed: true},
+		bumpRevisionErr: matches.ErrGuardProcessed,
 	}
 	svc := newTestRoundSvc(store)
 	err := svc.SaveRounds(context.Background(), matches.SaveRoundsInput{MatchID: 1})
@@ -278,9 +283,9 @@ func TestSaveRounds_Processed_ReturnsConflict(t *testing.T) {
 }
 
 func TestSubmitResults_Approved_ReturnsConflict(t *testing.T) {
-	approvedAt := "2026-08-01 00:00:00"
 	store := &stubRoundStore{
-		approvalState: matches.MatchApprovalState{Exists: true, Completed: true, ApprovedAt: &approvedAt},
+		approvalState:   matches.MatchApprovalState{Exists: true, Completed: true},
+		bumpRevisionErr: matches.ErrGuardAdminAccepted,
 	}
 	svc := newTestRoundSvc(store)
 	err := svc.SubmitResults(context.Background(), 1, nil)
@@ -288,12 +293,9 @@ func TestSubmitResults_Approved_ReturnsConflict(t *testing.T) {
 }
 
 func TestClearResults_Processed_ReturnsConflict(t *testing.T) {
-	approvedAt := "2026-08-01 00:00:00"
-	processedAt := "2026-08-02 00:00:00"
 	store := &stubRoundStore{
-		approvalState: matches.MatchApprovalState{
-			Exists: true, Completed: true, ApprovedAt: &approvedAt, ProcessedAt: &processedAt,
-		},
+		approvalState:   matches.MatchApprovalState{Exists: true, Completed: true},
+		bumpRevisionErr: matches.ErrGuardProcessed,
 	}
 	svc := newTestRoundSvc(store)
 	err := svc.ClearResults(context.Background(), 1)

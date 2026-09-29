@@ -42,26 +42,39 @@ func (s *RoundService) IsSeasonClosedForMatch(ctx context.Context, matchID int64
 // Returns *RoundValidationError on scoresheet validation failure (HTTP 422).
 // Returns domainerr.Conflict when the week is already closed (HTTP 409).
 // Returns domainerr.Unprocessable for ambiguous snapshot resolution (HTTP 422).
+//
+// Unchanged in Player Score Approval Phase 1A -- discards the resulting
+// score_revision returned by the private implementation. Existing callers
+// (the unmodified HTTP handler) never set input.ExpectedRevision, so this
+// behaves exactly as before.
 func (s *RoundService) SaveRounds(ctx context.Context, input SaveRoundsInput) error {
-	if sc, err := s.store.IsSeasonClosedForMatch(ctx, input.MatchID); err != nil {
-		return fmt.Errorf("save rounds: season-closed check: %w", err)
-	} else if sc {
-		return domainerr.New("SEASON_CLOSED", domainerr.Conflict,
-			"season is closed; this action is not allowed")
-	}
-	closed, err := s.store.IsWeekClosed(ctx, input.MatchID)
-	if err != nil {
-		return fmt.Errorf("save rounds: week-closed check: %w", err)
-	}
-	if closed {
-		return domainerr.New("WEEK_CLOSED", domainerr.Conflict,
-			"week is closed; reopen before editing scores")
-	}
-	if err := checkMatchEditable(ctx, s.store, input.MatchID); err != nil {
-		return err
-	}
+	_, err := s.saveRounds(ctx, input)
+	return err
+}
 
-	return s.store.RunTx(ctx, func(tx RoundStore) error {
+// SaveRoundsWithRevision behaves like SaveRounds but returns the resulting
+// score_revision, for Phase 1B's future HTTP response. Not called by any
+// route in Phase 1A.
+func (s *RoundService) SaveRoundsWithRevision(ctx context.Context, input SaveRoundsInput) (int, error) {
+	return s.saveRounds(ctx, input)
+}
+
+// saveRounds performs the guarded revision-advance as the FIRST statement
+// inside its transaction, before any destructive round/result write, per
+// PM's atomicity correction: a pre-transaction check cannot close the race
+// between reading match state and writing it, since matches.score_revision
+// (and the season/week/approved/processed locks) can change in between. If
+// later validation or persistence fails, the transaction's rollback undoes
+// the revision advance and approval-clear along with everything else.
+func (s *RoundService) saveRounds(ctx context.Context, input SaveRoundsInput) (int, error) {
+	var newRevision int
+	err := s.store.RunTx(ctx, func(tx RoundStore) error {
+		rev, err := tx.AdvanceScoreRevisionForEdit(ctx, input.MatchID, input.ExpectedRevision)
+		if err != nil {
+			return mapScoreEditGuardErr("save rounds", err)
+		}
+		newRevision = rev
+
 		mc, err := tx.LoadMatchContext(ctx, input.MatchID)
 		if err != nil {
 			return fmt.Errorf("save rounds: load match context: %w", err)
@@ -275,6 +288,7 @@ func (s *RoundService) SaveRounds(ctx context.Context, input SaveRoundsInput) er
 		}
 		return nil
 	})
+	return newRevision, err
 }
 
 // GetRounds returns all round results for a match with computed pairing fields.
@@ -335,49 +349,70 @@ func (s *RoundService) GetPlayerStats(ctx context.Context, req PlayerStatsReques
 }
 
 // SubmitResults replaces match_results for a match and marks it completed.
-// Returns domainerr.Conflict when the week is already closed.
+// Returns domainerr.Conflict when the week is already closed. Unchanged in
+// Player Score Approval Phase 1A -- discards the resulting score_revision.
 func (s *RoundService) SubmitResults(ctx context.Context, matchID int64, results []models.MatchResult) error {
-	if sc, err := s.store.IsSeasonClosedForMatch(ctx, matchID); err != nil {
-		return fmt.Errorf("submit results: season-closed check: %w", err)
-	} else if sc {
-		return domainerr.New("SEASON_CLOSED", domainerr.Conflict,
-			"season is closed; this action is not allowed")
-	}
-	closed, err := s.store.IsWeekClosed(ctx, matchID)
-	if err != nil {
-		return fmt.Errorf("submit results: week-closed check: %w", err)
-	}
-	if closed {
-		return domainerr.New("WEEK_CLOSED", domainerr.Conflict,
-			"week is closed; reopen before editing scores")
-	}
-	if err := checkMatchEditable(ctx, s.store, matchID); err != nil {
-		return err
-	}
-	return s.store.SubmitMatchResults(ctx, matchID, results)
+	_, err := s.submitResults(ctx, matchID, results, nil)
+	return err
+}
+
+// SubmitResultsWithRevision behaves like SubmitResults but additionally
+// enforces an optional expected score revision and returns the resulting
+// score_revision. Not called by any route in Phase 1A -- Phase 1B will
+// switch the handler to this method once its request body carries
+// expected_revision.
+func (s *RoundService) SubmitResultsWithRevision(ctx context.Context, matchID int64, results []models.MatchResult, expectedRevision *int) (int, error) {
+	return s.submitResults(ctx, matchID, results, expectedRevision)
+}
+
+// submitResults acquires the guarded revision transition as the FIRST
+// statement inside the same transaction as the destructive
+// SubmitMatchResults write, per PM's atomicity correction -- see
+// saveRounds's doc comment for the reasoning. RunTx nests transparently
+// when SubmitMatchResults's own internal RunTx call runs against an
+// already-tx-scoped store, so both writes share one commit/rollback unit.
+func (s *RoundService) submitResults(ctx context.Context, matchID int64, results []models.MatchResult, expectedRevision *int) (int, error) {
+	var newRevision int
+	err := s.store.RunTx(ctx, func(tx RoundStore) error {
+		rev, err := tx.AdvanceScoreRevisionForEdit(ctx, matchID, expectedRevision)
+		if err != nil {
+			return mapScoreEditGuardErr("submit results", err)
+		}
+		newRevision = rev
+		return tx.SubmitMatchResults(ctx, matchID, results)
+	})
+	return newRevision, err
 }
 
 // ClearResults deletes match_results for a match and marks it incomplete.
-// Returns domainerr.Conflict when the week is already closed.
+// Returns domainerr.Conflict when the week is already closed. Unchanged in
+// Player Score Approval Phase 1A -- discards the resulting score_revision.
 func (s *RoundService) ClearResults(ctx context.Context, matchID int64) error {
-	if sc, err := s.store.IsSeasonClosedForMatch(ctx, matchID); err != nil {
-		return fmt.Errorf("clear results: season-closed check: %w", err)
-	} else if sc {
-		return domainerr.New("SEASON_CLOSED", domainerr.Conflict,
-			"season is closed; this action is not allowed")
-	}
-	closed, err := s.store.IsWeekClosed(ctx, matchID)
-	if err != nil {
-		return fmt.Errorf("clear results: week-closed check: %w", err)
-	}
-	if closed {
-		return domainerr.New("WEEK_CLOSED", domainerr.Conflict,
-			"week is closed; reopen before editing scores")
-	}
-	if err := checkMatchEditable(ctx, s.store, matchID); err != nil {
-		return err
-	}
-	return s.store.ClearMatchResults(ctx, matchID)
+	_, err := s.clearResults(ctx, matchID, nil)
+	return err
+}
+
+// ClearResultsWithRevision behaves like ClearResults but additionally
+// enforces an optional expected score revision and returns the resulting
+// score_revision. Not called by any route in Phase 1A.
+func (s *RoundService) ClearResultsWithRevision(ctx context.Context, matchID int64, expectedRevision *int) (int, error) {
+	return s.clearResults(ctx, matchID, expectedRevision)
+}
+
+// clearResults acquires the guarded revision transition as the FIRST
+// statement inside the same transaction as the destructive
+// ClearMatchResults write -- see saveRounds's doc comment for the reasoning.
+func (s *RoundService) clearResults(ctx context.Context, matchID int64, expectedRevision *int) (int, error) {
+	var newRevision int
+	err := s.store.RunTx(ctx, func(tx RoundStore) error {
+		rev, err := tx.AdvanceScoreRevisionForEdit(ctx, matchID, expectedRevision)
+		if err != nil {
+			return mapScoreEditGuardErr("clear results", err)
+		}
+		newRevision = rev
+		return tx.ClearMatchResults(ctx, matchID)
+	})
+	return newRevision, err
 }
 
 // computePairingResult fills derived fields on a RoundResult.

@@ -1,7 +1,7 @@
 # League App Architecture Decisions
 
 **Status:** Target design
-**Last reviewed:** 2026-09-19
+**Last reviewed:** 2026-09-29
 
 This document consolidates approved product and architecture decisions. It
 describes the target model, not necessarily the schema currently implemented in
@@ -628,3 +628,47 @@ should get its own narrowly-scoped store function named for that
 workflow (as this one is), not a shared generic "cross-domain
 transaction" helper, unless a third such need appears and the pattern is
 revisited deliberately.
+
+### 2026-09-27 - Optimistic revision control and attribution-preserving event history are cross-domain patterns
+
+**Status:** `accepted`
+
+Player Score Approval Phase 1A (`doc/domains/matches/README.md`) is the
+first feature in this codebase where a client must detect a stale edit
+made since it last read data (`matches.score_revision`, checked with a
+single conditional `UPDATE ... WHERE id=? AND score_revision=?`) and the
+first to pair current-state columns with a dedicated append-only event
+table (`match_approval_events`) purely for attribution history separate
+from live state. Two conventions established here are intended to apply
+to any future domain with the same two needs, not just this one:
+
+**Decision, optimistic concurrency:** a domain that needs to detect a
+stale concurrent edit adds its own `*_revision` (or equivalent) integer
+column, incremented atomically in the same transaction as every write
+that changes the protected data, and checked via a single conditional
+`UPDATE` naming both the row id and the expected revision -- never a
+separate read-then-write pair, which cannot close the race window a
+revision check exists to close.
+
+**Update 2026-09-28:** Phase 1A's first implementation briefly violated
+this decision -- it checked season/week/approved/processed state via a
+read *before* opening the transaction that acted on it, exactly the
+read-then-write pattern this decision warns against, since none of that
+lock state is protected by `score_revision` alone (a concurrent admin
+acceptance or week close does not change it). PM review caught this and
+required the fix described in `doc/domains/matches/README.md`'s
+2026-09-28 Decision History entry. Recorded here as a concrete example
+of why this decision exists, not just an abstract principle.
+
+**Decision, attribution vs. history:** a live "who currently holds this
+state" column (repointed by a player merge, since it names a current
+relationship) and a permanent "what happened, and who did it at the
+time" event-log row (never repointed, no foreign key on its actor
+columns, readable via its own name snapshot) are different kinds of
+data, and a domain needing both should model them as two separate
+things -- one or more current-state columns plus a separate event table
+-- rather than trying to make one field or one table serve both
+purposes. This mirrors, and generalizes, `handicap_history.
+player_name_snapshot`'s existing pre-merge/pre-rename readability
+purpose, and the established no-FK attribution convention already used
+by `matches.approved_by_user_id`/`handicap_history.applied_by_user_id`.

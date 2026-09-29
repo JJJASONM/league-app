@@ -3,8 +3,57 @@ package matches
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"league_app/models"
+)
+
+// Guard sentinel errors, returned by every transaction-scoped conditional
+// write in this package's SQLite implementation (AdvanceScoreRevisionForEdit,
+// ApproveTeamSide, WithdrawTeamApproval, RequestCorrection, GuardedAdminAccept)
+// when their conditional UPDATE affects zero rows. Each write's WHERE clause
+// re-verifies every condition atomically at write time -- these sentinels
+// classify WHY it matched nothing, via a read-only follow-up query, never a
+// separate pre-check relied on for correctness. Defined here rather than in
+// domainerr because backend/storage/sqlite must not import domainerr (see
+// that package's doc comment) but may import this domain package, mirroring
+// how backend/domains/players' merge sentinels are shared today.
+var (
+	// ErrApprovalRevisionStale fires when the caller's expected score
+	// revision no longer matches matches.score_revision.
+	ErrApprovalRevisionStale = errors.New("approval revision stale")
+
+	// ErrGuardMatchNotFound fires when matchID does not exist.
+	ErrGuardMatchNotFound = errors.New("match not found")
+
+	// ErrGuardSeasonClosed fires when the match's season has closed_at set.
+	ErrGuardSeasonClosed = errors.New("season is closed")
+
+	// ErrGuardWeekClosed fires when matches.week_closed=1.
+	ErrGuardWeekClosed = errors.New("week is closed")
+
+	// ErrGuardAdminAccepted fires when matches.approved_at is already set --
+	// blocks score edits, team actions, and a second admin acceptance alike.
+	ErrGuardAdminAccepted = errors.New("match already admin-accepted")
+
+	// ErrGuardProcessed fires when matches.processed_at is already set.
+	ErrGuardProcessed = errors.New("match already processed")
+
+	// ErrGuardNotScored fires when matches.completed=0 for an operation
+	// that requires scores to already exist (admin acceptance, team-side
+	// approve/request-correction -- never withdraw, which can only apply
+	// to an already-approved, and therefore already-scored, side).
+	ErrGuardNotScored = errors.New("match not scored")
+
+	// ErrGuardTeamStateChanged fires only for GuardedAdminAccept, when
+	// either side's approval_state no longer matches the state the caller's
+	// accept-or-override decision was based on.
+	ErrGuardTeamStateChanged = errors.New("team approval state changed")
+
+	// ErrGuardInvalidTransition fires when a team action requires the
+	// side's current state to be a specific value (Withdraw requires
+	// "approved") and it no longer is.
+	ErrGuardInvalidTransition = errors.New("invalid approval state transition")
 )
 
 // RoundStore is the persistence interface for the round read/write service.
@@ -89,15 +138,172 @@ type RoundStore interface {
 	// UnprocessMatch clears processed_at and processed_by_user_id. Approval
 	// fields are left untouched.
 	UnprocessMatch(ctx context.Context, matchID int64) error
+
+	// AdvanceScoreRevisionForEdit is the transaction-scoped, authoritative
+	// guard for every scoresheet-affecting mutation (SaveRounds,
+	// SubmitMatchResults, ClearMatchResults, and the SQLite lineup store's
+	// substitute-swap methods on an already-scored match). It performs one
+	// conditional UPDATE that atomically verifies, at write time, that: the
+	// match exists; expectedRevision matches matches.score_revision, when
+	// non-nil; the season is not closed; the week is not closed; the match
+	// is not admin-accepted (approved_at IS NULL); and the match is not
+	// processed (processed_at IS NULL). On success it increments
+	// score_revision, resets any team side that is not already "pending"
+	// back to "pending" (recording one "cleared_by_edit" event per side
+	// actually reset), and returns the new revision. On failure it performs
+	// a read-only follow-up query to classify the exact reason and returns
+	// the matching sentinel (ErrGuardMatchNotFound, ErrApprovalRevisionStale,
+	// ErrGuardSeasonClosed, ErrGuardWeekClosed, ErrGuardAdminAccepted, or
+	// ErrGuardProcessed) with zero writes.
+	//
+	// Callers must invoke this as the FIRST statement inside the exact same
+	// transaction as the destructive mutation that follows it (never as a
+	// separate commit), so that a later failure in that mutation rolls back
+	// this call's revision bump and clears along with it.
+	AdvanceScoreRevisionForEdit(ctx context.Context, matchID int64, expectedRevision *int) (newRevision int, err error)
+
+	// ResolveApprovalEligibility reports whether playerID is eligible to
+	// act (approve, withdraw, or request correction) for the given side
+	// ("home" or "away") of matchID: either currently rostered to that
+	// side's team for the match's season (season_rosters), or an actual
+	// round_results participant on that side for this specific match.
+	// Either condition alone is sufficient; there is no captain
+	// requirement and no requirement to have personally played when
+	// rostered.
+	ResolveApprovalEligibility(ctx context.Context, matchID int64, side string, playerID int64) (bool, error)
+
+	// ApproveTeamSide sets the given side's approval_state to 'approved'
+	// for expectedRevision via one conditional UPDATE that atomically
+	// re-verifies, at write time: the match exists; score_revision equals
+	// expectedRevision; the match is completed; the season is not closed;
+	// the week is not closed; approved_at IS NULL; and processed_at IS
+	// NULL. On success it records an 'approved' match_approval_events row.
+	// On failure (zero rows matched) it classifies the reason via a
+	// read-only follow-up query and returns the matching sentinel
+	// (ErrGuardMatchNotFound, ErrApprovalRevisionStale, ErrGuardNotScored,
+	// ErrGuardSeasonClosed, ErrGuardWeekClosed, ErrGuardAdminAccepted, or
+	// ErrGuardProcessed), with zero writes either way.
+	// actorUserID/actorPlayerID/actorNameSnapshot identify who approved.
+	ApproveTeamSide(ctx context.Context, matchID int64, side string, expectedRevision int, actorUserID, actorPlayerID *int64, actorNameSnapshot string) error
+
+	// WithdrawTeamApproval resets the given side's approval_state from
+	// 'approved' back to 'pending' for expectedRevision via one conditional
+	// UPDATE additionally requiring the side's current state to already be
+	// 'approved'. Records a 'withdrawn' event on success. On failure,
+	// classifies and returns ErrGuardMatchNotFound, ErrApprovalRevisionStale,
+	// ErrGuardSeasonClosed, ErrGuardWeekClosed, ErrGuardAdminAccepted,
+	// ErrGuardProcessed, or ErrGuardInvalidTransition, with zero writes.
+	WithdrawTeamApproval(ctx context.Context, matchID int64, side string, expectedRevision int, actorUserID, actorPlayerID *int64, actorNameSnapshot string) error
+
+	// RequestCorrection sets the given side's approval_state to
+	// 'correction_requested' for expectedRevision with the given note via
+	// one conditional UPDATE requiring the same match-must-be-editable
+	// conditions as ApproveTeamSide (no FROM-state restriction -- a
+	// correction may be requested from 'pending' or 'approved' alike).
+	// Records a 'correction_requested' event on success. On failure,
+	// classifies and returns the matching sentinel, with zero writes.
+	RequestCorrection(ctx context.Context, matchID int64, side string, expectedRevision int, note string, actorUserID, actorPlayerID *int64, actorNameSnapshot string) error
+
+	// ListApprovalEvents returns the full match_approval_events history for
+	// matchID, ordered oldest first. Returns a non-nil empty slice when no
+	// events exist.
+	ListApprovalEvents(ctx context.Context, matchID int64) ([]models.MatchApprovalEvent, error)
+
+	// GuardedAdminAccept atomically performs the admin-acceptance write for
+	// the Phase 1B-ready AdminAcceptMatch primitive (never the existing,
+	// externally-reachable ApproveMatch, which is unchanged). Its
+	// conditional UPDATE pins the COMPLETE decision snapshot
+	// RoundService.AdminAcceptMatch's accept-vs-override choice was based
+	// on, not just the state labels: pinnedHome.State/pinnedAway.State,
+	// pinnedHome.StateScoreRevision/pinnedAway.StateScoreRevision
+	// (NULL-safe -- a nil pinned revision only matches a currently-nil
+	// column), and pinnedHome.CorrectionNote/pinnedAway.CorrectionNote --
+	// alongside match-exists/expectedRevision/completed/season-open/
+	// week-open/approved_at-IS-NULL/processed_at-IS-NULL. Pinning the note
+	// and revision (not just the label) matters because a correction
+	// request can be rewritten at the same revision with the same
+	// "correction_requested" label but a different note -- without pinning
+	// the note too, the guard could accept the match while the recorded
+	// event snapshot describes a note that was already superseded. On
+	// success it sets approved_at/approved_by_user_id/approval_note (the
+	// same fields ApproveMatch sets) and returns nil; the caller records
+	// the admin_accepted/admin_override event afterward, in the same
+	// transaction, using these SAME pinned values, so the guarded write
+	// and the event describe one consistent snapshot. On failure,
+	// classifies and returns ErrGuardMatchNotFound, ErrApprovalRevisionStale,
+	// ErrGuardNotScored, ErrGuardSeasonClosed, ErrGuardWeekClosed,
+	// ErrGuardProcessed, ErrGuardAdminAccepted (already accepted), or
+	// ErrGuardTeamStateChanged (state, revision, or note changed), with
+	// zero writes.
+	GuardedAdminAccept(ctx context.Context, matchID int64, expectedRevision int, pinnedHome, pinnedAway TeamSideApprovalState, approvedByUserID *int64, note string) error
+
+	// RecordAdminAcceptanceEvent inserts one match-scope
+	// ('admin_accepted' or 'admin_override') match_approval_events row,
+	// capturing a structured snapshot of both sides' state/note at the
+	// moment of the admin's decision.
+	RecordAdminAcceptanceEvent(ctx context.Context, ev AdminAcceptanceEvent) error
 }
 
 // MatchApprovalState holds one match's Weekly Score Processing Phase 1A
-// state, used to validate Approve/Process/Unapprove/Unprocess transitions.
+// state plus Player Score Approval Phase 1A's score revision and per-side
+// team-approval state, used to validate every state transition in this
+// package.
 type MatchApprovalState struct {
 	Exists      bool
 	Completed   bool
 	ApprovedAt  *string
 	ProcessedAt *string
+
+	ScoreRevision int
+	HomeSide      TeamSideApprovalState
+	AwaySide      TeamSideApprovalState
+}
+
+// TeamSideApprovalState holds one team side's current approval state.
+// State is always exactly "pending", "approved", or "correction_requested"
+// -- never inferred from timestamp presence alone, per the schema's CHECK
+// constraint. StateScoreRevision is meaningful whenever State is "approved"
+// or "correction_requested" -- the exact score_revision that state
+// describes (both states have an actor and a revision they apply to; only
+// "pending" has neither, and always carries a nil StateScoreRevision).
+type TeamSideApprovalState struct {
+	State              string
+	StateAt            *string
+	ActorUserID        *int64
+	ActorPlayerID      *int64
+	ActorNameSnapshot  string
+	StateScoreRevision *int
+	CorrectionNote     string
+}
+
+// Team-approval state constants. Mirrors the CHECK constraint on
+// matches.home_approval_state / away_approval_state exactly.
+const (
+	ApprovalStatePending             = "pending"
+	ApprovalStateApproved            = "approved"
+	ApprovalStateCorrectionRequested = "correction_requested"
+)
+
+// Approval side constants, matching match_approval_events.event_scope's
+// "home"/"away" values (the third possible value, "match", is used only by
+// admin-level acceptance/override events, never as a side value here).
+const (
+	ApprovalSideHome = "home"
+	ApprovalSideAway = "away"
+)
+
+// AdminAcceptanceEvent is the structured input for
+// RoundStore.RecordAdminAcceptanceEvent.
+type AdminAcceptanceEvent struct {
+	MatchID       int64
+	EventType     string // "admin_accepted" | "admin_override"
+	ActorUserID   *int64
+	Note          string
+	ScoreRevision int
+	HomeState     string
+	HomeNote      string
+	AwayState     string
+	AwayNote      string
 }
 
 // MatchContext holds the season and team IDs for a match.
@@ -163,7 +369,14 @@ type PlayerStatsRequest struct {
 }
 
 // SaveRoundsInput is the domain-level input for RoundService.SaveRounds.
+// ExpectedRevision is optional (Player Score Approval Phase 1A): when set,
+// SaveRounds fails with CodeApprovalRevisionStale and performs zero writes
+// if it no longer matches the match's current score_revision. The existing
+// HTTP handler never sets it, so existing admin behavior is unchanged --
+// this exists so Phase 1B can populate it from a request body field without
+// another struct-shape change.
 type SaveRoundsInput struct {
-	MatchID int64
-	Rounds  []models.RoundResult
+	MatchID          int64
+	Rounds           []models.RoundResult
+	ExpectedRevision *int
 }

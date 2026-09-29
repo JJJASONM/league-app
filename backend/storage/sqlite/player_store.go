@@ -161,6 +161,16 @@ func (s *PlayerStore) DeletePlayer(ctx context.Context, id int64) error {
 // one ID to another. Each entry updates exactly one column; a table with two
 // player-referencing columns (lineup_plans, round_results) appears twice.
 // Kept as package-level data so MergePlayers's transaction loop stays short.
+//
+// The two matches.*_approval_actor_player_id columns (Player Score Approval
+// Phase 1A) are repointed here because they name a live, current
+// relationship -- "which player currently holds this side's active
+// approval" -- exactly like round_results/season_rosters above, not a
+// historical record. match_approval_events' own actor_player_id column is
+// deliberately NOT repointed: it is permanent history, carries no foreign
+// key at all (this schema's established attribution convention), and is
+// kept readable after a merge via its own actor_name_snapshot instead --
+// see db/db.go's schema comment for match_approval_events.
 var mergeRepointStmts = []string{
 	`UPDATE match_results   SET player_id      = ? WHERE player_id      = ?`,
 	`UPDATE handicap_history SET player_id     = ? WHERE player_id      = ?`,
@@ -171,6 +181,8 @@ var mergeRepointStmts = []string{
 	`UPDATE season_teams    SET captain_id     = ? WHERE captain_id     = ?`,
 	`UPDATE season_rosters  SET player_id      = ? WHERE player_id      = ?`,
 	`UPDATE teams           SET captain_id     = ? WHERE captain_id     = ?`,
+	`UPDATE matches         SET home_approval_actor_player_id = ? WHERE home_approval_actor_player_id = ?`,
+	`UPDATE matches         SET away_approval_actor_player_id = ? WHERE away_approval_actor_player_id = ?`,
 }
 
 // MergePlayers repoints every supported player reference from sourceID to

@@ -22,8 +22,8 @@ type stubRoundStore struct {
 	matchCtx    matches.MatchContext
 	matchCtxErr error
 
-	playerHCs    map[int64]float64
-	playerHCErr  error
+	playerHCs   map[int64]float64
+	playerHCErr error
 
 	priorSnaps    []matches.PriorSnapshotRow
 	priorSnapsErr error
@@ -48,8 +48,8 @@ type stubRoundStore struct {
 	clearMatchResultsErr  error
 
 	// capture what was passed to InsertRoundResult / InsertMatchResult
-	insertedRoundRows  []matches.RoundResultRow
-	insertedMatchRows  []matches.MatchResultRow
+	insertedRoundRows []matches.RoundResultRow
+	insertedMatchRows []matches.MatchResultRow
 
 	approvalState    matches.MatchApprovalState
 	approvalStateErr error
@@ -64,6 +64,28 @@ type stubRoundStore struct {
 	processedByUserID *int64
 	unapproveCalled   bool
 	unprocessCalled   bool
+
+	// Player Score Approval Phase 1A
+	bumpRevisionResult    int
+	bumpRevisionErr       error
+	bumpRevisionCalls     int
+	eligibilityResult     bool
+	eligibilityErr        error
+	approveTeamSideErr    error
+	withdrawTeamErr       error
+	requestCorrectionErr  error
+	approvalEvents        []models.MatchApprovalEvent
+	approvalEventsErr     error
+	recordAdminEventErr   error
+	guardedAdminAcceptErr error
+
+	// capture what was passed to the team-approval writes
+	lastApproveSide, lastWithdrawSide, lastCorrectionSide             string
+	lastApproveRevision, lastWithdrawRevision, lastCorrectionRevision int
+	lastCorrectionNote                                                string
+	lastAdminAcceptanceEvent                                          matches.AdminAcceptanceEvent
+	lastGuardedAcceptRevision                                         int
+	lastGuardedAcceptHomePinned, lastGuardedAcceptAwayPinned          matches.TeamSideApprovalState
 }
 
 func (s *stubRoundStore) IsWeekClosed(_ context.Context, _ int64) (bool, error) {
@@ -161,6 +183,45 @@ func (s *stubRoundStore) UnprocessMatch(_ context.Context, _ int64) error {
 	return nil
 }
 
+// --- Player Score Approval Phase 1A stub methods ---
+
+func (s *stubRoundStore) AdvanceScoreRevisionForEdit(_ context.Context, _ int64, _ *int) (int, error) {
+	s.bumpRevisionCalls++
+	return s.bumpRevisionResult, s.bumpRevisionErr
+}
+func (s *stubRoundStore) GuardedAdminAccept(_ context.Context, _ int64, expectedRevision int, pinnedHome, pinnedAway matches.TeamSideApprovalState, _ *int64, _ string) error {
+	s.lastGuardedAcceptRevision = expectedRevision
+	s.lastGuardedAcceptHomePinned = pinnedHome
+	s.lastGuardedAcceptAwayPinned = pinnedAway
+	return s.guardedAdminAcceptErr
+}
+func (s *stubRoundStore) ResolveApprovalEligibility(_ context.Context, _ int64, _ string, _ int64) (bool, error) {
+	return s.eligibilityResult, s.eligibilityErr
+}
+func (s *stubRoundStore) ApproveTeamSide(_ context.Context, _ int64, side string, expectedRevision int, _, _ *int64, _ string) error {
+	s.lastApproveSide = side
+	s.lastApproveRevision = expectedRevision
+	return s.approveTeamSideErr
+}
+func (s *stubRoundStore) WithdrawTeamApproval(_ context.Context, _ int64, side string, expectedRevision int, _, _ *int64, _ string) error {
+	s.lastWithdrawSide = side
+	s.lastWithdrawRevision = expectedRevision
+	return s.withdrawTeamErr
+}
+func (s *stubRoundStore) RequestCorrection(_ context.Context, _ int64, side string, expectedRevision int, note string, _, _ *int64, _ string) error {
+	s.lastCorrectionSide = side
+	s.lastCorrectionRevision = expectedRevision
+	s.lastCorrectionNote = note
+	return s.requestCorrectionErr
+}
+func (s *stubRoundStore) ListApprovalEvents(_ context.Context, _ int64) ([]models.MatchApprovalEvent, error) {
+	return s.approvalEvents, s.approvalEventsErr
+}
+func (s *stubRoundStore) RecordAdminAcceptanceEvent(_ context.Context, ev matches.AdminAcceptanceEvent) error {
+	s.lastAdminAcceptanceEvent = ev
+	return s.recordAdminEventErr
+}
+
 // ─── helper ──────────────────────────────────────────────────────────────────
 
 func newTestRoundSvc(store matches.RoundStore) *matches.RoundService {
@@ -169,8 +230,13 @@ func newTestRoundSvc(store matches.RoundStore) *matches.RoundService {
 
 // ─── SaveRounds ──────────────────────────────────────────────────────────────
 
+// TestSaveRounds_WeekClosed_ReturnsConflict now exercises
+// mapScoreEditGuardErr via the stub's bumpRevisionErr, since week-closed is
+// re-verified atomically inside AdvanceScoreRevisionForEdit's conditional
+// UPDATE, not by a removed service-layer pre-check (see PM's atomicity
+// correction).
 func TestSaveRounds_WeekClosed_ReturnsConflict(t *testing.T) {
-	store := &stubRoundStore{weekClosed: true}
+	store := &stubRoundStore{bumpRevisionErr: matches.ErrGuardWeekClosed}
 	svc := newTestRoundSvc(store)
 	err := svc.SaveRounds(context.Background(), matches.SaveRoundsInput{MatchID: 1})
 	if err == nil {
@@ -184,9 +250,9 @@ func TestSaveRounds_WeekClosed_ReturnsConflict(t *testing.T) {
 
 func TestSaveRounds_ValidationError_ReturnsRoundValidationError(t *testing.T) {
 	store := &stubRoundStore{
-		weekClosed:  false,
-matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
-		playerHCs:   map[int64]float64{1: 1.0, 2: 2.0},
+		weekClosed: false,
+		matchCtx:   matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+		playerHCs:  map[int64]float64{1: 1.0, 2: 2.0},
 	}
 	svc := newTestRoundSvc(store)
 	// Submit a round with both players scoring 10 in the same game (validation error).
@@ -206,9 +272,9 @@ matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
 
 func TestSaveRounds_Happy_InsertsRoundAndMatchResults(t *testing.T) {
 	store := &stubRoundStore{
-		weekClosed:  false,
-matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
-		playerHCs:   map[int64]float64{1: 0.0, 2: 0.0},
+		weekClosed: false,
+		matchCtx:   matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+		playerHCs:  map[int64]float64{1: 0.0, 2: 0.0},
 	}
 	svc := newTestRoundSvc(store)
 	input := matches.SaveRoundsInput{
@@ -235,9 +301,9 @@ func TestSaveRounds_SnapshotPreservation_SameHomePlayer(t *testing.T) {
 	// Prior row has homePlayerID=1 with home_handicap_used=3.0.
 	// Resubmitting with same player should preserve 3.0, not use currentHC=1.0.
 	store := &stubRoundStore{
-		weekClosed:  false,
-matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
-		playerHCs:   map[int64]float64{1: 1.0, 2: 2.0},
+		weekClosed: false,
+		matchCtx:   matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+		playerHCs:  map[int64]float64{1: 1.0, 2: 2.0},
 		priorSnaps: []matches.PriorSnapshotRow{
 			{
 				RoundNumber:      1,
@@ -277,9 +343,9 @@ func TestSaveRounds_Substitution_FreshSnapshot(t *testing.T) {
 	// Prior row has homePlayerID=1. Submitting homePlayerID=99 (sub) should use
 	// currentHC for player 99, not any prior snapshot.
 	store := &stubRoundStore{
-		weekClosed:  false,
-matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
-		playerHCs:   map[int64]float64{99: 5.0, 2: 2.0},
+		weekClosed: false,
+		matchCtx:   matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+		playerHCs:  map[int64]float64{99: 5.0, 2: 2.0},
 		priorSnaps: []matches.PriorSnapshotRow{
 			{
 				RoundNumber:      1,
@@ -319,9 +385,9 @@ matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
 func TestSaveRounds_AmbiguousSnapshot_ReturnsUnprocessable(t *testing.T) {
 	// Away player 2 appears in two prior rows for the same round — ambiguous.
 	store := &stubRoundStore{
-		weekClosed:  false,
-matchCtx:    matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
-		playerHCs:   map[int64]float64{99: 5.0, 2: 2.0},
+		weekClosed: false,
+		matchCtx:   matches.MatchContext{SeasonID: 1, HomeTeamID: 10, AwayTeamID: 20},
+		playerHCs:  map[int64]float64{99: 5.0, 2: 2.0},
 		priorSnaps: []matches.PriorSnapshotRow{
 			{RoundNumber: 1, HomePlayerID: 1, AwayPlayerID: 2,
 				AwayHandicapUsed: sql.NullFloat64{Float64: 2.0, Valid: true}},
@@ -365,8 +431,8 @@ func TestGetRounds_WithSnapshot_UsesSnapshot(t *testing.T) {
 	pts := 3
 	to := "home"
 	store := &stubRoundStore{
-		matchCtx:    matches.MatchContext{SeasonID: 1},
-roundResults: []models.RoundResult{
+		matchCtx: matches.MatchContext{SeasonID: 1},
+		roundResults: []models.RoundResult{
 			{RoundNumber: 1, HomePlayerID: 1, AwayPlayerID: 2,
 				HomeHandicap: 1.0, AwayHandicap: 2.0,
 				Game1Home: 10, Game1Away: 3,
@@ -395,8 +461,8 @@ func TestGetRounds_NoSnapshot_ComputesFromHC(t *testing.T) {
 	// Row has no snapshot — should compute from HomeHandicap/AwayHandicap.
 	// HC diff = 0.0-2.0 = -2.0, abs=2.0, *2.55=5.1 → 5 balls to home.
 	store := &stubRoundStore{
-		matchCtx:    matches.MatchContext{SeasonID: 1},
-roundResults: []models.RoundResult{
+		matchCtx: matches.MatchContext{SeasonID: 1},
+		roundResults: []models.RoundResult{
 			{RoundNumber: 1, HomePlayerID: 1, AwayPlayerID: 2,
 				HomeHandicap: 0.0, AwayHandicap: 2.0,
 				Game1Home: 10, Game1Away: 3,
@@ -480,7 +546,7 @@ func TestGetPlayerStats_WinPctComputed(t *testing.T) {
 // ─── SubmitResults ───────────────────────────────────────────────────────────
 
 func TestSubmitResults_WeekClosed_ReturnsConflict(t *testing.T) {
-	store := &stubRoundStore{weekClosed: true}
+	store := &stubRoundStore{bumpRevisionErr: matches.ErrGuardWeekClosed}
 	svc := newTestRoundSvc(store)
 	err := svc.SubmitResults(context.Background(), 1, nil)
 	var de *domainerr.Err
@@ -500,7 +566,7 @@ func TestSubmitResults_Open_DelegatesToStore(t *testing.T) {
 // ─── ClearResults ────────────────────────────────────────────────────────────
 
 func TestClearResults_WeekClosed_ReturnsConflict(t *testing.T) {
-	store := &stubRoundStore{weekClosed: true}
+	store := &stubRoundStore{bumpRevisionErr: matches.ErrGuardWeekClosed}
 	svc := newTestRoundSvc(store)
 	err := svc.ClearResults(context.Background(), 1)
 	var de *domainerr.Err

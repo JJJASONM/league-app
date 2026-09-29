@@ -403,6 +403,34 @@ type RoundResult struct {
 	PairingWinner string `json:"pairing_winner,omitempty"` // "home"|"away"|""
 }
 
+// MatchApprovalEvent is one append-only row from Player Score Approval
+// Phase 1A's match_approval_events history. EventScope is "home", "away",
+// or "match" (an admin-level acceptance/override that does not belong to
+// either side alone). ActorUserID/ActorPlayerID carry no foreign key and
+// are never rewritten by a player merge (see db/db.go's schema comment and
+// backend/storage/sqlite/player_store.go's mergeRepointStmts) --
+// ActorNameSnapshot is what keeps a historical row readable regardless of
+// later merges, renames, or account removal. HomeStateSnapshot/
+// AwayStateSnapshot and their *NoteSnapshot pairs are populated only for
+// EventScope "match", capturing both sides' state at the moment of an
+// admin's accept/override decision.
+type MatchApprovalEvent struct {
+	ID                int64     `json:"id"`
+	MatchID           int64     `json:"match_id"`
+	EventScope        string    `json:"event_scope"` // "home" | "away" | "match"
+	EventType         string    `json:"event_type"`
+	ScoreRevision     int       `json:"score_revision"`
+	ActorUserID       *int64    `json:"actor_user_id,omitempty"`
+	ActorPlayerID     *int64    `json:"actor_player_id,omitempty"`
+	ActorNameSnapshot string    `json:"actor_name_snapshot,omitempty"`
+	Note              string    `json:"note,omitempty"`
+	HomeStateSnapshot *string   `json:"home_state_snapshot,omitempty"`
+	HomeNoteSnapshot  string    `json:"home_note_snapshot,omitempty"`
+	AwayStateSnapshot *string   `json:"away_state_snapshot,omitempty"`
+	AwayNoteSnapshot  string    `json:"away_note_snapshot,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
 // WeekSummary is one entry in the GET /api/seasons/{id}/weeks response.
 // Status is "open" when no league_weeks row exists (inferred) or the row has status "open".
 // Status is "closed" after a successful POST /api/seasons/{id}/weeks/{week}/close.

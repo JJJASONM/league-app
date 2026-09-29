@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.10`
-**Last reviewed:** `2026-09-16`
+**Current version:** `0.13`
+**Last reviewed:** `2026-09-29`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -1035,6 +1035,15 @@ statuses or calculation-preview behavior. Current direction: only rostered
 players assigned to the match should be able to submit scores for that match,
 with admin override. Processing individual matchups before the whole night is
 finished is a likely direction, but requires more research.
+
+**Update 2026-09-27:** Player Score Approval Phase 1A implements the
+backend data model and domain/store primitives this question needs --
+per-side team-approval state, optimistic score-revision control,
+correction requests, append-only history, and eligibility resolution
+(see "Player Score Approval Phase 1A" above). This **advances** the
+question; it does not resolve it. Still open: HTTP routes, session/API-key
+authorization, any frontend/UI, the read-authorization matrix, and
+staging/browser verification -- all planned for Phases 1B/1C/1D.
 
 ### MATCHES-Q003 - Historical warning display
 
@@ -2844,7 +2853,463 @@ so the new warning does not disturb them. Manual/staging verification
 against a disposable season remains **NOT VERIFIED** in this developer's
 tool session pending a staging pass.
 
+## Player Score Approval Phase 1A -- Data Model and Backend Foundation (implemented 2026-09-27)
+
+### Business status and confirmed rules
+
+This phase begins replacing the physical signed scoresheet with online
+player approval, advancing `MATCHES-Q002` -- it does **not** resolve it.
+Routes, authorization, session enforcement, and any UI are explicitly
+Phase 1B/1C/1D work, not part of this phase. Confirmed PM product rules
+this phase implements at the data-model and domain-service level:
+
+- A match ultimately requires one approval from each team side (home and
+  away), independent of the existing admin-attested approval.
+- Approval is not captain-only.
+- A player is eligible to act for a team side when either they are
+  currently rostered to that team for the match's season
+  (`season_rosters`), or they actually participated for that side in the
+  match (`round_results`), including as a substitute. Either condition
+  alone is sufficient.
+- Player records never require a user account; a linked account is only
+  required for the authenticated player actions Phase 1B adds.
+- Each side has exactly one current state: `pending`, `approved`, or
+  `correction_requested`. A correction request requires a note and cannot
+  simultaneously count as approval for that side.
+- Any score, participating-player, or substitute change affecting the
+  scoresheet increments the match's score revision, resets both sides back
+  to `pending`, and records history for each non-pending side cleared.
+  Reopening a week, by itself, does **not** clear team approvals -- only an
+  actual scoresheet-affecting mutation does.
+- Team approvals and correction requests always apply to one exact score
+  revision.
+- The existing admin-attested `approved_at` (acceptance), `processed_at`
+  (handicap-eligibility/processing), and `week_closed` states are
+  completely unchanged in meaning and behavior by this phase.
+- No captain role is introduced.
+
+### Schema (additive)
+
+Fifteen new columns on `matches`, plus a new `match_approval_events`
+table (see `db/db.go`):
+
+```
+score_revision                     INTEGER NOT NULL DEFAULT 0
+
+home_approval_state                TEXT NOT NULL DEFAULT 'pending'
+                                    CHECK (IN 'pending'|'approved'|'correction_requested')
+home_approval_state_at             DATETIME
+home_approval_actor_user_id        INTEGER   -- no FK
+home_approval_actor_player_id      INTEGER   -- no FK, repointed on player merge
+home_approval_actor_name_snapshot  TEXT NOT NULL DEFAULT ''
+home_approval_state_score_revision INTEGER   -- set for 'approved' AND 'correction_requested'
+home_correction_note               TEXT NOT NULL DEFAULT ''
+
+away_approval_state / away_approval_state_at / away_approval_actor_user_id /
+away_approval_actor_player_id / away_approval_actor_name_snapshot /
+away_approval_state_score_revision / away_correction_note   -- mirror of the above
+```
+
+**PM correction (2026-09-28):** the revision field is named
+`*_approval_state_score_revision`, not `*_approval_score_revision` --
+both `approved` and `correction_requested` are states that describe one
+exact revision, so the field is generic to "state," not "approval"
+specifically. `RequestCorrection` sets it to the revision being
+disputed, exactly like `ApproveTeamSide` sets it to the revision being
+approved; only `pending` clears it to NULL. The Go field is
+`TeamSideApprovalState.StateScoreRevision`.
+
+`home`/`away` naming (rather than `approval`-only naming) is deliberate:
+both `approved` and `correction_requested` have an actor, so the actor/
+note/revision fields describe the side's current state generically, not
+an approval specifically. Flat columns on `matches` were chosen over a
+normalized `(match_id, team_side)` current-state table because the
+cardinality is fixed at exactly two forever, and every other piece of
+this domain's match-level lifecycle state (`completed`, `week_closed`,
+`approved_at`, `processed_at`) already lives directly on `matches` --
+introducing a side table here would be the only inconsistent case.
+
+```sql
+CREATE TABLE match_approval_events (
+    id, match_id REFERENCES matches(id) ON DELETE CASCADE,
+    event_scope TEXT CHECK (IN 'home'|'away'|'match'),
+    event_type  TEXT CHECK (IN 'approved'|'withdrawn'|'correction_requested'|
+                              'cleared_by_edit'|'admin_accepted'|'admin_override'),
+    score_revision INTEGER NOT NULL,
+    actor_user_id INTEGER,      -- no FK
+    actor_player_id INTEGER,    -- no FK, NEVER repointed by merge (see below)
+    actor_name_snapshot TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    home_state_snapshot / home_note_snapshot / away_state_snapshot / away_note_snapshot,
+    created_at
+)
+```
+
+`event_scope = 'match'` is used only for admin-level `admin_accepted`/
+`admin_override` events -- an admin's acceptance decision does not belong
+to either side alone, so it is never forced into a `home`/`away` scope.
+The four `*_snapshot` columns give those two event types a structured,
+typed record of both sides' state and note at the moment of the admin's
+decision, rather than serializing that into the free-text `note` column.
+
+### Score revision and stale-write purpose
+
+Multi-user entry (a player and an admin, or two players, potentially
+editing concurrently) makes stale writes a real risk this feature
+introduces, unlike the existing admin-only Match Entry flow. `score_revision`
+is the authoritative counter: every successful scoresheet-affecting
+mutation increments it, atomically, in the same transaction as the
+mutation. A team-side approval, withdrawal, or correction request always
+names the exact revision it applies to and is rejected (with zero writes)
+if that revision no longer matches. **Existing admin score-entry clients
+need no changes**: `SaveRounds`/`SubmitResults`/`ClearResults` keep their
+exact existing signatures and behavior when no expected revision is
+supplied (the unmodified admin UI never supplies one); new parallel
+methods (`SaveRoundsWithRevision`, `SubmitResultsWithRevision`,
+`ClearResultsWithRevision`) return the resulting revision for Phase 1B's
+player-facing writer, which will always be required to supply one.
+
+**PM correction (2026-09-28) -- the enforcement point moved from a
+pre-transaction check to a transaction-scoped conditional write.** The
+original implementation validated season/week/approved/processed state
+via a read BEFORE opening the transaction that performed the score
+write -- a real race window, since any of that state (including a
+concurrent admin acceptance or week close, neither of which touches
+`score_revision`) could change between the read and the write. The
+corrected design moves this entirely inside the transaction: see
+"Atomic clearing" below for `AdvanceScoreRevisionForEdit`, the single
+conditional `UPDATE` that is now the sole authority for this decision.
+`checkMatchEditable`, the old pre-check, is removed.
+
+### Team-side current states and correction requests
+
+State lives in three explicit, schema-enforced values -- never inferred
+from timestamp presence, since `correction_requested` cannot be
+represented unambiguously that way. `pending` is the default and the
+state a side returns to whenever the scoresheet changes. `approved`
+records who approved and for which revision. `correction_requested`
+requires a non-blank note (enforced in the domain service,
+`RequestCorrection`), supersedes an existing approval for that **same**
+side only (the other side's state and revision are untouched), and
+blocks that side from simultaneously counting as approved. Any currently
+eligible player for a side -- not only the original approver -- may
+withdraw that side's approval or file a correction request; the approval
+belongs to the team side, not to one individual, which keeps the rule
+understandable for a real team sharing one decision.
+
+### Append-only history
+
+`match_approval_events` never rewrites or deletes a row (matches'
+`ON DELETE CASCADE` only fires when the whole match is deleted). Every
+approve, withdraw, correction request, edit-triggered clear, and admin
+accept/override writes exactly one event. `actor_user_id`/
+`actor_player_id` carry no foreign key -- this schema's established
+attribution convention (`matches.approved_by_user_id`,
+`handicap_history.applied_by_user_id`) -- so a historical event can never
+block a player merge or a future account removal.
+`actor_name_snapshot` keeps history human-readable regardless of later
+renames or merges, the same purpose `handicap_history.player_name_snapshot`
+serves; like that column, it is deliberately never rewritten by a merge --
+it is a record of who acted at the time, not a live label.
+
+### Eligibility
+
+`RoundStore.ResolveApprovalEligibility(matchID, side, playerID)` returns
+true when either: the player is on `season_rosters` for that side's team
+for the match's season, or the player appears as `home_player_id`/
+`away_player_id` in any `round_results` row for that match on that side.
+This inclusive-OR (not a fallback order) directly satisfies "not
+captain-only," handles a genuine last-minute substitute with no roster
+row automatically, and remains correct for a player who changed teams
+mid-season (still eligible for a match they actually played, via the
+round-participant branch, even after their roster row moves).
+
+### Atomic clearing and atomic lock enforcement
+
+**PM correction (2026-09-28):** this section describes the corrected,
+fully atomic design -- the original `bumpScoreRevisionAndClearApprovals`
+only bumped/cleared; it never rejected a locked match. It is replaced by
+`AdvanceScoreRevisionForEdit` (`backend/storage/sqlite/round_store.go`),
+a single conditional `UPDATE` that is both the atomic lock-enforcement
+gate AND the revision-advance/approval-clear step:
+
+```sql
+UPDATE matches SET score_revision = score_revision + 1
+WHERE id = ? AND (? IS NULL OR score_revision = ?)
+  AND approved_at IS NULL AND processed_at IS NULL AND week_closed = 0
+  AND EXISTS (SELECT 1 FROM seasons se WHERE se.id = matches.season_id AND se.closed_at IS NULL)
+```
+
+Called as the **first statement** inside the same transaction as the
+destructive mutation that follows it -- `SaveRounds` (service-level
+`RunTx`), `SubmitMatchResults`/`ClearMatchResults` (the guard is now
+acquired by the *service* layer's outer `RunTx`, wrapping the store
+method, which no longer touches `score_revision` itself), and the
+SQLite `LineupStore`'s `SetSubstitute`/`ClearSubstitute` (the guard runs
+**before** the `lineup_plans` update, so a locked match's substitute
+change is rejected before that row is ever touched, and rolls back
+cleanly if it was). If the `UPDATE` matches zero rows, a read-only
+follow-up query (`loadMatchGuardSnapshot`) classifies exactly why --
+match not found, stale revision, season closed, week closed, admin-
+accepted, or processed -- and the sentinel error is returned with zero
+writes; if later validation or persistence in the same transaction
+fails for any other reason, the transaction's rollback undoes the
+revision advance and approval-clear along with everything else. On
+success, it increments `score_revision`, resets any side that is not
+already `pending` back to `pending`, and inserts one `cleared_by_edit`
+event per side actually reset (a side already `pending` generates no
+event).
+
+`ApproveTeamSide`/`WithdrawTeamApproval`/`RequestCorrection` use the
+same pattern for their own conditional `UPDATE`s, additionally
+re-verifying atomically, at write time: match exists, expected revision
+matches, `completed=1` (Approve/RequestCorrection only), season open,
+week open, not admin-accepted, not processed, and (Withdraw only) the
+side's current state is still `approved`. **This closes the gap the
+original design left**: since admin acceptance and week close do not
+themselves change `score_revision`, a team action racing either of
+those could previously commit after the match should already have been
+locked -- the conditional `UPDATE`'s own `WHERE` clause is now what
+prevents that, not a service-layer pre-check (which is removed).
+
+### Merge and attribution behavior
+
+The existing safe player-merge transaction
+(`backend/storage/sqlite/player_store.go`'s `mergeRepointStmts`) gained
+two entries repointing `matches.home_approval_actor_player_id` /
+`away_approval_actor_player_id` -- current, live attribution follows the
+surviving player exactly like `round_results`/`season_rosters` already
+do. `match_approval_events.actor_player_id` is deliberately **not**
+repointed and carries no foreign key, so a merge (or a future account
+deletion) can never fail because of historical approval history; that
+history stays attributed to the pre-merge identity, readable via its own
+`actor_name_snapshot`, exactly as history is expected to work.
+
+### Existing admin compatibility and the atomic admin-acceptance primitive
+
+`POST /api/matches/{id}/approve` and its `RoundService.ApproveMatch`
+method are **completely unchanged** -- an admin can still accept a match
+with zero team approvals, exactly as before. A new, separate method,
+`RoundService.AdminAcceptMatch(ctx, matchID, approvedByUserID, note,
+override, expectedRevision)`, implements the Phase 1B-ready accept-or-
+override primitive; it is not called from any route yet.
+
+**PM correction (2026-09-28):** the original version read team states
+and revision, then wrote the event and called the existing (unconditional)
+`ApproveMatch` store method -- with no re-verification at write time, so
+a race between the read and the write (a score edit, a team-state
+change, a process, or a week/season close) could let a decision based on
+stale data still commit. The corrected design adds a required
+`expectedRevision` parameter and a new store method,
+`RoundStore.GuardedAdminAccept(matchID, expectedRevision, pinnedHome,
+pinnedAway, approvedByUserID, note)`, whose conditional `UPDATE` pins
+the exact revision and the exact home/away states the accept-vs-
+override decision was based on, alongside the same match-editable
+conditions `AdvanceScoreRevisionForEdit` re-verifies.
+
+**Second PM correction (2026-09-28, same day):** the first correction's
+`pinnedHome`/`pinnedAway` only pinned the state **label** (`approved`/
+`correction_requested`/`pending`), which is not the complete decision
+snapshot -- a correction request can be rewritten at the same score
+revision, with the same label, but a different note, and a label-only
+guard cannot detect that. The corrected version pins and atomically
+re-verifies each side's **complete** snapshot: `pinnedHome`/`pinnedAway`
+are now full `TeamSideApprovalState` values (state label, state-score-
+revision -- including a `nil` state-score-revision, compared NULL-safely
+via SQL's `IS` operator -- and correction note), and `AdminAcceptMatch`'s
+`bothApproved` decision itself now uses the same `sideApprovedAtRevision`
+rule `BothSidesApproved` already applied: a side counts as approved only
+when its label is `approved` **and** its state-score-revision is
+non-nil **and** equals `expectedRevision`. A side labeled `approved`
+with a nil or stale state-score-revision no longer lets normal
+acceptance proceed -- override is required, exactly as if that side had
+never approved. New code `APPROVAL_TEAM_STATE_CHANGED` now also fires
+when the pinned note or state-score-revision (not just the label) no
+longer matches. The event recorded after a successful guarded write uses
+these SAME pinned values, so the guarded write and its event always
+describe one consistent snapshot.
+
+`AdminAcceptMatch` now: reads state and decides normal-accept vs.
+override-required from the corrected `bothApproved` rule (fast-fail,
+informs the decision only) -> calls `GuardedAdminAccept`, which
+re-verifies the complete snapshot atomically and performs the
+`approved_at`/`approved_by_user_id`/`approval_note` write only if
+nothing has changed -> on success, records the `admin_accepted` or
+`admin_override` event (built from the same pinned snapshot) in the
+same transaction. A stale revision, a team-state change, or a
+lock-state change between the decision and the write is rejected with
+zero writes; a failure at either the guarded write or the event write
+rolls back the other, since both happen in the one transaction
+`RoundService.AdminAcceptMatch` opens via `RunTx`.
+
+### Explicit Phase 1A exclusions
+
+No HTTP routes, no `auth.Action`/scope resolvers, no session/API-key
+enforcement, no frontend or UI change, no captain role, no notifications,
+no mobile work, no handicap formula change, and no fix for the
+pre-existing, unrelated `GameDiffAverageRecs` processed-open-week
+eligibility inconsistency (recommended separately as its own future
+correctness candidate, not part of this phase).
+
+### Planned Phase 1B
+
+Routes (`/approve-home`, `/approve-away`, `/withdraw-approval`,
+`/request-correction`), new `auth.Action`/`Scope` fields resolving a
+match's `home_team_id`/`away_team_id`, an `Identity.AuthMethod` field so
+the new player-scoped actions can require an active session and reject a
+legacy personal API key, mandatory `expected_revision` enforcement for
+player-authenticated score writes, the `/approve` route's explicit
+override-confirmation contract, and a differentiated read-authorization
+matrix (draft/in-progress round detail and all approval/correction
+identity data gated; public schedule and post-close final results
+unchanged) all remain for that phase, together with the admin/UI
+integration and staging verification `MATCHES-Q002`'s full resolution
+requires.
+
+### Verification
+
+`go build ./...` and `go test ./... -count=1` both pass with zero
+regressions to any existing test, including every Weekly Score
+Processing Phase 1A/1B/1C test and every Substitute Workflow Phase 1
+test. `go vet ./...` was run and is **not** fully clean -- it reports
+four pre-existing warnings in unchanged handler test files
+(`handlers/api_season_teams_test.go:455,1216`,
+`handlers/api_weeks_test.go:1271,1313`), all "using ... before checking
+for errors" findings that predate this branch and are outside this
+phase's scope. This branch introduces no new `go vet` finding. New
+tests: schema/migration (fresh-DB columns and defaults, CHECK
+constraint rejection, pre-existing-DB upgrade without data loss,
+idempotent re-init, cascade delete, no-FK-blocker on player delete);
+eligibility (roster and round-participant branches, opposing/unrelated/
+cross-season/cross-league rejection); revision and transitions (current
+vs. stale revision, invalid transition, note-required, correction
+retaining its revision, any-eligible-teammate withdrawal); atomic
+clearing (`SaveRounds`, `SubmitResults`, `ClearResults`, substitute swap
+on a scored vs. unscored match, no redundant clear events); history
+(event content and match-scope snapshot fields, cascade on match
+delete); merge (active attribution repointed, historical events and
+name snapshots left untouched); and compatibility (`ApproveMatch` still
+works with zero team approvals).
+
+**PM correction round (2026-09-28), atomicity regression tests added:**
+real-`RunTx`, real-SQLite tests (not stubs) proving the conditional-
+write guards actually reject a race, not just a value passed in already
+stale before the call begins -- `SaveRounds` rejected atomically when the
+season is closed, the week is closed, the match is admin-accepted, or
+the match is processed, each with `score_revision` left unchanged;
+`ApproveTeamSide`/`WithdrawTeamApproval`/`RequestCorrection` rejected
+under the same four lock conditions with zero events written;
+`GuardedAdminAccept` rejected on a stale revision, on a team-state
+change between the decision and the write, and on a lock-state change,
+each with zero writes, plus two positive tests proving a successful
+accept-or-override commits the acceptance and its event together;
+`SetSubstitute`/`ClearSubstitute` rejected under all four lock
+conditions with the `lineup_plans` row proven left exactly as it was
+(not partially updated) via a full roll-back check.
+
+**Second PM correction round (2026-09-28), same day:** 2 new real-
+SQLite tests prove the admin guard now catches a state-score-revision
+or correction-note change independent of the label
+(`TestGuardedAdminAccept_TeamStateRevisionChanged_RealGuard_NoWrites`,
+`TestGuardedAdminAccept_CorrectionNoteChanged_RealGuard_NoWrites`,
+constructed via direct SQL since neither scenario is reachable through
+the public write API in one step); 3 new stub-based service tests prove
+`bothApproved`'s corrected decision rule
+(`TestAdminAcceptMatch_ApprovedLabelWithNilRevision_RequiresOverride`,
+`_ApprovedLabelWithStaleRevision_RequiresOverride`,
+`_BothApprovedAtNonZeroRevision_Succeeds`); and 13 new
+`LineupService`-level tests prove every guard sentinel
+(`ErrGuardSeasonClosed`/`WeekClosed`/`Processed`/`AdminAccepted`/
+`ErrApprovalRevisionStale`/`ErrGuardMatchNotFound`) becomes the correct
+`domainerr.Conflict` (409) for both `SetSubstitute` and `ClearSubstitute`,
+while an unrelated genuine storage error still falls through to the
+existing generic `Internal` (500) mapping unchanged. Staging deployment
+and browser verification are out of scope for this backend-only phase
+and remain for Phase 1D.
+
 ## Decision History
+
+### 2026-09-28 - Player Score Approval Phase 1A: complete-snapshot admin guard and live substitute error mapping
+
+**Status:** `accepted`
+
+PM review of the 2026-09-28 atomicity-corrections entry below found two
+further issues:
+
+1. **`AdminAcceptMatch`'s `bothApproved` check used the state label
+   alone**, not the same current-revision rule `BothSidesApproved`
+   already applied -- a side labeled `approved` with a nil or stale
+   `StateScoreRevision` could incorrectly let normal acceptance proceed.
+   Fixed by extracting a shared `sideApprovedAtRevision` helper both
+   methods now use, and by extending `GuardedAdminAccept`'s pinned/
+   re-verified snapshot from state labels alone to the complete side
+   snapshot (label, state-score-revision including `nil`, and
+   correction note) -- a correction note rewritten at the same revision
+   with the same label is now caught too. See "Existing admin
+   compatibility and the atomic admin-acceptance primitive" above.
+2. **The live substitute routes' atomic-guard sentinels were not
+   mapped by `LineupService`**, so a genuine lock race on
+   `POST/DELETE /api/lineup-plans/{id}/substitute` surfaced as a
+   generic HTTP 500 instead of a 409. Fixed with a new
+   `mapSubstituteGuardErr` in `lineup_service.go`, recognizing each
+   guard sentinel via `errors.Is` and mapping it to the same stable
+   conflict codes `checkEditable`'s existing pre-check already uses.
+   This is a live-route fix, not deferred to Phase 1B.
+
+Both are corrected in place in this document; see the sections above for
+full detail and the Verification subsection for the new regression
+tests.
+
+### 2026-09-28 - Player Score Approval Phase 1A: atomicity corrections
+
+**Status:** `accepted`
+
+PM review of the 2026-09-27 entry below found four correctness gaps, all
+stemming from the same root cause: several checks were performed as a
+read *before* the transaction that acted on them, leaving a real race
+window between the check and the write. Corrected:
+
+1. **Score-revision/lock enforcement is now a single transaction-scoped
+   conditional `UPDATE`** (`AdvanceScoreRevisionForEdit`), acquired as
+   the first statement inside the same transaction as the destructive
+   score/result write, replacing the removed pre-transaction
+   `checkMatchEditable`.
+2. **`*_approval_score_revision` renamed to
+   `*_approval_state_score_revision`** and `RequestCorrection` now sets
+   it (previously left `NULL`) -- both `approved` and
+   `correction_requested` describe one exact revision.
+3. **`AdminAcceptMatch` gained a required `expectedRevision` parameter**
+   and a new atomic store method, `GuardedAdminAccept`, whose
+   conditional `UPDATE` pins the exact revision and team states the
+   accept-vs-override decision was based on, closing the race between
+   that decision and the write.
+4. **Team-action (`ApproveTeamSide`/`WithdrawTeamApproval`/
+   `RequestCorrection`) and substitute-swap (`SetSubstitute`/
+   `ClearSubstitute`) writes now atomically re-verify every lock
+   condition** (season/week/admin-accepted/processed), not just
+   `score_revision` -- since admin acceptance and week close do not
+   themselves change the revision, a team action or substitute swap
+   could previously race past a lock that should have blocked it.
+
+See "Player Score Approval Phase 1A" above (updated in place) for the
+corrected design in full, and its Verification subsection for the new
+real-transaction regression tests proving each of the four races is
+actually closed, not just checked against an already-stale value.
+
+### 2026-09-27 - Player Score Approval Phase 1A: data model and backend foundation
+
+**Status:** `accepted`
+
+Added `matches.score_revision` and seven per-side team-approval columns
+(state/timestamp/actor/note, mirrored for home and away), a new
+append-only `match_approval_events` table, and the domain/store
+primitives for team approval, withdrawal, correction requests, optimistic
+score-revision control, atomic score-edit/substitute-swap invalidation,
+and a Phase 1B-ready admin accept-or-override method -- all backend-only,
+with the existing admin approval route and its behavior completely
+unchanged. Advances `MATCHES-Q002`; does not resolve it. See "Player
+Score Approval Phase 1A" above for full detail (updated 2026-09-28 with
+atomicity corrections -- see the entry above).
 
 ### 2026-09-16 - Default lineup week-filter fix; setup checklist warning, not a new screen
 

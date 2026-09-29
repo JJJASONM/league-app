@@ -177,13 +177,77 @@ func (s *LineupStore) FindMatchID(ctx context.Context, seasonID, teamID, weekNum
 // SetSubstitute updates the lineup slot to the substitute player, setting
 // is_sub=1 and sub_for_id=req.OriginalPlayerID. Returns the updated row with
 // names/handicap populated for immediate display.
+//
+// Player Score Approval Phase 1A: wrapped in a transaction (previously a
+// single unwrapped statement). guardScoredLineupChange runs FIRST, before
+// the lineup_plans UPDATE -- if this team/week already has a scored match
+// (completed=1) that is admin-accepted, processed, week-closed, or
+// season-closed, the guard fails and the whole transaction is rolled back
+// without ever touching lineup_plans (PM correction: leaving the lineup
+// update committed when the guard fails is exactly what must not happen).
+// When the match is scored and unlocked, the guard also bumps
+// score_revision and atomically clears any non-pending team approval, in
+// the same transaction as the lineup update that follows -- a substitute
+// swap changes who is credited for a match just as much as a score edit
+// would.
 func (s *LineupStore) SetSubstitute(ctx context.Context, req matches.SetSubstituteRequest) (models.LineupPlan, error) {
-	if _, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.LineupPlan{}, fmt.Errorf("set substitute: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := guardScoredLineupChange(ctx, tx, req.LineupPlanID); err != nil {
+		return models.LineupPlan{}, fmt.Errorf("set substitute: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE lineup_plans SET player_id = ?, is_sub = 1, sub_for_id = ? WHERE id = ?`,
 		req.SubstitutePlayerID, req.OriginalPlayerID, req.LineupPlanID); err != nil {
 		return models.LineupPlan{}, fmt.Errorf("set substitute: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return models.LineupPlan{}, fmt.Errorf("set substitute: commit: %w", err)
+	}
 	return s.GetLineupPlan(ctx, req.LineupPlanID)
+}
+
+// guardScoredLineupChange looks up the match (if any) scheduled for
+// lineupPlanID's own team/season/week and, only when that match already has
+// scores entered (completed=1), runs the same atomic
+// advanceScoreRevisionForEdit guard SaveRounds/SubmitResults/ClearResults
+// use, with no expected revision (substitute swaps do not carry one). A
+// locked match (admin-accepted, processed, week-closed, season-closed)
+// returns the matching sentinel error and performs zero writes -- the
+// caller must check this error BEFORE performing the lineup_plans UPDATE,
+// not after, so a locked match's substitute change never partially commits.
+// A lineup change before any match exists for that slot, or before any
+// score has been entered, has nothing to invalidate and no lock can apply
+// yet -- returns nil untouched.
+func guardScoredLineupChange(ctx context.Context, q querier, lineupPlanID int64) error {
+	var seasonID, teamID int64
+	var weekNumber int
+	if err := q.QueryRowContext(ctx,
+		`SELECT season_id, team_id, week_number FROM lineup_plans WHERE id = ?`, lineupPlanID).
+		Scan(&seasonID, &teamID, &weekNumber); err != nil {
+		return fmt.Errorf("load lineup plan for revision check: %w", err)
+	}
+	var matchID int64
+	var completed int
+	err := q.QueryRowContext(ctx, `
+		SELECT id, completed FROM matches
+		WHERE season_id = ? AND week_number = ? AND (home_team_id = ? OR away_team_id = ?)
+		LIMIT 1`, seasonID, weekNumber, teamID, teamID).Scan(&matchID, &completed)
+	if err == sql.ErrNoRows {
+		return nil // no match scheduled yet for this team/week -- nothing to invalidate
+	}
+	if err != nil {
+		return fmt.Errorf("find match for revision check: %w", err)
+	}
+	if completed != 1 {
+		return nil // no scores entered yet -- nothing to invalidate, and no lock can apply
+	}
+	_, err = advanceScoreRevisionForEdit(ctx, q, matchID, nil)
+	return err
 }
 
 // PlayerInMatchLineup returns true when playerID already has a lineup_plans
@@ -205,7 +269,9 @@ func (s *LineupStore) PlayerInMatchLineup(ctx context.Context, seasonID, weekNum
 
 // ClearSubstitute reverts a substituted slot back to its original player
 // (is_sub=0, sub_for_id=NULL). Returns domainerr.InvalidInput when the slot
-// is not currently substituted.
+// is not currently substituted. Player Score Approval Phase 1A: wrapped in
+// a transaction with the same guard-before-write ordering SetSubstitute
+// uses -- see guardScoredLineupChange's doc comment.
 func (s *LineupStore) ClearSubstitute(ctx context.Context, id int64) (models.LineupPlan, error) {
 	plan, err := s.GetLineupPlan(ctx, id)
 	if err != nil {
@@ -214,10 +280,22 @@ func (s *LineupStore) ClearSubstitute(ctx context.Context, id int64) (models.Lin
 	if !plan.IsSub || plan.SubForID == nil {
 		return models.LineupPlan{}, domainerr.New("SUB_NOT_ACTIVE", domainerr.InvalidInput, "this slot is not currently substituted")
 	}
-	if _, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.LineupPlan{}, fmt.Errorf("clear substitute: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := guardScoredLineupChange(ctx, tx, id); err != nil {
+		return models.LineupPlan{}, fmt.Errorf("clear substitute: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE lineup_plans SET player_id = ?, is_sub = 0, sub_for_id = NULL WHERE id = ?`,
 		*plan.SubForID, id); err != nil {
 		return models.LineupPlan{}, fmt.Errorf("clear substitute: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return models.LineupPlan{}, fmt.Errorf("clear substitute: commit: %w", err)
 	}
 	return s.GetLineupPlan(ctx, id)
 }

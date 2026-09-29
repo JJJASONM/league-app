@@ -381,8 +381,14 @@ func (s *RoundStore) GetPlayerStats(ctx context.Context, req matches.PlayerStats
 	return stats, rows.Err()
 }
 
-// SubmitMatchResults replaces match_results for a match and marks it completed,
-// wrapped in a transaction.
+// SubmitMatchResults replaces match_results for a match and marks it
+// completed, wrapped in a transaction. Player Score Approval Phase 1A: the
+// caller (RoundService.submitResults) is responsible for calling
+// AdvanceScoreRevisionForEdit as the FIRST statement inside the SAME
+// transaction, before this method runs -- RunTx nests transparently when
+// this method's own RunTx call runs against an already-tx-scoped store, so
+// both writes share one commit/rollback unit. This method itself no longer
+// touches score_revision or team-approval state.
 func (s *RoundStore) SubmitMatchResults(ctx context.Context, matchID int64, results []models.MatchResult) error {
 	return s.RunTx(ctx, func(tx matches.RoundStore) error {
 		if err := tx.DeleteMatchResults(ctx, matchID); err != nil {
@@ -407,39 +413,628 @@ func (s *RoundStore) SubmitMatchResults(ctx context.Context, matchID int64, resu
 	})
 }
 
-// ClearMatchResults deletes match_results for a match and marks it incomplete.
+// ClearMatchResults deletes match_results for a match and marks it
+// incomplete, wrapped in a transaction (Player Score Approval Phase 1A --
+// previously two separate statements outside any transaction). The caller
+// (RoundService.clearResults) calls AdvanceScoreRevisionForEdit as the
+// FIRST statement inside the same transaction, before this method runs --
+// see SubmitMatchResults's doc comment for how RunTx nesting makes that one
+// commit/rollback unit.
 func (s *RoundStore) ClearMatchResults(ctx context.Context, matchID int64) error {
-	if _, err := s.q.ExecContext(ctx, `DELETE FROM match_results WHERE match_id=?`, matchID); err != nil {
-		return fmt.Errorf("clear match results: %w", err)
-	}
-	if _, err := s.q.ExecContext(ctx, `UPDATE matches SET completed=0 WHERE id=?`, matchID); err != nil {
-		return fmt.Errorf("clear match results: mark incomplete: %w", err)
-	}
-	return nil
+	return s.RunTx(ctx, func(tx matches.RoundStore) error {
+		if err := tx.DeleteMatchResults(ctx, matchID); err != nil {
+			return fmt.Errorf("clear match results: %w", err)
+		}
+		return tx.MarkMatchIncomplete(ctx, matchID)
+	})
 }
 
 // GetMatchApprovalState returns the match's completed/approved/processed
-// state. Exists is false when no match row matches matchID.
+// state plus Player Score Approval Phase 1A's score revision and per-side
+// team-approval state. Exists is false when no match row matches matchID.
 func (s *RoundStore) GetMatchApprovalState(ctx context.Context, matchID int64) (matches.MatchApprovalState, error) {
 	var completed int
 	var approvedAt, processedAt sql.NullString
-	err := s.q.QueryRowContext(ctx,
-		`SELECT completed, approved_at, processed_at FROM matches WHERE id=?`, matchID).
-		Scan(&completed, &approvedAt, &processedAt)
+	var scoreRevision int
+	var homeState, awayState string
+	var homeStateAt, awayStateAt sql.NullString
+	var homeActorUserID, awayActorUserID sql.NullInt64
+	var homeActorPlayerID, awayActorPlayerID sql.NullInt64
+	var homeActorName, awayActorName string
+	var homeApprovedRev, awayApprovedRev sql.NullInt64
+	var homeNote, awayNote string
+	err := s.q.QueryRowContext(ctx, `
+		SELECT completed, approved_at, processed_at, score_revision,
+		       home_approval_state, home_approval_state_at,
+		       home_approval_actor_user_id, home_approval_actor_player_id,
+		       home_approval_actor_name_snapshot, home_approval_state_score_revision,
+		       home_correction_note,
+		       away_approval_state, away_approval_state_at,
+		       away_approval_actor_user_id, away_approval_actor_player_id,
+		       away_approval_actor_name_snapshot, away_approval_state_score_revision,
+		       away_correction_note
+		FROM matches WHERE id=?`, matchID).
+		Scan(&completed, &approvedAt, &processedAt, &scoreRevision,
+			&homeState, &homeStateAt, &homeActorUserID, &homeActorPlayerID, &homeActorName, &homeApprovedRev, &homeNote,
+			&awayState, &awayStateAt, &awayActorUserID, &awayActorPlayerID, &awayActorName, &awayApprovedRev, &awayNote)
 	if err == sql.ErrNoRows {
 		return matches.MatchApprovalState{}, nil
 	}
 	if err != nil {
 		return matches.MatchApprovalState{}, fmt.Errorf("match %d: approval state: %w", matchID, err)
 	}
-	state := matches.MatchApprovalState{Exists: true, Completed: completed == 1}
+	state := matches.MatchApprovalState{
+		Exists:        true,
+		Completed:     completed == 1,
+		ScoreRevision: scoreRevision,
+		HomeSide: matches.TeamSideApprovalState{
+			State:             homeState,
+			ActorNameSnapshot: homeActorName,
+			CorrectionNote:    homeNote,
+		},
+		AwaySide: matches.TeamSideApprovalState{
+			State:             awayState,
+			ActorNameSnapshot: awayActorName,
+			CorrectionNote:    awayNote,
+		},
+	}
 	if approvedAt.Valid && approvedAt.String != "" {
 		state.ApprovedAt = &approvedAt.String
 	}
 	if processedAt.Valid && processedAt.String != "" {
 		state.ProcessedAt = &processedAt.String
 	}
+	if homeStateAt.Valid {
+		state.HomeSide.StateAt = &homeStateAt.String
+	}
+	if homeActorUserID.Valid {
+		state.HomeSide.ActorUserID = &homeActorUserID.Int64
+	}
+	if homeActorPlayerID.Valid {
+		state.HomeSide.ActorPlayerID = &homeActorPlayerID.Int64
+	}
+	if homeApprovedRev.Valid {
+		v := int(homeApprovedRev.Int64)
+		state.HomeSide.StateScoreRevision = &v
+	}
+	if awayStateAt.Valid {
+		state.AwaySide.StateAt = &awayStateAt.String
+	}
+	if awayActorUserID.Valid {
+		state.AwaySide.ActorUserID = &awayActorUserID.Int64
+	}
+	if awayActorPlayerID.Valid {
+		state.AwaySide.ActorPlayerID = &awayActorPlayerID.Int64
+	}
+	if awayApprovedRev.Valid {
+		v := int(awayApprovedRev.Int64)
+		state.AwaySide.StateScoreRevision = &v
+	}
 	return state, nil
+}
+
+// matchGuardSnapshot holds a read-only view of every condition the guarded
+// writes below (AdvanceScoreRevisionForEdit, ApproveTeamSide,
+// WithdrawTeamApproval, RequestCorrection, GuardedAdminAccept) depend on.
+// It exists only to classify WHY a conditional UPDATE affected zero rows --
+// never to decide whether a write is allowed (that decision belongs solely
+// to the conditional UPDATE's own WHERE clause, evaluated atomically at
+// write time).
+type matchGuardSnapshot struct {
+	ScoreRevision     int
+	Completed         bool
+	SeasonClosed      bool
+	WeekClosed        bool
+	Processed         bool
+	AdminAccepted     bool
+	HomeState         string
+	AwayState         string
+	HomeStateRevision *int
+	AwayStateRevision *int
+	HomeNote          string
+	AwayNote          string
+}
+
+// loadMatchGuardSnapshot performs a read-only query (no writes) to build a
+// matchGuardSnapshot for matchID. Returns matches.ErrGuardMatchNotFound
+// when matchID does not exist. HomeStateRevision/AwayStateRevision and
+// HomeNote/AwayNote are read alongside the state labels specifically for
+// GuardedAdminAccept's classifyAdminAcceptBlock, which must detect a
+// correction note (or revision) rewritten at the same state label.
+func loadMatchGuardSnapshot(ctx context.Context, q querier, matchID int64) (matchGuardSnapshot, error) {
+	var snap matchGuardSnapshot
+	var completed, weekClosed int
+	var approvedAt, processedAt, seasonClosedAt sql.NullString
+	var homeStateRev, awayStateRev sql.NullInt64
+	err := q.QueryRowContext(ctx, `
+		SELECT m.score_revision, m.completed, m.approved_at, m.processed_at, m.week_closed,
+		       se.closed_at, m.home_approval_state, m.away_approval_state,
+		       m.home_approval_state_score_revision, m.home_correction_note,
+		       m.away_approval_state_score_revision, m.away_correction_note
+		FROM matches m JOIN seasons se ON se.id = m.season_id
+		WHERE m.id = ?`, matchID).
+		Scan(&snap.ScoreRevision, &completed, &approvedAt, &processedAt, &weekClosed,
+			&seasonClosedAt, &snap.HomeState, &snap.AwayState,
+			&homeStateRev, &snap.HomeNote, &awayStateRev, &snap.AwayNote)
+	if err == sql.ErrNoRows {
+		return matchGuardSnapshot{}, matches.ErrGuardMatchNotFound
+	}
+	if err != nil {
+		return matchGuardSnapshot{}, fmt.Errorf("load match guard snapshot: %w", err)
+	}
+	snap.Completed = completed == 1
+	snap.WeekClosed = weekClosed == 1
+	snap.Processed = processedAt.Valid && processedAt.String != ""
+	snap.AdminAccepted = approvedAt.Valid && approvedAt.String != ""
+	snap.SeasonClosed = seasonClosedAt.Valid && seasonClosedAt.String != ""
+	if homeStateRev.Valid {
+		v := int(homeStateRev.Int64)
+		snap.HomeStateRevision = &v
+	}
+	if awayStateRev.Valid {
+		v := int(awayStateRev.Int64)
+		snap.AwayStateRevision = &v
+	}
+	return snap, nil
+}
+
+// intPtrEqual is a NULL-safe equality check for two optional revisions:
+// true when both are nil, true when both are non-nil and equal, false
+// otherwise. Mirrors SQL's `IS` operator semantics for the Go-side
+// classification path.
+func intPtrEqual(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// classifyScoreEditBlock determines why a score-edit guard
+// (AdvanceScoreRevisionForEdit) found zero matching rows, given a read-only
+// snapshot taken immediately after. The fallback at the end covers the
+// theoretical case where the snapshot no longer shows any blocking
+// condition -- a benign race where the state changed again between the
+// failed write and this read -- treated conservatively as stale so the
+// caller retries with fresh data rather than getting a confusing "unknown"
+// error.
+func classifyScoreEditBlock(snap matchGuardSnapshot, expectedRevision *int) error {
+	if expectedRevision != nil && snap.ScoreRevision != *expectedRevision {
+		return matches.ErrApprovalRevisionStale
+	}
+	if snap.SeasonClosed {
+		return matches.ErrGuardSeasonClosed
+	}
+	if snap.WeekClosed {
+		return matches.ErrGuardWeekClosed
+	}
+	if snap.Processed {
+		return matches.ErrGuardProcessed
+	}
+	if snap.AdminAccepted {
+		return matches.ErrGuardAdminAccepted
+	}
+	return matches.ErrApprovalRevisionStale
+}
+
+// classifyTeamActionBlock determines why a team-action guard (ApproveTeamSide,
+// WithdrawTeamApproval, RequestCorrection) found zero matching rows.
+// requireCompleted applies to Approve/RequestCorrection (not Withdraw, which
+// can only ever apply to an already-approved, and therefore already-scored,
+// side). requireFromApproved applies only to Withdraw.
+func classifyTeamActionBlock(snap matchGuardSnapshot, expectedRevision int, side string, requireCompleted, requireFromApproved bool) error {
+	if snap.ScoreRevision != expectedRevision {
+		return matches.ErrApprovalRevisionStale
+	}
+	if snap.SeasonClosed {
+		return matches.ErrGuardSeasonClosed
+	}
+	if snap.WeekClosed {
+		return matches.ErrGuardWeekClosed
+	}
+	if snap.Processed {
+		return matches.ErrGuardProcessed
+	}
+	if snap.AdminAccepted {
+		return matches.ErrGuardAdminAccepted
+	}
+	if requireCompleted && !snap.Completed {
+		return matches.ErrGuardNotScored
+	}
+	if requireFromApproved {
+		sideState := snap.HomeState
+		if side == matches.ApprovalSideAway {
+			sideState = snap.AwayState
+		}
+		if sideState != matches.ApprovalStateApproved {
+			return matches.ErrGuardInvalidTransition
+		}
+	}
+	return matches.ErrApprovalRevisionStale
+}
+
+// classifyAdminAcceptBlock determines why GuardedAdminAccept found zero
+// matching rows. pinnedHome/pinnedAway are the COMPLETE side snapshots
+// (state, state-score-revision including nil, and correction note)
+// RoundService.AdminAcceptMatch's accept-vs-override decision was based
+// on; a mismatch in any one of the three means that decision is no longer
+// valid -- e.g. a correction note rewritten at the same revision with the
+// same "correction_requested" label.
+func classifyAdminAcceptBlock(snap matchGuardSnapshot, expectedRevision int, pinnedHome, pinnedAway matches.TeamSideApprovalState) error {
+	if snap.ScoreRevision != expectedRevision {
+		return matches.ErrApprovalRevisionStale
+	}
+	if snap.SeasonClosed {
+		return matches.ErrGuardSeasonClosed
+	}
+	if snap.WeekClosed {
+		return matches.ErrGuardWeekClosed
+	}
+	if !snap.Completed {
+		return matches.ErrGuardNotScored
+	}
+	if snap.Processed {
+		return matches.ErrGuardProcessed
+	}
+	if snap.AdminAccepted {
+		return matches.ErrGuardAdminAccepted
+	}
+	if snap.HomeState != pinnedHome.State ||
+		!intPtrEqual(snap.HomeStateRevision, pinnedHome.StateScoreRevision) ||
+		snap.HomeNote != pinnedHome.CorrectionNote {
+		return matches.ErrGuardTeamStateChanged
+	}
+	if snap.AwayState != pinnedAway.State ||
+		!intPtrEqual(snap.AwayStateRevision, pinnedAway.StateScoreRevision) ||
+		snap.AwayNote != pinnedAway.CorrectionNote {
+		return matches.ErrGuardTeamStateChanged
+	}
+	return matches.ErrApprovalRevisionStale
+}
+
+// matchStillEditableSQL is the shared WHERE-clause fragment every guarded
+// write below re-verifies atomically: the match is not admin-accepted, not
+// processed, its week is open, and its season is open. Embedded via string
+// concatenation (never with user input) into each conditional UPDATE.
+const matchStillEditableSQL = `
+	  AND approved_at IS NULL
+	  AND processed_at IS NULL
+	  AND week_closed = 0
+	  AND EXISTS (SELECT 1 FROM seasons se WHERE se.id = matches.season_id AND se.closed_at IS NULL)`
+
+// advanceScoreRevisionForEdit is the shared implementation behind
+// RoundStore.AdvanceScoreRevisionForEdit and the SQLite LineupStore's
+// substitute-swap methods (SetSubstitute/ClearSubstitute), which are a
+// different concrete store type but must apply the exact same guard inside
+// their own transaction. q is whichever connection is active -- *sql.DB or
+// an in-flight *sql.Tx -- so this must always be called from inside the
+// same transaction as the mutation that triggered it, BEFORE that
+// mutation's own destructive writes.
+func advanceScoreRevisionForEdit(ctx context.Context, q querier, matchID int64, expectedRevision *int) (int, error) {
+	res, err := q.ExecContext(ctx,
+		`UPDATE matches SET score_revision = score_revision + 1
+		 WHERE id = ? AND (? IS NULL OR score_revision = ?)`+matchStillEditableSQL,
+		matchID, expectedRevision, expectedRevision)
+	if err != nil {
+		return 0, fmt.Errorf("advance score revision for edit: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("advance score revision for edit: rows affected: %w", err)
+	}
+	if n == 0 {
+		snap, err := loadMatchGuardSnapshot(ctx, q, matchID)
+		if err != nil {
+			return 0, err
+		}
+		return 0, classifyScoreEditBlock(snap, expectedRevision)
+	}
+
+	var newRevision int
+	var homeState, awayState string
+	if err := q.QueryRowContext(ctx,
+		`SELECT score_revision, home_approval_state, away_approval_state FROM matches WHERE id = ?`,
+		matchID).Scan(&newRevision, &homeState, &awayState); err != nil {
+		return 0, fmt.Errorf("advance score revision for edit: read new state: %w", err)
+	}
+	for _, side := range [...]struct{ name, state string }{
+		{"home", homeState},
+		{"away", awayState},
+	} {
+		if side.state == matches.ApprovalStatePending {
+			continue
+		}
+		clearSQL := fmt.Sprintf(`UPDATE matches SET
+			%[1]s_approval_state = 'pending',
+			%[1]s_approval_state_at = CURRENT_TIMESTAMP,
+			%[1]s_approval_actor_user_id = NULL,
+			%[1]s_approval_actor_player_id = NULL,
+			%[1]s_approval_actor_name_snapshot = '',
+			%[1]s_approval_state_score_revision = NULL,
+			%[1]s_correction_note = ''
+			WHERE id = ?`, side.name)
+		if _, err := q.ExecContext(ctx, clearSQL, matchID); err != nil {
+			return 0, fmt.Errorf("advance score revision for edit: clear %s approval: %w", side.name, err)
+		}
+		if _, err := q.ExecContext(ctx, `
+			INSERT INTO match_approval_events (match_id, event_scope, event_type, score_revision, note)
+			VALUES (?, ?, 'cleared_by_edit', ?, '')`,
+			matchID, side.name, newRevision); err != nil {
+			return 0, fmt.Errorf("advance score revision for edit: log cleared event for %s: %w", side.name, err)
+		}
+	}
+	return newRevision, nil
+}
+
+// AdvanceScoreRevisionForEdit implements matches.RoundStore's method of the
+// same name by delegating to the shared implementation above using this
+// store's active connection (s.q is either the pooled *sql.DB or, when this
+// instance is tx-scoped via RunTx, the in-flight *sql.Tx).
+func (s *RoundStore) AdvanceScoreRevisionForEdit(ctx context.Context, matchID int64, expectedRevision *int) (int, error) {
+	return advanceScoreRevisionForEdit(ctx, s.q, matchID, expectedRevision)
+}
+
+// ResolveApprovalEligibility reports whether playerID is eligible to act
+// for the given side of matchID: either currently rostered to that side's
+// team for the match's season (season_rosters), or an actual round_results
+// participant on that side for this specific match.
+func (s *RoundStore) ResolveApprovalEligibility(ctx context.Context, matchID int64, side string, playerID int64) (bool, error) {
+	var exists int
+	err := s.q.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM matches m
+			JOIN season_rosters sr ON sr.season_id = m.season_id AND sr.player_id = ?
+			WHERE m.id = ?
+			  AND sr.team_id = (CASE WHEN ? = 'home' THEN m.home_team_id ELSE m.away_team_id END)
+		) OR EXISTS(
+			SELECT 1 FROM round_results rr
+			WHERE rr.match_id = ?
+			  AND (
+			        (? = 'home' AND rr.home_player_id = ?)
+			     OR (? = 'away' AND rr.away_player_id = ?)
+			      )
+		)`,
+		playerID, matchID, side,
+		matchID,
+		side, playerID,
+		side, playerID,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("resolve approval eligibility: %w", err)
+	}
+	return exists == 1, nil
+}
+
+// ApproveTeamSide sets the given side's approval_state to 'approved' for
+// expectedRevision via one conditional UPDATE that atomically re-verifies,
+// at write time: match exists, score_revision matches, completed=1, and
+// matchStillEditableSQL (season open, week open, not admin-accepted, not
+// processed). On zero rows matched, classifyTeamActionBlock determines
+// exactly which condition failed via a read-only follow-up query.
+func (s *RoundStore) ApproveTeamSide(ctx context.Context, matchID int64, side string, expectedRevision int, actorUserID, actorPlayerID *int64, actorNameSnapshot string) error {
+	prefix := side
+	return s.RunTx(ctx, func(txIface matches.RoundStore) error {
+		tx := txIface.(*RoundStore)
+		res, err := tx.q.ExecContext(ctx, fmt.Sprintf(`
+			UPDATE matches SET
+				%[1]s_approval_state = 'approved',
+				%[1]s_approval_state_at = CURRENT_TIMESTAMP,
+				%[1]s_approval_actor_user_id = ?,
+				%[1]s_approval_actor_player_id = ?,
+				%[1]s_approval_actor_name_snapshot = ?,
+				%[1]s_approval_state_score_revision = ?,
+				%[1]s_correction_note = ''
+			WHERE id = ? AND score_revision = ? AND completed = 1`+matchStillEditableSQL, prefix),
+			actorUserID, actorPlayerID, actorNameSnapshot, expectedRevision, matchID, expectedRevision)
+		if err != nil {
+			return fmt.Errorf("approve team side: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("approve team side: rows affected: %w", err)
+		}
+		if n == 0 {
+			snap, err := loadMatchGuardSnapshot(ctx, tx.q, matchID)
+			if err != nil {
+				return err
+			}
+			return classifyTeamActionBlock(snap, expectedRevision, side, true, false)
+		}
+		if _, err := tx.q.ExecContext(ctx, `
+			INSERT INTO match_approval_events
+				(match_id, event_scope, event_type, score_revision, actor_user_id, actor_player_id, actor_name_snapshot)
+			VALUES (?, ?, 'approved', ?, ?, ?, ?)`,
+			matchID, side, expectedRevision, actorUserID, actorPlayerID, actorNameSnapshot); err != nil {
+			return fmt.Errorf("approve team side: log event: %w", err)
+		}
+		return nil
+	})
+}
+
+// WithdrawTeamApproval resets the given side's approval_state from
+// 'approved' back to 'pending' for expectedRevision via one conditional
+// UPDATE that additionally requires the side's current state to already be
+// 'approved', atomically, alongside the same match-editable conditions
+// ApproveTeamSide re-verifies. On zero rows matched, classifyTeamActionBlock
+// determines exactly which condition failed.
+func (s *RoundStore) WithdrawTeamApproval(ctx context.Context, matchID int64, side string, expectedRevision int, actorUserID, actorPlayerID *int64, actorNameSnapshot string) error {
+	prefix := side
+	return s.RunTx(ctx, func(txIface matches.RoundStore) error {
+		tx := txIface.(*RoundStore)
+		res, err := tx.q.ExecContext(ctx, fmt.Sprintf(`
+			UPDATE matches SET
+				%[1]s_approval_state = 'pending',
+				%[1]s_approval_state_at = CURRENT_TIMESTAMP,
+				%[1]s_approval_actor_user_id = NULL,
+				%[1]s_approval_actor_player_id = NULL,
+				%[1]s_approval_actor_name_snapshot = '',
+				%[1]s_approval_state_score_revision = NULL,
+				%[1]s_correction_note = ''
+			WHERE id = ? AND score_revision = ? AND %[1]s_approval_state = 'approved'`+matchStillEditableSQL, prefix),
+			matchID, expectedRevision)
+		if err != nil {
+			return fmt.Errorf("withdraw team approval: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("withdraw team approval: rows affected: %w", err)
+		}
+		if n == 0 {
+			snap, err := loadMatchGuardSnapshot(ctx, tx.q, matchID)
+			if err != nil {
+				return err
+			}
+			return classifyTeamActionBlock(snap, expectedRevision, side, false, true)
+		}
+		if _, err := tx.q.ExecContext(ctx, `
+			INSERT INTO match_approval_events
+				(match_id, event_scope, event_type, score_revision, actor_user_id, actor_player_id, actor_name_snapshot)
+			VALUES (?, ?, 'withdrawn', ?, ?, ?, ?)`,
+			matchID, side, expectedRevision, actorUserID, actorPlayerID, actorNameSnapshot); err != nil {
+			return fmt.Errorf("withdraw team approval: log event: %w", err)
+		}
+		return nil
+	})
+}
+
+// RequestCorrection sets the given side's approval_state to
+// 'correction_requested' for expectedRevision with the given note via one
+// conditional UPDATE requiring the same match-editable conditions as
+// ApproveTeamSide (no FROM-state restriction -- a correction may be
+// requested from 'pending' or 'approved' alike, and only ever affects this
+// one side). On zero rows matched, classifyTeamActionBlock determines
+// exactly which condition failed.
+func (s *RoundStore) RequestCorrection(ctx context.Context, matchID int64, side string, expectedRevision int, note string, actorUserID, actorPlayerID *int64, actorNameSnapshot string) error {
+	prefix := side
+	return s.RunTx(ctx, func(txIface matches.RoundStore) error {
+		tx := txIface.(*RoundStore)
+		res, err := tx.q.ExecContext(ctx, fmt.Sprintf(`
+			UPDATE matches SET
+				%[1]s_approval_state = 'correction_requested',
+				%[1]s_approval_state_at = CURRENT_TIMESTAMP,
+				%[1]s_approval_actor_user_id = ?,
+				%[1]s_approval_actor_player_id = ?,
+				%[1]s_approval_actor_name_snapshot = ?,
+				%[1]s_approval_state_score_revision = ?,
+				%[1]s_correction_note = ?
+			WHERE id = ? AND score_revision = ? AND completed = 1`+matchStillEditableSQL, prefix),
+			actorUserID, actorPlayerID, actorNameSnapshot, expectedRevision, note, matchID, expectedRevision)
+		if err != nil {
+			return fmt.Errorf("request correction: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("request correction: rows affected: %w", err)
+		}
+		if n == 0 {
+			snap, err := loadMatchGuardSnapshot(ctx, tx.q, matchID)
+			if err != nil {
+				return err
+			}
+			return classifyTeamActionBlock(snap, expectedRevision, side, true, false)
+		}
+		if _, err := tx.q.ExecContext(ctx, `
+			INSERT INTO match_approval_events
+				(match_id, event_scope, event_type, score_revision, actor_user_id, actor_player_id, actor_name_snapshot, note)
+			VALUES (?, ?, 'correction_requested', ?, ?, ?, ?, ?)`,
+			matchID, side, expectedRevision, actorUserID, actorPlayerID, actorNameSnapshot, note); err != nil {
+			return fmt.Errorf("request correction: log event: %w", err)
+		}
+		return nil
+	})
+}
+
+// GuardedAdminAccept performs the admin-acceptance write for
+// RoundService.AdminAcceptMatch via one conditional UPDATE that atomically
+// re-verifies, at write time: match exists, score_revision matches,
+// completed=1, matchStillEditableSQL, AND that both team sides' current
+// approval_state still equal pinnedHomeState/pinnedAwayState -- the states
+// AdminAcceptMatch's accept-vs-override decision was based on. On zero rows
+// matched, classifyAdminAcceptBlock determines exactly which condition
+// failed.
+func (s *RoundStore) GuardedAdminAccept(ctx context.Context, matchID int64, expectedRevision int, pinnedHome, pinnedAway matches.TeamSideApprovalState, approvedByUserID *int64, note string) error {
+	res, err := s.q.ExecContext(ctx, `
+		UPDATE matches SET
+			approved_at = CURRENT_TIMESTAMP,
+			approved_by_user_id = ?,
+			approval_note = ?
+		WHERE id = ? AND score_revision = ? AND completed = 1
+		  AND home_approval_state = ? AND home_approval_state_score_revision IS ? AND home_correction_note = ?
+		  AND away_approval_state = ? AND away_approval_state_score_revision IS ? AND away_correction_note = ?`+matchStillEditableSQL,
+		approvedByUserID, note, matchID, expectedRevision,
+		pinnedHome.State, pinnedHome.StateScoreRevision, pinnedHome.CorrectionNote,
+		pinnedAway.State, pinnedAway.StateScoreRevision, pinnedAway.CorrectionNote)
+	if err != nil {
+		return fmt.Errorf("guarded admin accept: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("guarded admin accept: rows affected: %w", err)
+	}
+	if n == 0 {
+		snap, err := loadMatchGuardSnapshot(ctx, s.q, matchID)
+		if err != nil {
+			return err
+		}
+		return classifyAdminAcceptBlock(snap, expectedRevision, pinnedHome, pinnedAway)
+	}
+	return nil
+}
+
+// ListApprovalEvents returns the full match_approval_events history for
+// matchID, ordered oldest first.
+func (s *RoundStore) ListApprovalEvents(ctx context.Context, matchID int64) ([]models.MatchApprovalEvent, error) {
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT id, match_id, event_scope, event_type, score_revision,
+		       actor_user_id, actor_player_id, actor_name_snapshot, note,
+		       home_state_snapshot, home_note_snapshot,
+		       away_state_snapshot, away_note_snapshot, created_at
+		FROM match_approval_events WHERE match_id = ? ORDER BY id ASC`, matchID)
+	if err != nil {
+		return nil, fmt.Errorf("list approval events: %w", err)
+	}
+	defer rows.Close()
+	var out []models.MatchApprovalEvent
+	for rows.Next() {
+		var e models.MatchApprovalEvent
+		var actorUserID, actorPlayerID sql.NullInt64
+		var homeSnap, awaySnap sql.NullString
+		if err := rows.Scan(&e.ID, &e.MatchID, &e.EventScope, &e.EventType, &e.ScoreRevision,
+			&actorUserID, &actorPlayerID, &e.ActorNameSnapshot, &e.Note,
+			&homeSnap, &e.HomeNoteSnapshot, &awaySnap, &e.AwayNoteSnapshot, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("list approval events: scan: %w", err)
+		}
+		if actorUserID.Valid {
+			e.ActorUserID = &actorUserID.Int64
+		}
+		if actorPlayerID.Valid {
+			e.ActorPlayerID = &actorPlayerID.Int64
+		}
+		if homeSnap.Valid {
+			e.HomeStateSnapshot = &homeSnap.String
+		}
+		if awaySnap.Valid {
+			e.AwayStateSnapshot = &awaySnap.String
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// RecordAdminAcceptanceEvent inserts one match-scope match_approval_events
+// row for an admin acceptance or override decision.
+func (s *RoundStore) RecordAdminAcceptanceEvent(ctx context.Context, ev matches.AdminAcceptanceEvent) error {
+	homeState := ev.HomeState
+	awayState := ev.AwayState
+	if _, err := s.q.ExecContext(ctx, `
+		INSERT INTO match_approval_events
+			(match_id, event_scope, event_type, score_revision, actor_user_id, note,
+			 home_state_snapshot, home_note_snapshot, away_state_snapshot, away_note_snapshot)
+		VALUES (?, 'match', ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ev.MatchID, ev.EventType, ev.ScoreRevision, ev.ActorUserID, ev.Note,
+		homeState, ev.HomeNote, awayState, ev.AwayNote); err != nil {
+		return fmt.Errorf("record admin acceptance event: %w", err)
+	}
+	return nil
 }
 
 // ApproveMatch sets approved_at to the current time and stores the approver

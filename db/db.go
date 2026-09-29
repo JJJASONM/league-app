@@ -233,6 +233,50 @@ CREATE TABLE IF NOT EXISTS round_results (
 );
 CREATE INDEX IF NOT EXISTS idx_round_results_match ON round_results(match_id);
 
+-- Player Score Approval Phase 1A: append-only history of every team-side
+-- approval, withdrawal, correction request, score-edit invalidation, and
+-- admin acceptance/override event. Complements the current-state columns
+-- added to matches (below) the same way week_close_acknowledgments
+-- complements league_weeks -- current state is authoritative and cheap to
+-- query, this table is the permanent record. event_scope 'home'/'away' is
+-- one team side's action; 'match' is an admin-level acceptance/override
+-- action that does not belong to either side alone. actor_user_id and
+-- actor_player_id are plain nullable integers with NO foreign key,
+-- matching this schema's established attribution convention (see
+-- matches.approved_by_user_id, handicap_history.applied_by_user_id) --
+-- attribution must never block or cascade on a player/user lifecycle
+-- change. actor_name_snapshot preserves readability after a player merge
+-- or future account removal, the same purpose handicap_history's
+-- player_name_snapshot serves; historical rows are deliberately never
+-- rewritten by a later merge (see mergeRepointStmts in
+-- backend/storage/sqlite/player_store.go, which repoints only the current-
+-- state actor columns on matches, not this table). home_state_snapshot/
+-- away_state_snapshot/*_note_snapshot are populated only for event_scope
+-- 'match' (admin_accepted/admin_override), giving the admin decision a
+-- structured, typed record of both sides' state at that moment rather than
+-- serializing it into the free-text note column.
+CREATE TABLE IF NOT EXISTS match_approval_events (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id            INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+    event_scope         TEXT    NOT NULL CHECK (event_scope IN ('home','away','match')),
+    event_type          TEXT    NOT NULL CHECK (event_type IN
+                           ('approved','withdrawn','correction_requested',
+                            'cleared_by_edit','admin_accepted','admin_override')),
+    score_revision      INTEGER NOT NULL,
+    actor_user_id       INTEGER,
+    actor_player_id     INTEGER,
+    actor_name_snapshot TEXT    NOT NULL DEFAULT '',
+    note                TEXT    NOT NULL DEFAULT '',
+    home_state_snapshot TEXT    CHECK (home_state_snapshot IS NULL OR
+                           home_state_snapshot IN ('pending','approved','correction_requested')),
+    home_note_snapshot  TEXT    NOT NULL DEFAULT '',
+    away_state_snapshot TEXT    CHECK (away_state_snapshot IS NULL OR
+                           away_state_snapshot IN ('pending','approved','correction_requested')),
+    away_note_snapshot  TEXT    NOT NULL DEFAULT '',
+    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_match_approval_events_match ON match_approval_events(match_id);
+
 -- League weeks: tracks official Close Week status for each week of a season.
 -- A row is created the first time a week is closed. Absence implies 'open' status.
 CREATE TABLE IF NOT EXISTS league_weeks (
@@ -473,6 +517,44 @@ CREATE INDEX IF NOT EXISTS idx_payouts_season_team ON payouts(season_id, team_id
 		// allowed and only non-null values are required to be distinct.
 		`ALTER TABLE users ADD COLUMN player_id INTEGER REFERENCES players(id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_player_id ON users(player_id) WHERE player_id IS NOT NULL`,
+		// Player Score Approval Phase 1A: optimistic score revision and
+		// per-side team-approval state on matches. score_revision starts at
+		// 0 and is incremented atomically by every scoresheet-affecting
+		// mutation (see AdvanceScoreRevisionForEdit in
+		// backend/storage/sqlite/round_store.go); a team-side approval or
+		// correction request always names the exact revision it describes
+		// via *_approval_state_score_revision, and is cleared back to NULL
+		// whenever that side returns to 'pending'. State defaults to
+		// 'pending' and is constrained to exactly the three values the
+		// domain layer understands -- 'approved' and 'correction_requested'
+		// both have an actor AND a revision they apply to (only 'pending'
+		// has neither), hence the generic "approval_state_score_revision"
+		// naming rather than an approval-only name -- PM correction:
+		// RequestCorrection must set this field too, not leave it NULL.
+		// Actor id columns are plain nullable integers with no foreign
+		// key, matching this schema's established attribution convention
+		// (see matches.approved_by_user_id above); *_approval_actor_player_id
+		// IS repointed on player merge (mergeRepointStmts in
+		// backend/storage/sqlite/player_store.go) since it names a live,
+		// current relationship, unlike match_approval_events' historical
+		// actor columns, which are deliberately left untouched by merge.
+		`ALTER TABLE matches ADD COLUMN score_revision INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE matches ADD COLUMN home_approval_state TEXT NOT NULL DEFAULT 'pending'
+		 CHECK (home_approval_state IN ('pending','approved','correction_requested'))`,
+		`ALTER TABLE matches ADD COLUMN home_approval_state_at DATETIME`,
+		`ALTER TABLE matches ADD COLUMN home_approval_actor_user_id INTEGER`,
+		`ALTER TABLE matches ADD COLUMN home_approval_actor_player_id INTEGER`,
+		`ALTER TABLE matches ADD COLUMN home_approval_actor_name_snapshot TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE matches ADD COLUMN home_approval_state_score_revision INTEGER`,
+		`ALTER TABLE matches ADD COLUMN home_correction_note TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE matches ADD COLUMN away_approval_state TEXT NOT NULL DEFAULT 'pending'
+		 CHECK (away_approval_state IN ('pending','approved','correction_requested'))`,
+		`ALTER TABLE matches ADD COLUMN away_approval_state_at DATETIME`,
+		`ALTER TABLE matches ADD COLUMN away_approval_actor_user_id INTEGER`,
+		`ALTER TABLE matches ADD COLUMN away_approval_actor_player_id INTEGER`,
+		`ALTER TABLE matches ADD COLUMN away_approval_actor_name_snapshot TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE matches ADD COLUMN away_approval_state_score_revision INTEGER`,
+		`ALTER TABLE matches ADD COLUMN away_correction_note TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, stmt := range additiveMigrations {
 		DB.Exec(stmt) // ignore error — column already exists on fresh DBs

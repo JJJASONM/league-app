@@ -2,11 +2,40 @@ package matches
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"league_app/backend/domainerr"
 	"league_app/models"
 )
+
+// mapSubstituteGuardErr recognizes a guard sentinel error returned by the
+// SQLite LineupStore's SetSubstitute/ClearSubstitute (wrapped with %w, so
+// errors.Is sees through it) and maps it to the same stable domain
+// conflicts checkEditable's own pre-check already uses for these lock
+// conditions -- a legitimate lock race caught by the atomic guard must
+// surface as 409, not the generic 500 a plain fallthrough would produce.
+// Returns nil for anything else (a genuine storage failure, or any error
+// this function does not recognize), so callers fall through to their
+// existing generic-failure handling unchanged.
+func mapSubstituteGuardErr(err error) error {
+	switch {
+	case errors.Is(err, ErrGuardSeasonClosed):
+		return domainerr.New("SEASON_CLOSED", domainerr.Conflict, "season is closed; substitutes cannot be changed")
+	case errors.Is(err, ErrGuardWeekClosed):
+		return domainerr.New("WEEK_CLOSED", domainerr.Conflict, "week is closed; substitutes cannot be changed")
+	case errors.Is(err, ErrGuardProcessed):
+		return domainerr.New("MATCH_PROCESSED", domainerr.Conflict, "match scores are processed; substitutes cannot be changed")
+	case errors.Is(err, ErrGuardAdminAccepted):
+		return domainerr.New("MATCH_APPROVED", domainerr.Conflict, "match scores are approved; substitutes cannot be changed")
+	case errors.Is(err, ErrApprovalRevisionStale):
+		return domainerr.New("SUB_MATCH_STATE_CHANGED", domainerr.Conflict, "the match changed while this substitute change was in progress; reload and try again")
+	case errors.Is(err, ErrGuardMatchNotFound):
+		return domainerr.New("SUB_MATCH_STATE_CHANGED", domainerr.Conflict, "the match for this lineup slot could no longer be found; reload and try again")
+	default:
+		return nil
+	}
+}
 
 // MatchLockChecker is the subset of RoundStore's read-only lock checks
 // LineupService needs to enforce the same approval/processing/week-closed/
@@ -154,6 +183,9 @@ func (s *LineupService) SetSubstitute(ctx context.Context, req SetSubstituteRequ
 		OriginalPlayerID:   plan.PlayerID,
 	})
 	if err != nil {
+		if mapped := mapSubstituteGuardErr(err); mapped != nil {
+			return models.LineupPlan{}, mapped
+		}
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return models.LineupPlan{}, domainerr.New("SUB_ALREADY_IN_LINEUP", domainerr.Conflict, "that player is already in this team's lineup for this week")
 		}
@@ -180,6 +212,9 @@ func (s *LineupService) ClearSubstitute(ctx context.Context, id int64) (models.L
 	}
 	updated, err := s.store.ClearSubstitute(ctx, id)
 	if err != nil {
+		if mapped := mapSubstituteGuardErr(err); mapped != nil {
+			return models.LineupPlan{}, mapped
+		}
 		return models.LineupPlan{}, domainerr.New("LINEUP_SUB_CLEAR_FAILED", domainerr.Internal, "clear substitute failed")
 	}
 	return updated, nil

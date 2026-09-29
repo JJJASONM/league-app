@@ -3,6 +3,7 @@ package matches_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"league_app/backend/domainerr"
@@ -528,6 +529,109 @@ func TestLineupService_SetSubstitute_StoreUniqueConstraint_ReturnsConflict(t *te
 	}
 }
 
+// The following prove PM's correction 2: a guard sentinel wrapped by the
+// SQLite store's atomic lock guard (SetSubstitute/ClearSubstitute) must
+// become a stable HTTP 409, not the generic 500 a bare fallthrough to
+// LINEUP_SUB_SET_FAILED/LINEUP_SUB_CLEAR_FAILED would produce. Each wraps
+// the sentinel with %w exactly as the real SQLite store does
+// (fmt.Errorf("set substitute: %w", err)), so errors.Is inside
+// mapSubstituteGuardErr must see through the wrap.
+
+func TestLineupService_SetSubstitute_GuardSeasonClosed_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		setSubErr:     fmt.Errorf("set substitute: %w", matches.ErrGuardSeasonClosed),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 6})
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "SEASON_CLOSED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want SEASON_CLOSED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_SetSubstitute_GuardWeekClosed_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		setSubErr:     fmt.Errorf("set substitute: %w", matches.ErrGuardWeekClosed),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 6})
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "WEEK_CLOSED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want WEEK_CLOSED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_SetSubstitute_GuardProcessed_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		setSubErr:     fmt.Errorf("set substitute: %w", matches.ErrGuardProcessed),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 6})
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "MATCH_PROCESSED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want MATCH_PROCESSED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_SetSubstitute_GuardAdminAccepted_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		setSubErr:     fmt.Errorf("set substitute: %w", matches.ErrGuardAdminAccepted),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 6})
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "MATCH_APPROVED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want MATCH_APPROVED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_SetSubstitute_GuardRevisionStale_Returns409WithRetryMessage(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		setSubErr:     fmt.Errorf("set substitute: %w", matches.ErrApprovalRevisionStale),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 6})
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "SUB_MATCH_STATE_CHANGED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want SUB_MATCH_STATE_CHANGED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_SetSubstitute_GuardMatchNotFound_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		setSubErr:     fmt.Errorf("set substitute: %w", matches.ErrGuardMatchNotFound),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 6})
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Category != domainerr.Conflict {
+		t.Fatalf("want a deliberate Conflict mapping (not a generic 500), got %v", err)
+	}
+}
+
+// TestLineupService_SetSubstitute_GenuineStorageFailure_StillReturnsInternal
+// proves the new mapping does not swallow a real, unrelated storage error --
+// mapSubstituteGuardErr must return nil for anything it does not recognize,
+// preserving the existing generic-failure fallback.
+func TestLineupService_SetSubstitute_GenuineStorageFailure_StillReturnsInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{PlayerID: 5, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		setSubErr:     errors.New("disk I/O error"),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.SetSubstitute(context.Background(), matches.SetSubstituteRequest{LineupPlanID: 1, SubstitutePlayerID: 6})
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "LINEUP_SUB_SET_FAILED" || de.Category != domainerr.Internal {
+		t.Fatalf("want the existing generic LINEUP_SUB_SET_FAILED Internal mapping preserved, got %v", err)
+	}
+}
+
 // -- ClearSubstitute -----------------------------------------------------------
 
 func TestLineupService_ClearSubstitute_NotCurrentlySubstituted_ReturnsError(t *testing.T) {
@@ -570,6 +674,89 @@ func TestLineupService_ClearSubstitute_ValidInput_DelegatesToStore(t *testing.T)
 	}
 	if stub.lastClearSubID != 1 {
 		t.Errorf("want id=1 forwarded to store, got %d", stub.lastClearSubID)
+	}
+}
+
+// PM correction 2: the same guard-sentinel mapping must apply to
+// ClearSubstitute, not only SetSubstitute.
+
+func TestLineupService_ClearSubstitute_GuardAdminAccepted_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{ID: 1, IsSub: true, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		clearSubErr:   fmt.Errorf("clear substitute: %w", matches.ErrGuardAdminAccepted),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.ClearSubstitute(context.Background(), 1)
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "MATCH_APPROVED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want MATCH_APPROVED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_ClearSubstitute_GuardProcessed_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{ID: 1, IsSub: true, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		clearSubErr:   fmt.Errorf("clear substitute: %w", matches.ErrGuardProcessed),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.ClearSubstitute(context.Background(), 1)
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "MATCH_PROCESSED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want MATCH_PROCESSED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_ClearSubstitute_GuardWeekClosed_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{ID: 1, IsSub: true, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		clearSubErr:   fmt.Errorf("clear substitute: %w", matches.ErrGuardWeekClosed),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.ClearSubstitute(context.Background(), 1)
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "WEEK_CLOSED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want WEEK_CLOSED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_ClearSubstitute_GuardSeasonClosed_Returns409NotInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{ID: 1, IsSub: true, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		clearSubErr:   fmt.Errorf("clear substitute: %w", matches.ErrGuardSeasonClosed),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.ClearSubstitute(context.Background(), 1)
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "SEASON_CLOSED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want SEASON_CLOSED Conflict (409), got %v", err)
+	}
+}
+
+func TestLineupService_ClearSubstitute_GuardRevisionStale_Returns409WithRetryMessage(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{ID: 1, IsSub: true, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		clearSubErr:   fmt.Errorf("clear substitute: %w", matches.ErrApprovalRevisionStale),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.ClearSubstitute(context.Background(), 1)
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "SUB_MATCH_STATE_CHANGED" || de.Category != domainerr.Conflict {
+		t.Fatalf("want SUB_MATCH_STATE_CHANGED Conflict (409), got %v", err)
+	}
+}
+
+// TestLineupService_ClearSubstitute_GenuineStorageFailure_StillReturnsInternal
+// proves the mapping does not swallow a genuine, unrelated storage error.
+func TestLineupService_ClearSubstitute_GenuineStorageFailure_StillReturnsInternal(t *testing.T) {
+	stub := &stubLineupStore{
+		getPlanResult: models.LineupPlan{ID: 1, IsSub: true, SeasonID: 1, TeamID: 2, WeekNumber: 3},
+		clearSubErr:   errors.New("disk I/O error"),
+	}
+	svc := newLineupSvc(stub)
+	_, err := svc.ClearSubstitute(context.Background(), 1)
+	var de *domainerr.Err
+	if !errors.As(err, &de) || de.Code != "LINEUP_SUB_CLEAR_FAILED" || de.Category != domainerr.Internal {
+		t.Fatalf("want the existing generic LINEUP_SUB_CLEAR_FAILED Internal mapping preserved, got %v", err)
 	}
 }
 
