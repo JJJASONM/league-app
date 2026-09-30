@@ -34,11 +34,35 @@ func postNoBody(t *testing.T, url string) *http.Response {
 	return resp
 }
 
+// postApprove POSTs to a /approve route with the Player Score Approval
+// Phase 1B admin-acceptance contract: expected_revision is now mandatory
+// (AdminAcceptMatch has no optional-revision variant). Every fixture in
+// this file seeds round_results via raw SQL (seedRoundResult/
+// seedRoundResultsN), which never advances matches.score_revision, so the
+// expected revision for a freshly-seeded match is always 0. override is
+// passed through explicitly: none of these fixtures ever go through the
+// new team-approval routes, so both sides remain "pending" and normal
+// (non-override) acceptance would always return the new 409
+// override-required response -- existing tests here are exercising
+// pre-Phase-1B behavior (approve/process/unapprove/close-week composition)
+// and pass override:true to reach it, exactly as a real admin choosing to
+// accept without waiting on team approval would. Dedicated coverage for
+// the override-required/override-succeeds contract itself lives in
+// api_match_approval_phase1b_test.go.
+func postApprove(t *testing.T, url string, expectedRevision int, override bool) *http.Response {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(fmt.Sprintf(`{"expected_revision":%d,"override":%t}`, expectedRevision, override)))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	return resp
+}
+
 func TestApproveMatch_Success_SetsApprovedAt(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
 
-	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID))
+	resp := postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
@@ -56,7 +80,7 @@ func TestApproveMatch_WithNote_StoresNote(t *testing.T) {
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
 
 	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID),
-		"application/json", strings.NewReader(`{"note":"captain confirmed via text"}`))
+		"application/json", strings.NewReader(`{"note":"captain confirmed via text","expected_revision":0,"override":true}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +99,7 @@ func TestApproveMatch_WithNote_StoresNote(t *testing.T) {
 func TestApproveMatch_NotScored_Returns422(t *testing.T) {
 	f := weekTestSeed(t)
 	// No round result saved -- match.completed stays 0.
-	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID))
+	resp := postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, false)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Errorf("want 422, got %d", resp.StatusCode)
@@ -84,7 +108,7 @@ func TestApproveMatch_NotScored_Returns422(t *testing.T) {
 
 func TestApproveMatch_NotFound_Returns404(t *testing.T) {
 	f := weekTestSeed(t)
-	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/999999/approve", f.srv.URL))
+	resp := postApprove(t, fmt.Sprintf("%s/api/matches/999999/approve", f.srv.URL), 0, false)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("want 404, got %d", resp.StatusCode)
@@ -94,10 +118,10 @@ func TestApproveMatch_NotFound_Returns404(t *testing.T) {
 func TestApproveMatch_AlreadyProcessed_Returns409(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/process", f.srv.URL, f.matchID)).Body.Close()
 
-	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID))
+	resp := postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("want 409, got %d", resp.StatusCode)
@@ -107,7 +131,7 @@ func TestApproveMatch_AlreadyProcessed_Returns409(t *testing.T) {
 func TestProcessMatch_Success_SetsProcessedAt(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 
 	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/process", f.srv.URL, f.matchID))
 	defer resp.Body.Close()
@@ -135,7 +159,7 @@ func TestProcessMatch_NotApproved_Returns422(t *testing.T) {
 func TestUnapproveMatch_Success_ClearsApproval(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 
 	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/unapprove", f.srv.URL, f.matchID))
 	defer resp.Body.Close()
@@ -153,7 +177,7 @@ func TestUnapproveMatch_Success_ClearsApproval(t *testing.T) {
 func TestUnapproveMatch_AlreadyProcessed_Returns409(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/process", f.srv.URL, f.matchID)).Body.Close()
 
 	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/unapprove", f.srv.URL, f.matchID))
@@ -166,7 +190,7 @@ func TestUnapproveMatch_AlreadyProcessed_Returns409(t *testing.T) {
 func TestUnprocessMatch_Success_ClearsProcessingPreservesApproval(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/process", f.srv.URL, f.matchID)).Body.Close()
 
 	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/unprocess", f.srv.URL, f.matchID))
@@ -192,7 +216,7 @@ func TestSaveRounds_ReturnsConflict_AfterApproval(t *testing.T) {
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 
 	body := fmt.Sprintf(`{"rounds":[{"round_number":1,"home_player_id":%d,"away_player_id":%d,"game1_home":10,"game1_away":5,"game2_home":10,"game2_away":3,"game3_home":10,"game3_away":2}]}`,
 		f.playerA, f.playerB)
@@ -210,7 +234,7 @@ func TestSaveRounds_ReturnsConflict_AfterApproval(t *testing.T) {
 func TestSubmitResults_ReturnsConflict_AfterProcessing(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/process", f.srv.URL, f.matchID)).Body.Close()
 
 	resp, err := http.Post(fmt.Sprintf("%s/api/matches/%d/results", f.srv.URL, f.matchID),
@@ -227,7 +251,7 @@ func TestSubmitResults_ReturnsConflict_AfterProcessing(t *testing.T) {
 func TestClearResults_ReturnsConflict_AfterApproval(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 
 	req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/matches/%d/results", f.srv.URL, f.matchID), nil)
 	resp, err := http.DefaultClient.Do(req)
@@ -254,7 +278,7 @@ func TestHandicapRecommendations_IncludeProcessedButOpenMatch(t *testing.T) {
 	// 5 rounds (15 racks, at the default eligibility threshold) of home=10/away=7.
 	seedRoundResultsN(t, f.matchID, f.playerA, f.playerB, 5, 10, 7, 0.0, 0.0)
 
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 	resp := postNoBody(t, fmt.Sprintf("%s/api/matches/%d/process", f.srv.URL, f.matchID))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -298,7 +322,7 @@ func TestHandicapRecommendations_IncludeProcessedButOpenMatch(t *testing.T) {
 func TestCloseWeek_AutoProcessesApprovedMatch(t *testing.T) {
 	f := weekTestSeed(t)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 
 	resp := weekClose(t, f.srv.URL, f.sid, 1, nil)
 	defer resp.Body.Close()
@@ -398,7 +422,7 @@ func TestReopenWeek_PreservesApprovalAndProcessingAfterAutoProcess(t *testing.T)
 	f := weekTestSeed(t)
 	db.DB.Exec(`UPDATE seasons SET teams_managed=0 WHERE id=?`, f.sid)
 	seedRoundResult(t, f.matchID, f.playerA, f.playerB)
-	postNoBody(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID)).Body.Close()
+	postApprove(t, fmt.Sprintf("%s/api/matches/%d/approve", f.srv.URL, f.matchID), 0, true).Body.Close()
 	weekClose(t, f.srv.URL, f.sid, 1, nil).Body.Close()
 
 	reopenResp, err := http.Post(fmt.Sprintf("%s/api/seasons/%d/weeks/1/reopen", f.srv.URL, f.sid), "application/json", strings.NewReader("{}"))

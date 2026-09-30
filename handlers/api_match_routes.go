@@ -13,10 +13,10 @@ import (
 // existing registration guard in Register.
 func registerMatchRoutes(mux *http.ServeMux, deps Dependencies, matchMgr MatchManager, seasonMgr SeasonManager) {
 	mux.HandleFunc("GET /api/matches", func(w http.ResponseWriter, r *http.Request) {
-		listMatches(w, r, matchMgr)
+		listMatches(w, r, matchMgr, seasonMgr, deps)
 	})
 	mux.HandleFunc("GET /api/matches/{id}", func(w http.ResponseWriter, r *http.Request) {
-		getMatch(w, r, matchMgr)
+		getMatch(w, r, matchMgr, seasonMgr, deps)
 	})
 	mux.HandleFunc("PATCH /api/matches/{id}/assign",
 		guardedLeagueAdminAction(deps, auth.ActionMatchScoreMutate, matchIDPathScope(matchMgr, seasonMgr), func(w http.ResponseWriter, r *http.Request) {

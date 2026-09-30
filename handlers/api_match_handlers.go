@@ -9,7 +9,15 @@ import (
 	"league_app/models"
 )
 
-func listMatches(w http.ResponseWriter, r *http.Request, mgr MatchManager) {
+// listMatches handles GET /api/matches. This route predates Player Score
+// Approval and has never been gated -- it stays that way (public schedule
+// information remains public), but admin-attested approval metadata
+// (approved_by_user_id, approval_note, processed_by_user_id) is stripped
+// from every returned match unless the caller is authorized for the
+// request's EFFECTIVE season_id/league_id filter (see
+// canSeeApprovalMetadataInList's doc comment for the exact precedence and
+// why this route cannot use per-match scoping the way getMatch does).
+func listMatches(w http.ResponseWriter, r *http.Request, mgr MatchManager, seasonMgr SeasonManager, deps Dependencies) {
 	req := matches.ListMatchesRequest{}
 	if v, ok := qparamInt(r, "season_id"); ok {
 		req.SeasonID = v
@@ -22,10 +30,35 @@ func listMatches(w http.ResponseWriter, r *http.Request, mgr MatchManager) {
 		mapMatchErr(w, err)
 		return
 	}
+	if !canSeeApprovalMetadataInList(r, deps, seasonMgr, req) {
+		for i := range ms {
+			stripApprovalMetadata(&ms[i])
+		}
+	}
 	jsonOK(w, ms)
 }
 
-func getMatch(w http.ResponseWriter, r *http.Request, mgr MatchManager) {
+// getMatch handles GET /api/matches/{id}. Schedule fields (teams, date,
+// week, completed) always stay public. Two DIFFERENT visibility rules
+// apply, checked independently (PM correction: an earlier version stripped
+// both together, guarded only by "not yet final," which meant a final
+// closed match leaked approval metadata to every public caller):
+//   - Results (draft score content): emptied unless the match is already
+//     final (completed AND week_closed -- "public final closed results")
+//     OR the caller is authorized.
+//   - Approval metadata (approved_by_user_id, approval_note,
+//     processed_by_user_id): stripped UNCONDITIONALLY unless the caller is
+//     authorized, regardless of whether the match is final -- a closed
+//     match's final results are public; who approved it and any
+//     correction note are never public.
+//
+// "Authorized" is a scoped administrator for the match's own league, or an
+// eligible session player for either side (Player Score Approval Phase
+// 1B's read-authorization matrix). seasonMgr/deps resolve the match's
+// owning league for that check; deps.RoundMgr may be nil (this route is
+// registered before RoundMgr's presence is known), in which case only the
+// admin branch can succeed.
+func getMatch(w http.ResponseWriter, r *http.Request, mgr MatchManager, seasonMgr SeasonManager, deps Dependencies) {
 	id, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -36,7 +69,34 @@ func getMatch(w http.ResponseWriter, r *http.Request, mgr MatchManager) {
 		mapMatchErr(w, err)
 		return
 	}
+
+	season, seasonErr := seasonMgr.GetSeason(r.Context(), detail.Match.SeasonID)
+	leagueID := int64(0)
+	if seasonErr == nil {
+		leagueID = season.LeagueID
+	}
+	authorized := canSeeMatchDraftDetailWithLeague(r, deps, deps.RoundMgr, leagueID, id)
+
+	final := detail.Match.Completed && detail.Match.WeekClosed
+	if !final && !authorized {
+		detail.Results = []models.MatchResult{}
+	}
+	if !authorized {
+		stripApprovalMetadata(&detail.Match)
+	}
 	jsonOK(w, detail)
+}
+
+// stripApprovalMetadata clears the admin-attested approval/processing
+// fields the read-authorization matrix reserves for scoped administrators
+// and eligible session players -- see listMatches/getMatch. Schedule and
+// score fields (teams, date, completed, week_closed) are untouched.
+func stripApprovalMetadata(m *models.Match) {
+	m.ApprovedAt = nil
+	m.ApprovedByUserID = nil
+	m.ApprovalNote = ""
+	m.ProcessedAt = nil
+	m.ProcessedByUserID = nil
 }
 
 // assignMatchTeams assigns home/away teams to a blanket (unassigned) match slot.

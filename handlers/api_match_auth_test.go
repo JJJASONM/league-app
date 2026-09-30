@@ -350,7 +350,7 @@ func TestMatchRoute_Approve_LeagueAdmin_ReachesHandler(t *testing.T) {
 	mux := http.NewServeMux()
 	Register(mux, t.TempDir(), matchMutationDeps(auth))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/approve", strings.NewReader(`{"note":"ok"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/matches/1/approve", strings.NewReader(`{"note":"ok","expected_revision":0,"override":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer my-key")
 	w := httptest.NewRecorder()

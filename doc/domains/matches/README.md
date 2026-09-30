@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.13`
-**Last reviewed:** `2026-09-29`
+**Current version:** `0.15`
+**Last reviewed:** `2026-09-30`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -3151,20 +3151,12 @@ pre-existing, unrelated `GameDiffAverageRecs` processed-open-week
 eligibility inconsistency (recommended separately as its own future
 correctness candidate, not part of this phase).
 
-### Planned Phase 1B
+### Phase 1B status
 
-Routes (`/approve-home`, `/approve-away`, `/withdraw-approval`,
-`/request-correction`), new `auth.Action`/`Scope` fields resolving a
-match's `home_team_id`/`away_team_id`, an `Identity.AuthMethod` field so
-the new player-scoped actions can require an active session and reject a
-legacy personal API key, mandatory `expected_revision` enforcement for
-player-authenticated score writes, the `/approve` route's explicit
-override-confirmation contract, and a differentiated read-authorization
-matrix (draft/in-progress round detail and all approval/correction
-identity data gated; public schedule and post-close final results
-unchanged) all remain for that phase, together with the admin/UI
-integration and staging verification `MATCHES-Q002`'s full resolution
-requires.
+Implemented 2026-09-30 -- see "Player Score Approval Phase 1B" below for
+the full routes/authorization/read-matrix design. Admin/UI integration
+(Phase 1D), player UI (Phase 1C), and staging verification remain for
+`MATCHES-Q002`'s full resolution.
 
 ### Verification
 
@@ -3227,7 +3219,378 @@ existing generic `Internal` (500) mapping unchanged. Staging deployment
 and browser verification are out of scope for this backend-only phase
 and remain for Phase 1D.
 
+## Player Score Approval Phase 1B -- Routes, Session Authorization, and Protected Reads (implemented 2026-09-30)
+
+Phase 1B makes Phase 1A's data model and atomic guards reachable through
+HTTP with the correct authorization, without adding any frontend approval
+UI (that remains Phase 1C) or admin UI integration (Phase 1D). Status:
+`accepted`.
+
+### Authentication method
+
+`auth.Identity` gained an `AuthMethod` field (`AuthMethodSession`,
+`AuthMethodAPIKey`, `AuthMethodStaticToken`) -- a stable controlled code
+naming the credential that actually authenticated the request, not who the
+identity is. `handlers.resolveIdentity` sets it in both branches
+(`AuthMethodSession` on a resolved session cookie, `AuthMethodAPIKey`
+inside `buildIdentityFromLegacyUser` for a resolved Bearer key).
+`AuthMethodStaticToken` is defined for completeness but never actually
+attached to an `Identity` -- the static `LEAGUE_ADMIN_TOKEN` bootstrap
+credential remains a genuinely separate bypass (`staticTokenBypass`) that
+never becomes an `Identity`, unchanged from before this phase. Credential
+precedence (session beats a stored Bearer key) is unchanged.
+
+### New `auth.Action`s
+
+- `ActionMatchTeamApproval` -- guards the four player-scoped team-approval
+  mutation routes below. `Authorize`'s case checks only the credential
+  shape: `identity.AuthMethod == AuthMethodSession && identity.IsPlayer()`.
+  There is deliberately no scope/eligibility check inside `Authorize`
+  itself (per-match, per-side eligibility is a domain fact
+  (`ResolveApprovalEligibility`) a pure, database-free policy function
+  cannot evaluate), and **no admin bypass of any kind, not even the
+  otherwise-unconditional `system_admin` shortcut every other action
+  gets** -- `Authorize` evaluates this action BEFORE that shortcut (PM
+  correction: an earlier version let `system_admin` through first, so a
+  system-admin identity could approve a team side without ever being a
+  real, session-authenticated, eligible player). A `system_admin` (or any
+  other identity) may use these routes only by being signed in through an
+  actual browser session AND holding a linked, eligible player -- at that
+  point they are authorized as that player, not as an administrator. An
+  administrator who needs to act without both team approvals uses
+  `AdminAcceptMatch`'s own override contract on the existing acceptance
+  route instead of a masquerade path onto these player-only routes.
+- `ActionMatchApprovalRead` -- guards the protected approval snapshot/
+  history reads and retrofits the pre-existing public match/round routes'
+  draft-detail gate (see Read-authorization matrix below). League-scoped
+  exactly like `ActionMatchApproval`/`ActionMatchScoreMutate`
+  (`scope.LeagueID != nil && identity.IsLeagueAdminFor(*scope.LeagueID)`).
+
+Eligibility itself (season-roster membership or round-participation on the
+requested side) is resolved via `RoundService.ResolveApprovalEligibility`
+at the HTTP layer, in new purpose-built gates
+(`handlers/api_match_approval_auth.go`) rather than inside `auth.Authorize`
+or duplicated in a handler -- see that file's doc comments for the full
+reasoning on why these gates could not reuse the existing
+`scopeFn`-based `requireAction` pattern unmodified (the existing `scopeFn`
+signature has no way to see the caller's own identity during scope
+resolution, which per-match eligibility genuinely requires).
+
+### Team-approval routes
+
+All four require `expected_revision` and are exclusively player-scoped
+(gated by `requireMatchTeamApprovalAction`: an active password session
+with a linked player; a personal API key or the static token is always
+rejected, `403`, even when the key's user has a linked player). Each
+returns the resulting `MatchApprovalSnapshot` (see below) on success, and
+delegates ALL eligibility/transition/lock logic to the unchanged Phase 1A
+service methods -- handlers never re-implement it.
+
+| Route | Body | Notes |
+|---|---|---|
+| `POST /api/matches/{id}/approve-home` | `{"expected_revision": N}` | side fixed by the route |
+| `POST /api/matches/{id}/approve-away` | `{"expected_revision": N}` | side fixed by the route |
+| `POST /api/matches/{id}/withdraw-approval` | `{"side": "home"\|"away", "expected_revision": N}` | side not in the path |
+| `POST /api/matches/{id}/request-correction` | `{"side": "home"\|"away", "expected_revision": N, "note": "..."}` | note required, nonblank |
+
+Status mapping (via `writeMatchApprovalErr`, extended this phase with an
+`InvalidInput` -> 400 case it was previously missing -- see "Collateral
+fixes" below): invalid body/side/note -> `400`; unauthenticated -> `401`;
+wrong authentication method or no linked player -> `403`; match not
+found -> `404`; stale revision, invalid transition, or a locked match
+(season/week closed, processed, admin-accepted) -> `409`; ineligible
+player or an unscored match -> `422` (the existing Phase 1A domain status,
+preserved as-is per the routes/auth design's explicit instruction not to
+convert a domain status into an authorization code).
+
+### `MatchApprovalSnapshot` response contract
+
+Every team-approval mutation route and `GET /api/matches/{id}/approval`
+return this shape (`models.MatchApprovalSnapshot` /
+`models.TeamSideApprovalSnapshot`):
+
+```json
+{
+  "match_id": 42,
+  "score_revision": 0,
+  "completed": true,
+  "home": {
+    "state": "approved",
+    "state_at": "2026-09-30T12:00:00Z",
+    "actor_player_id": 7,
+    "actor_name_snapshot": "Home Player",
+    "state_score_revision": 0
+  },
+  "away": { "state": "pending" }
+}
+```
+
+Every field below the top level, plus `approved_at`/`processed_at`, is
+`omitempty` -- a nil `*string`/`*int64`/`*int` or a zero-value `string` is
+OMITTED from the response entirely, never serialized as `null` or `""`.
+The example above reflects that exactly: `approved_at`/`processed_at` are
+absent (the match has not been admin-accepted), and `home.correction_note`
+is absent (empty). `away` shows only `{"state": "pending"}` because every
+other field on a never-touched side is either a nil pointer or an empty
+string. `ActorUserID` is deliberately not part of this shape at all (an
+internal id with no display value to a player-facing client) --
+`ActorPlayerID`/`ActorNameSnapshot` are what a UI needs. This response is
+never served through any public route.
+
+### Admin acceptance contract
+
+`POST /api/matches/{id}/approve` is rewired onto `AdminAcceptMatch`. This
+is a deliberate, **breaking** contract change for this one route:
+
+```json
+{ "note": "optional", "override": false, "expected_revision": 0 }
+```
+
+`expected_revision` is now **mandatory** (`AdminAcceptMatch` has no
+optional-revision variant, unlike the score-write routes below) -- a
+missing value returns `400`. Behavior: both sides approved at the current
+revision -> normal acceptance succeeds, records `admin_accepted`; one or
+both missing/stale -> `override:false` (or omitted) returns `409`
+`APPROVAL_OVERRIDE_REQUIRED`, `override:true` succeeds and records
+`admin_override`; a stale `expected_revision` or a team-state/note change
+since the decision was read -> `409` with zero writes (unchanged Phase 1A
+atomic guard). Authorization is unchanged (`ActionMatchApproval`,
+admin-only, scoped via match -> season -> league).
+
+**The existing frontend Approve button does not understand this new
+contract yet** (it posts only `{"note": "..."}"`, with no
+`expected_revision`) -- admin UI integration is Phase 1D. This backend
+branch should not be deployed alone if that would interrupt the current
+button; see Roadmap.
+
+### Player-authenticated score writes
+
+`POST /api/matches/{id}/rounds`, `POST /api/matches/{id}/results`, and
+`DELETE /api/matches/{id}/results` now accept EITHER the unchanged admin
+path (`ActionMatchScoreMutate`, `expected_revision` remains optional, same
+response shape plus one additive `score_revision` field the existing
+admin frontend does not read) OR an eligible linked player's password
+session for **at least one side** of the match (not necessarily their own
+side -- a player entering the full scoresheet needs the match-wide
+version of eligibility, not the single-side version team-approval actions
+use). For a player-authenticated write, `expected_revision` is mandatory
+(`400` if absent); a stale value returns `409` with zero writes. Every
+successful write returns `score_revision` in its response body
+(`{"status":"saved","score_revision":N}` /
+`{"saved":N,"score_revision":N}`). The gate
+(`requireAdminOrEligiblePlayerScoreWrite`) tries the admin authorization
+first (unchanged `auth.Authorize` call) and only evaluates player
+eligibility if that fails -- exactly one path is ever taken per request.
+Any accepted score mutation clears stale team approvals via Phase 1A's
+existing atomic guard, unchanged by this phase.
+
+### Read-authorization matrix
+
+| Caller | Public schedule (`GET /api/matches[/{id}]`) | Draft/in-progress rounds & results | Final (`completed && week_closed`) rounds | Approval snapshot/history (`GET .../approval[-events]`) |
+|---|---|---|---|---|
+| Unauthenticated | Yes (schedule fields only) | No | Yes | No |
+| Unrelated/cross-league player | Yes (schedule fields only) | No | Yes | No |
+| Eligible linked player (session) | Yes (schedule fields only in the LIST route; full in the single-match detail route -- see below) | Yes, for their own match | Yes | Yes, for their own match |
+| Scoped league_admin / system_admin | Yes, including approval metadata | Yes | Yes | Yes |
+
+Admin-attested approval metadata (`approved_by_user_id`, `approval_note`,
+`processed_by_user_id`) was already leaking to every public caller via
+`GET /api/matches` and `GET /api/matches/{id}` **before this phase** (a
+real pre-existing gap from Weekly Score Processing Phase 1A, not something
+Phase 1B introduces) -- both routes now strip these fields unless the
+caller is authorized. Two deliberately different precision levels, as the
+smallest consistent contract for each route's existing shape:
+
+- **`GET /api/matches/{id}`** (single match): precise per-match check --
+  admin scoped to the match's own league, OR an eligible session player
+  for either side. Two INDEPENDENT visibility rules apply (PM correction:
+  an earlier version stripped both together, guarded only by "not yet
+  final," which let a final closed match leak approval metadata to every
+  public caller):
+  - `Results` (draft score content) is emptied unless the match is
+    already final (`completed && week_closed`) OR the caller is
+    authorized.
+  - Approval metadata is stripped UNCONDITIONALLY unless the caller is
+    authorized, regardless of whether the match is final -- a closed
+    match's final results are public; who approved it, and any
+    correction note, are never public.
+  Schedule fields (teams, date, week, `completed`) are never hidden.
+- **`GET /api/matches`** (list, potentially spanning leagues): scoped to
+  the request's EFFECTIVE `season_id`/`league_id` filter, mirroring
+  `MatchStore.ListMatches`'s own precedence (`season_id` wins when both
+  are supplied; neither means unfiltered) -- `system_admin` sees metadata
+  unconditionally; a `league_admin` sees it only when the effective filter
+  resolves to a league they administer; an unfiltered request exposes
+  metadata to nobody but `system_admin` (PM correction: an earlier version
+  granted ANY authenticated `league_admin` visibility into every league's
+  metadata on an unfiltered request, including leagues they do not
+  administer). An eligible session player never sees metadata via this
+  route, even for their own match -- resolving per-match player
+  eligibility for a route that can return an unbounded number of matches
+  was rejected as disproportionate; a player needing full detail uses the
+  single-match route or the dedicated approval read instead. See
+  `canSeeApprovalMetadataInList`/`effectiveListLeagueID`'s doc comments.
+- **`GET /api/matches/{id}/rounds`** stays fully public and always `200`
+  (never gated outright, to preserve "public schedule information remains
+  public") -- it returns an empty list instead of the real round data for
+  an unauthorized caller on a draft/in-progress match (not yet
+  `completed && week_closed`), and the full list once final or for an
+  authorized caller (same admin-or-eligible-player check as the detail
+  route, via `canSeeMatchDraftDetailWithLeague`). `RoundResult` carries no
+  approval-metadata fields at all, so there is no analogous metadata-vs-
+  finality split to make here.
+- **`GET /api/matches/{id}/approval`** and **`GET .../approval-events`**
+  are new, genuinely protected routes (`401`/`403`/`404`, not a graceful
+  degrade) -- admin scoped to the league, or an eligible session player
+  for either side of that specific match. History remains append-only;
+  no generic audit infrastructure was added.
+
+### Collateral fixes found during this phase
+
+1. **`approveMatch`'s acting-user attribution was silently broken in every
+   real deployment.** `approvingUserID` read a context key
+   (`clearanceUserKey`) only `requirePersonalKeyAuth` ever sets, but this
+   route is gated by `guardedLeagueAdminAction`, which routes through
+   `requireAction` (a different context key) whenever any real auth is
+   wired -- meaning `approved_by_user_id` was never actually populated via
+   this route outside of legacy-only test fixtures. Fixed with a new
+   `acceptingUserID` that prefers `identityFromContext`, falling back to
+   the old behavior only for those legacy fixtures.
+2. **`writeMatchApprovalErr` had no `domainerr.InvalidInput` case**,
+   silently mapping it to `500` -- never exercised before this phase since
+   no route wired to it previously produced that category. Added the
+   `400` case; this also fixes the new team-approval routes'
+   `CodeApprovalInvalidSide`/`CodeApprovalNoteRequired` mapping.
+3. **`submitResults`/`clearResults`/`saveRounds` previously mapped any
+   non-`Conflict` `domainerr` (e.g. a genuine `NotFound`) to a generic
+   `500`.** Switching these three handlers to the revision-aware service
+   methods and `writeMatchApprovalErr` is a strict improvement (a
+   not-found match now correctly returns `404`), not a behavior change
+   any existing test depended on.
+
+### Files changed
+
+`backend/domains/auth/{identity,authz}.go` (AuthMethod, new Actions);
+`handlers/api_auth_middleware.go` (AuthMethod population);
+`handlers/deps.go` (RoundManager interface extended with the Phase 1B-
+relevant Phase 1A methods); `models/models.go`
+(`MatchApprovalSnapshot`/`TeamSideApprovalSnapshot`, `ExpectedRevision` on
+`SaveRoundsRequest`/`SubmitResultsRequest`, new `ClearResultsRequest`);
+`handlers/api_match_approval_auth.go` (new -- the player/admin
+authorization gates); `handlers/api_match_approval_{routes,handlers}.go`
+(new -- the four team-approval routes plus the two protected reads);
+`handlers/api_match_results_{routes,handlers}.go` (rewired
+results/rounds/approve routes); `handlers/api_match_{routes,handlers}.go`
+(list/detail field stripping and draft-round gating); plus test-file
+updates for the new `RoundManager` methods and the `/approve` contract
+change (`api_clearance_auth_test.go`, `api_match_approval_test.go`,
+`api_match_auth_test.go`) and one new integration test file
+(`api_match_approval_phase1b_test.go`, 29 tests).
+
+### PM correction round (2026-09-30)
+
+PM review of the initial Phase 1B implementation above found three
+authorization/privacy defects, all corrected in place in the sections
+above:
+
+1. **`ActionMatchTeamApproval` inherited the unconditional `system_admin`
+   bypass**, so a `system_admin` identity could approve/withdraw/request-
+   correction for a team side without ever being a real, session-
+   authenticated, eligible player -- exactly the masquerade path Phase 1B
+   was designed to prevent. Fixed by evaluating `ActionMatchTeamApproval`
+   in `auth.Authorize` BEFORE the `system_admin` shortcut, not as a case
+   inside the switch the shortcut already bypasses -- see "New
+   `auth.Action`s" above and `Authorize`'s own doc comment.
+2. **`canSeeApprovalMetadataInList` (`GET /api/matches`) granted ANY
+   authenticated `league_admin` visibility into every league's approval
+   metadata**, including leagues they do not administer, whenever the
+   request carried no `season_id`/`league_id` filter. Fixed by scoping the
+   check to the request's EFFECTIVE filter (mirroring
+   `MatchStore.ListMatches`'s own season-id-wins-over-league-id
+   precedence via the new `effectiveListLeagueID` helper) -- an unfiltered
+   request now exposes metadata only to `system_admin`.
+3. **`GET /api/matches/{id}` stripped approval metadata and draft results
+   together, guarded only by "not yet final,"** so a final
+   (`completed && week_closed`) match leaked `approved_by_user_id`/
+   `approval_note`/`processed_by_user_id` to every public caller. Fixed by
+   splitting the two checks: `Results` still follows the final-vs-draft
+   rule, but approval metadata is now stripped whenever the caller is
+   unauthorized, regardless of finality.
+
+A fourth, documentation-only correction fixed the `MatchApprovalSnapshot`
+JSON example above, which showed `approved_at`/`processed_at` as `null`
+and `correction_note` as `""` -- both fields are `omitempty` on their Go
+types, so a nil/zero value is OMITTED from the response, never serialized
+as `null` or `""`. The example now matches the actual wire shape.
+
+New tests added for all three authorization/privacy corrections -- see
+Verification below.
+
+### Verification
+
+`go build ./...` and `go test ./... -count=1` pass with zero regressions.
+`go vet ./...` was run and is **not** fully clean -- it reports the same
+four pre-existing warnings from Phase 1A
+(`handlers/api_season_teams_test.go:455,1216`,
+`handlers/api_weeks_test.go:1271,1313`); this branch introduces no new
+`go vet` finding. `git diff --check` and an ASCII byte-scan on every
+added/changed line are both clean.
+
+### Explicit Phase 1B exclusions
+
+No frontend approval controls or forms, no captain role, no self-
+registration/email verification, no notifications, no mobile work, no
+generic audit framework, no handicap formula change. Player UI (Phase
+1C), admin UI integration for the new `/approve` contract (Phase 1D), and
+staging/browser verification all remain outstanding. `MATCHES-Q002` is
+advanced further, not resolved -- see Roadmap.
+
 ## Decision History
+
+### 2026-09-30 - Player Score Approval Phase 1B: PM correction round (authorization and privacy)
+
+**Status:** `accepted`
+
+PM review of the 2026-09-30 Phase 1B entry below found three
+authorization/privacy defects, all stemming from the same class of
+mistake: a check that was too broad (an unconditional role bypass, an
+unscoped admin check, a finality guard covering two unrelated
+concerns). Corrected:
+
+1. `ActionMatchTeamApproval` no longer inherits the unconditional
+   `system_admin` bypass in `auth.Authorize` -- team approval requires an
+   actual browser session and a linked, eligible player, with no role-only
+   shortcut for any identity, `system_admin` included.
+2. `GET /api/matches`'s approval-metadata visibility is now scoped to the
+   request's effective `season_id`/`league_id` filter (mirroring the
+   store's own filter precedence), not granted to any authenticated
+   league_admin regardless of which league(s) they actually administer.
+3. `GET /api/matches/{id}` now strips approval metadata independently of
+   whether the match is final -- a closed match's final results remain
+   public; who approved it does not.
+
+See "PM correction round (2026-09-30)" under "Player Score Approval Phase
+1B" above for full detail, and its Verification subsection for the new
+regression tests.
+
+### 2026-09-30 - Player Score Approval Phase 1B: routes, session authorization, and protected reads
+
+**Status:** `accepted`
+
+Made Phase 1A's data model and atomic guards reachable through HTTP:
+four player-scoped team-approval mutation routes (session-only, no
+personal-API-key or static-token masquerade), the `/approve` route
+rewired onto `AdminAcceptMatch`'s explicit `expected_revision`/`override`
+contract (a deliberate breaking change for that one route, since the
+existing frontend button does not send it yet), player-authenticated
+score writes on the existing rounds/results routes with mandatory
+`expected_revision`, two new protected reads
+(`GET .../approval[-events]`), and a read-authorization matrix that also
+closes a real pre-existing gap (admin approval metadata was public via
+`GET /api/matches[/{id}]` since Weekly Score Processing Phase 1A). See
+"Player Score Approval Phase 1B" above for full detail. Advances
+`MATCHES-Q002`; does not resolve it -- player UI, admin UI integration,
+and staging verification remain.
 
 ### 2026-09-28 - Player Score Approval Phase 1A: complete-snapshot admin guard and live substitute error mapping
 

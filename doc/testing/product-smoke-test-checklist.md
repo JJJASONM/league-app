@@ -2,7 +2,7 @@
 
 **Owner:** Product test readiness
 **Status:** staging run complete 2026-08-23 -- see Staging Run Results
-**Last reviewed:** 2026-08-23
+**Last reviewed:** 2026-09-30
 
 Purpose: give an admin tester a pass/fail path through the widest useful
 slice of the app before more feature work is added, on staging or a local
@@ -638,6 +638,28 @@ All UI/rendering checks (Match Entry approve/process buttons, Schedule
 week-card status badges) remain out of scope for this pass -- Phase 1A is
 backend-only by design, and Phase 1C has not shipped yet, so there is
 nothing to verify in the browser for this feature.
+
+**Player Score Approval Phase 1B -- routes, session authorization, and
+protected reads (implemented 2026-09-30, NOT staging-verified).** Backend-
+only, same as Phase 1A above; not run against staging as part of this
+checklist. Flagged here specifically because it changes the request
+contract this section's own check #2 exercised:
+
+- **`POST /api/matches/{id}/approve` now requires `expected_revision`**
+  and an explicit `override` when team approvals are missing --
+  `{"note": "..."}"` alone (what check #2 above sent, and what the current
+  Match Entry Approve button still sends) now returns `400`, not `200`.
+  **Do not deploy this branch alone if the current admin Approve button
+  must keep working** -- admin UI integration for the new contract is
+  Phase 1D's job. The `/process`, `/unapprove`, `/unprocess` routes and
+  their existing UI are unchanged.
+- Four new routes (`/approve-home`, `/approve-away`, `/withdraw-approval`,
+  `/request-correction`) and two new protected reads (`GET .../approval`,
+  `GET .../approval-events`) exist but have no UI yet (Phase 1C) --
+  nothing to check in a browser for them.
+- `MATCHES-Q002` is advanced further by Phase 1B, not resolved -- see
+  `doc/domains/matches/README.md`'s "Player Score Approval Phase 1B"
+  section and `doc/roadmap.md`'s Now section.
 
 ### 11. Close / Reopen Week
 

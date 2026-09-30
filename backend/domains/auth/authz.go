@@ -26,6 +26,42 @@ const (
 	ActionHandicapApply       Action = "handicap_apply"
 	ActionPlayerOverviewOwn   Action = "player_overview_own"
 	ActionPlayerOverviewOther Action = "player_overview_other"
+
+	// ActionMatchTeamApproval is Player Score Approval Phase 1B's
+	// player-scoped team-side action: approve, withdraw, or request
+	// correction for one side of a match. Authorize deliberately checks
+	// only the CREDENTIAL shape here (an active password session, a linked
+	// player) -- per-match, per-side eligibility is a domain fact
+	// (matches.RoundStore.ResolveApprovalEligibility) that a pure,
+	// database-free policy function cannot evaluate, and the Phase 1A
+	// service methods this action guards (ApproveTeamSide,
+	// WithdrawTeamApproval, RequestCorrection) already enforce it
+	// authoritatively and report the exact domain status (not found,
+	// ineligible, stale revision, locked) themselves.
+	//
+	// PM correction: this action has NO admin bypass of any kind, not even
+	// the otherwise-unconditional system_admin shortcut every other action
+	// gets. Authorize evaluates ActionMatchTeamApproval BEFORE that
+	// shortcut (see Authorize's own doc comment and implementation) --
+	// role membership alone, including system_admin, must never authorize
+	// a player-scoped action. A system_admin (or any other identity) may
+	// use this action only by being signed in through an actual browser
+	// session AND holding a linked, eligible player -- at that point they
+	// are authorized as that player, not as an administrator. A
+	// league/system administrator who needs to act without both team
+	// approvals uses AdminAcceptMatch's own override contract on the
+	// existing acceptance route instead of masquerading as a player.
+	ActionMatchTeamApproval Action = "match_team_approval"
+
+	// ActionMatchApprovalRead is Player Score Approval Phase 1B's
+	// protected read for a match's approval snapshot/history and for
+	// draft/in-progress round and result detail that is not yet public
+	// (see the matches domain's read-authorization matrix). Scoped like
+	// every other league-scoped admin action; a linked player's own
+	// eligibility-based read access is layered on top at the HTTP layer,
+	// the same way ActionMatchTeamApproval's eligibility is, since it is
+	// likewise a database fact this pure policy function cannot evaluate.
+	ActionMatchApprovalRead Action = "match_approval_read"
 )
 
 // Scope names the resource an Action targets. LeagueID is the authoritative
@@ -44,7 +80,12 @@ type Scope struct {
 // case is deliberately simple and reviewable in one place:
 //
 //   - An inactive identity is never authorized, for any action.
-//   - system_admin is allowed everywhere, unconditionally.
+//   - ActionMatchTeamApproval is evaluated BEFORE the system_admin
+//     shortcut below -- see that Action's own doc comment. This is the
+//     one deliberate exception to the next rule: team approval is a
+//     player-scoped action a role can never satisfy on its own, session
+//     or not.
+//   - system_admin is allowed everywhere else, unconditionally.
 //   - Global (non-league-scoped) admin actions require system_admin.
 //   - League-scoped admin actions require system_admin OR league_admin
 //     for that exact league -- there is no partial/inherited scope.
@@ -57,6 +98,17 @@ func Authorize(identity Identity, action Action, scope Scope) bool {
 	if !identity.Active {
 		return false
 	}
+
+	// PM correction: ActionMatchTeamApproval must not inherit the
+	// system_admin bypass below -- team approval requires an active
+	// browser session AND a linked, eligible player, full stop. Checking
+	// this before the bypass (rather than as a case inside the switch,
+	// which the bypass would already have short-circuited past) is what
+	// makes that true even for a system_admin identity.
+	if action == ActionMatchTeamApproval {
+		return identity.AuthMethod == AuthMethodSession && identity.IsPlayer()
+	}
+
 	if identity.IsSystemAdmin() {
 		return true
 	}
@@ -75,6 +127,7 @@ func Authorize(identity Identity, action Action, scope Scope) bool {
 		ActionLineupMutate,
 		ActionMatchScoreMutate,
 		ActionMatchApproval,
+		ActionMatchApprovalRead,
 		ActionWeekCloseReopen,
 		ActionFinanceRead,
 		ActionFinanceWrite,

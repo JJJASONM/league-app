@@ -55,7 +55,9 @@ func resolveIdentity(r *http.Request, deps Dependencies) (*auth.Identity, *auth.
 			return nil, nil, err
 		}
 		if resolved != nil {
-			return &resolved.Identity, &resolved.Session, nil
+			identity := resolved.Identity
+			identity.AuthMethod = auth.AuthMethodSession
+			return &identity, &resolved.Session, nil
 		}
 		// Session cookie present but expired/invalid: fall through to a
 		// Bearer key, matching "the Admin Key remains the fallback when no
@@ -107,10 +109,11 @@ func resolveIdentity(r *http.Request, deps Dependencies) (*auth.Identity, *auth.
 // otherwise express without a real per-league assignment.
 func buildIdentityFromLegacyUser(ctx context.Context, user *models.User, deps Dependencies) (auth.Identity, error) {
 	identity := auth.Identity{
-		UserID:   user.ID,
-		Username: user.Username,
-		Active:   user.Active,
-		PlayerID: user.PlayerID,
+		UserID:     user.ID,
+		Username:   user.Username,
+		Active:     user.Active,
+		PlayerID:   user.PlayerID,
+		AuthMethod: auth.AuthMethodAPIKey,
 	}
 	if deps.RoleAssignmentMgr != nil {
 		assignments, err := deps.RoleAssignmentMgr.ListForUser(ctx, user.ID)

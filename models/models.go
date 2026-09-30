@@ -403,6 +403,39 @@ type RoundResult struct {
 	PairingWinner string `json:"pairing_winner,omitempty"` // "home"|"away"|""
 }
 
+// MatchApprovalSnapshot is Player Score Approval Phase 1B's protected
+// response shape for a match's current team-approval state: the resulting
+// authoritative snapshot returned by every team-approval mutation route
+// (approve-home/away, withdraw-approval, request-correction) and by the
+// dedicated GET .../approval read. Deliberately never served through any
+// PUBLIC route -- callers reaching it are always either a scoped
+// administrator or an eligible linked player using a password session for
+// this specific match, so including per-side actor/note attribution here
+// does not violate the read-authorization matrix's "approval actors and
+// correction notes are not public" rule.
+type MatchApprovalSnapshot struct {
+	MatchID       int64                    `json:"match_id"`
+	ScoreRevision int                      `json:"score_revision"`
+	Completed     bool                     `json:"completed"`
+	ApprovedAt    *string                  `json:"approved_at,omitempty"`
+	ProcessedAt   *string                  `json:"processed_at,omitempty"`
+	Home          TeamSideApprovalSnapshot `json:"home"`
+	Away          TeamSideApprovalSnapshot `json:"away"`
+}
+
+// TeamSideApprovalSnapshot is one side's current approval state within a
+// MatchApprovalSnapshot. ActorUserID is deliberately omitted -- it is an
+// internal id with no display value to a player-facing client; ActorPlayerID
+// and ActorNameSnapshot are what a UI needs to show who acted.
+type TeamSideApprovalSnapshot struct {
+	State              string  `json:"state"`
+	StateAt            *string `json:"state_at,omitempty"`
+	ActorPlayerID      *int64  `json:"actor_player_id,omitempty"`
+	ActorNameSnapshot  string  `json:"actor_name_snapshot,omitempty"`
+	StateScoreRevision *int    `json:"state_score_revision,omitempty"`
+	CorrectionNote     string  `json:"correction_note,omitempty"`
+}
+
 // MatchApprovalEvent is one append-only row from Player Score Approval
 // Phase 1A's match_approval_events history. EventScope is "home", "away",
 // or "match" (an admin-level acceptance/override that does not belong to
@@ -674,8 +707,13 @@ type WeekRecap struct {
 }
 
 // SaveRoundsRequest is the body for POST /api/matches/{id}/rounds.
+// ExpectedRevision is Player Score Approval Phase 1B: mandatory for an
+// eligible linked player's session-authenticated write, optional (and
+// commonly omitted) for the existing admin path, which retains its
+// current optional-revision compatibility.
 type SaveRoundsRequest struct {
-	Rounds []RoundResult `json:"rounds"`
+	Rounds           []RoundResult `json:"rounds"`
+	ExpectedRevision *int          `json:"expected_revision,omitempty"`
 }
 
 // AssignMatchTeamsRequest is the body for PATCH /api/matches/{id}/assign.
@@ -685,8 +723,22 @@ type AssignMatchTeamsRequest struct {
 }
 
 // SubmitResultsRequest is the body for POST /api/matches/{id}/results.
+// ExpectedRevision is Player Score Approval Phase 1B: mandatory for an
+// eligible linked player's session-authenticated write, optional for the
+// existing admin path (unchanged compatibility).
 type SubmitResultsRequest struct {
-	Results []MatchResult `json:"results"`
+	Results          []MatchResult `json:"results"`
+	ExpectedRevision *int          `json:"expected_revision,omitempty"`
+}
+
+// ClearResultsRequest is the optional body for DELETE
+// /api/matches/{id}/results. The existing admin path sends no body at all
+// (a bodyless DELETE decodes to a zero-value ClearResultsRequest, matching
+// its historical behavior exactly); an eligible linked player's session-
+// authenticated clear must supply ExpectedRevision (Player Score Approval
+// Phase 1B).
+type ClearResultsRequest struct {
+	ExpectedRevision *int `json:"expected_revision,omitempty"`
 }
 
 // LineupPlan records a player's planned lineup slot for a match week (pre-game).

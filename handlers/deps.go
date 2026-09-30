@@ -144,6 +144,28 @@ type RoundManager interface {
 	ProcessMatch(ctx context.Context, matchID int64, processedByUserID *int64) error
 	UnapproveMatch(ctx context.Context, matchID int64) error
 	UnprocessMatch(ctx context.Context, matchID int64) error
+
+	// Player Score Approval Phase 1B: revision-aware score writes, exposed
+	// alongside (never replacing) the compatibility methods above so the
+	// existing admin routes' contracts stay byte-for-byte unchanged.
+	SaveRoundsWithRevision(ctx context.Context, input matches.SaveRoundsInput) (int, error)
+	SubmitResultsWithRevision(ctx context.Context, matchID int64, results []models.MatchResult, expectedRevision *int) (int, error)
+	ClearResultsWithRevision(ctx context.Context, matchID int64, expectedRevision *int) (int, error)
+
+	// Player Score Approval Phase 1B: team-side approval actions and the
+	// admin acceptance/override primitive, plus the read operations the new
+	// protected routes and read-authorization matrix need. Handlers never
+	// duplicate the eligibility, transition, or atomicity logic these
+	// delegate to -- see backend/domains/matches/team_approval_service.go
+	// and approval_service.go.
+	ApproveTeamSide(ctx context.Context, matchID int64, side string, expectedRevision int, actor matches.ApprovalActor) error
+	WithdrawTeamApproval(ctx context.Context, matchID int64, side string, expectedRevision int, actor matches.ApprovalActor) error
+	RequestCorrection(ctx context.Context, matchID int64, side string, expectedRevision int, note string, actor matches.ApprovalActor) error
+	GetApprovalSnapshot(ctx context.Context, matchID int64) (matches.MatchApprovalState, error)
+	ListApprovalEvents(ctx context.Context, matchID int64) ([]models.MatchApprovalEvent, error)
+	BothSidesApproved(ctx context.Context, matchID int64) (bool, error)
+	ResolveApprovalEligibility(ctx context.Context, matchID int64, side string, playerID int64) (bool, error)
+	AdminAcceptMatch(ctx context.Context, matchID int64, approvedByUserID *int64, note string, override bool, expectedRevision int) error
 }
 
 // MatchManager handles match listing, detail retrieval, and team assignment.

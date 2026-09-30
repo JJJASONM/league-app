@@ -215,6 +215,14 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		registerMatchResultsRoutes(mux, deps, deps.RoundMgr, seasonMgr, deps.MatchMgr)
 	}
 
+	// Player Score Approval Phase 1B: team-side approval mutation routes
+	// and protected approval reads, live in api_match_approval_routes.go.
+	// Requires both RoundMgr (the Phase 1A service methods) and MatchMgr
+	// (match -> season -> league scope resolution for the read routes).
+	if deps.RoundMgr != nil && deps.MatchMgr != nil {
+		registerMatchApprovalRoutes(mux, deps, deps.RoundMgr, deps.MatchMgr, seasonMgr)
+	}
+
 	// Season close, close-preview, and reopen route registration live in
 	// api_season_close_routes.go. Requires both WeekMgr (ListWeeks) and
 	// RoundMgr (GetStandings).

@@ -4,8 +4,8 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.12`
-**Last reviewed:** `2026-09-03`
+**Current version:** `0.13`
+**Last reviewed:** `2026-09-30`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
@@ -1465,6 +1465,44 @@ tracing `applyWorkspace`'s call sites and the new `admin-workspace-nav-item`
 class's coverage against every nav element in `web/index.html`, not by
 an automated test or by opening a browser. Browser verification was not
 performed or claimed for any part of this round.
+
+## Player Score Approval Phase 1B -- AuthMethod addition (2026-09-30)
+
+Player Score Approval Phase 1B (see `doc/domains/matches/README.md`)
+needed the auth stack to distinguish HOW a request authenticated, not
+just who it is -- specifically, so a player-scoped action (team-side
+approve/withdraw/correction-request, player-authenticated score writes)
+could require an active password session and reject a personal API key
+even when that key's user has a linked player. This domain's `auth.Identity`
+is the shared source of truth for every consumer, so the addition lives
+here.
+
+**Exact behavior added:**
+- `auth.Identity` gained an `AuthMethod` field: a stable controlled code
+  (`AuthMethodSession`, `AuthMethodAPIKey`, `AuthMethodStaticToken`) naming
+  the credential that actually authenticated the request. `handlers.
+  resolveIdentity` sets `AuthMethodSession` when its session-cookie branch
+  resolves, and `buildIdentityFromLegacyUser` sets `AuthMethodAPIKey` for
+  every Bearer-key-resolved identity. Neither branch's existing
+  resolution order or fallback behavior (session beats a stored Bearer
+  key -- see the round 3 credential-precedence entry below) changed.
+- `AuthMethodStaticToken` is defined for completeness (matches domains
+  consuming this field can name every credential type) but is never
+  actually attached to an `Identity`: the static `LEAGUE_ADMIN_TOKEN`
+  bootstrap credential (`handlers.staticTokenBypass`) remains a
+  genuinely separate bypass that never becomes an `Identity`, unchanged
+  from every prior phase.
+- `auth.Authorize` gained one new case consuming it directly:
+  `ActionMatchTeamApproval` requires
+  `identity.AuthMethod == AuthMethodSession && identity.IsPlayer()`. No
+  existing `Action` case was changed -- `AuthMethod` was purely additive
+  to the `Identity` struct and to `Authorize`'s switch, so every existing
+  authorization decision (session or Bearer key, for every pre-existing
+  `Action`) is byte-for-byte unchanged.
+
+This is a general-purpose identity field, not a matches-domain-specific
+concept -- any future player-scoped or session-only action can consume it
+the same way without another `Identity` change.
 
 ### 2026-07-18 - Roles follow clearance workflows
 

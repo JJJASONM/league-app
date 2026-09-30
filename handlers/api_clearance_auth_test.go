@@ -78,6 +78,42 @@ func (n *noopRoundMgr) ProcessMatch(_ context.Context, _ int64, _ *int64) error 
 func (n *noopRoundMgr) UnapproveMatch(_ context.Context, _ int64) error         { return nil }
 func (n *noopRoundMgr) UnprocessMatch(_ context.Context, _ int64) error        { return nil }
 
+// --- Player Score Approval Phase 1B additions ---
+
+func (n *noopRoundMgr) SaveRoundsWithRevision(_ context.Context, _ matches.SaveRoundsInput) (int, error) {
+	return 0, nil
+}
+func (n *noopRoundMgr) SubmitResultsWithRevision(_ context.Context, _ int64, _ []models.MatchResult, _ *int) (int, error) {
+	return 0, nil
+}
+func (n *noopRoundMgr) ClearResultsWithRevision(_ context.Context, _ int64, _ *int) (int, error) {
+	return 0, nil
+}
+func (n *noopRoundMgr) ApproveTeamSide(_ context.Context, _ int64, _ string, _ int, _ matches.ApprovalActor) error {
+	return nil
+}
+func (n *noopRoundMgr) WithdrawTeamApproval(_ context.Context, _ int64, _ string, _ int, _ matches.ApprovalActor) error {
+	return nil
+}
+func (n *noopRoundMgr) RequestCorrection(_ context.Context, _ int64, _ string, _ int, _ string, _ matches.ApprovalActor) error {
+	return nil
+}
+func (n *noopRoundMgr) GetApprovalSnapshot(_ context.Context, _ int64) (matches.MatchApprovalState, error) {
+	return matches.MatchApprovalState{}, nil
+}
+func (n *noopRoundMgr) ListApprovalEvents(_ context.Context, _ int64) ([]models.MatchApprovalEvent, error) {
+	return []models.MatchApprovalEvent{}, nil
+}
+func (n *noopRoundMgr) BothSidesApproved(_ context.Context, _ int64) (bool, error) {
+	return false, nil
+}
+func (n *noopRoundMgr) ResolveApprovalEligibility(_ context.Context, _ int64, _ string, _ int64) (bool, error) {
+	return false, nil
+}
+func (n *noopRoundMgr) AdminAcceptMatch(_ context.Context, _ int64, _ *int64, _ string, _ bool, _ int) error {
+	return nil
+}
+
 // clearanceDeps returns Dependencies with personal-key auth wired and all required
 // managers set to noops. The four clearance routes are mounted with auth because
 // ApplyAuth is non-nil.

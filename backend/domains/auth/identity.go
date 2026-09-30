@@ -27,11 +27,38 @@ type Assignment struct {
 	LeagueID *int64
 }
 
+// AuthMethod names the credential that actually authenticated a request --
+// not who the identity is, but HOW it was proven (Player Score Approval
+// Phase 1B). Authorize consults this for player-scoped actions where a
+// personal API key or the static bootstrap token must never suffice, even
+// when the key's user has a linked player: "an active password session" is
+// a claim about the credential itself, not something derivable from
+// Identity.PlayerID alone. Values are stable controlled codes, not display
+// labels.
+type AuthMethod string
+
+const (
+	// AuthMethodSession is an active, cookie-based password session
+	// resolved via SessionService.ResolveSession.
+	AuthMethodSession AuthMethod = "session"
+	// AuthMethodAPIKey is a personal Bearer API key resolved via
+	// ApplyAuthResolver.ResolveApplyUserByAPIKey.
+	AuthMethodAPIKey AuthMethod = "api_key"
+	// AuthMethodStaticToken identifies the static LEAGUE_ADMIN_TOKEN
+	// bootstrap credential. Reserved for completeness -- the static token
+	// remains a genuinely separate bypass (see handlers.staticTokenBypass)
+	// that never becomes an Identity, so this value is never actually
+	// attached to one; it exists so callers reasoning about "every
+	// possible authentication method" have a name for it.
+	AuthMethodStaticToken AuthMethod = "static_token"
+)
+
 // Identity is the full, resolved set of facts about who is making a
-// request: their account, their linked player (if any), and every scoped
-// role they hold. It is built once per request (at login, or when a
-// session/API key resolves) and is the only input Authorize needs beyond
-// the action and its target scope.
+// request: their account, their linked player (if any), every scoped role
+// they hold, and (Phase 1B) which credential actually authenticated this
+// request. It is built once per request (at login, or when a session/API
+// key resolves) and is the only input Authorize needs beyond the action
+// and its target scope.
 type Identity struct {
 	UserID      int64
 	Username    string
@@ -40,6 +67,13 @@ type Identity struct {
 	PlayerID    *int64
 	PlayerName  string
 	Assignments []Assignment
+	// AuthMethod is the credential that authenticated this request. Set by
+	// the HTTP layer (handlers.resolveIdentity/buildIdentityFromLegacyUser),
+	// never by SessionService.buildIdentity itself -- the session service
+	// has no way to know what dual-tier wrapper is calling it, so
+	// attaching this per credential-resolution call site is the one
+	// correct place to set it.
+	AuthMethod AuthMethod
 }
 
 // IsSystemAdmin reports whether this identity holds the global system_admin

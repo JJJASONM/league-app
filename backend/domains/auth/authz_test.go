@@ -129,3 +129,73 @@ func TestAuthorize_DualRoleUnionsPermissions(t *testing.T) {
 		t.Error("want dual-role identity authorized for its player capability")
 	}
 }
+
+// --- ActionMatchTeamApproval: no role-based bypass, session+linked-player only ---
+//
+// PM correction (2026-09-30): the first implementation let system_admin's
+// unconditional bypass satisfy this action before ever checking
+// AuthMethod/PlayerID. These tests pin the corrected behavior: role
+// membership (including system_admin) never substitutes for an actual
+// browser session with a linked player.
+
+func TestAuthorize_MatchTeamApproval_SystemAdminRoleAlone_Denied(t *testing.T) {
+	id := systemAdmin() // AuthMethod zero-value (not Session); no linked player
+	if auth.Authorize(id, auth.ActionMatchTeamApproval, auth.Scope{}) {
+		t.Error("want system_admin role alone (no session, no linked player) denied ActionMatchTeamApproval")
+	}
+}
+
+func TestAuthorize_MatchTeamApproval_SystemAdminAPIKeyLinkedPlayer_Denied(t *testing.T) {
+	id := systemAdmin()
+	id.PlayerID = ptr(5)
+	id.AuthMethod = auth.AuthMethodAPIKey
+	if auth.Authorize(id, auth.ActionMatchTeamApproval, auth.Scope{}) {
+		t.Error("want a system_admin's personal API key, even linked to an eligible player, denied ActionMatchTeamApproval")
+	}
+}
+
+func TestAuthorize_MatchTeamApproval_SystemAdminSessionNoLinkedPlayer_Denied(t *testing.T) {
+	id := systemAdmin()
+	id.AuthMethod = auth.AuthMethodSession
+	if auth.Authorize(id, auth.ActionMatchTeamApproval, auth.Scope{}) {
+		t.Error("want a system_admin browser session with no linked player denied ActionMatchTeamApproval")
+	}
+}
+
+func TestAuthorize_MatchTeamApproval_SystemAdminSessionLinkedPlayer_Allowed(t *testing.T) {
+	id := systemAdmin()
+	id.PlayerID = ptr(5)
+	id.AuthMethod = auth.AuthMethodSession
+	if !auth.Authorize(id, auth.ActionMatchTeamApproval, auth.Scope{}) {
+		t.Error("want a system_admin browser session linked to an eligible player allowed ActionMatchTeamApproval (authorized as that player, not as an administrator)")
+	}
+}
+
+func TestAuthorize_MatchTeamApproval_PlainPlayerSession_Allowed(t *testing.T) {
+	id := plainPlayer(7)
+	id.AuthMethod = auth.AuthMethodSession
+	if !auth.Authorize(id, auth.ActionMatchTeamApproval, auth.Scope{}) {
+		t.Error("want a plain linked player's browser session allowed ActionMatchTeamApproval")
+	}
+}
+
+func TestAuthorize_MatchTeamApproval_PlainPlayerAPIKey_Denied(t *testing.T) {
+	id := plainPlayer(7)
+	id.AuthMethod = auth.AuthMethodAPIKey
+	if auth.Authorize(id, auth.ActionMatchTeamApproval, auth.Scope{}) {
+		t.Error("want a linked player's personal API key denied ActionMatchTeamApproval")
+	}
+}
+
+func TestAuthorize_MatchTeamApproval_StaticTokenNeverBuildsAnIdentity(t *testing.T) {
+	// AuthMethodStaticToken is never actually attached to an Identity (the
+	// static bootstrap token is a separate bypass that never becomes one --
+	// see Identity.AuthMethod's doc comment). This test documents that
+	// invariant: even the zero-value identity with the static-token method
+	// value directly set (a shape that never occurs in real request
+	// handling) is still denied, since it is not AuthMethodSession.
+	id := auth.Identity{UserID: 9, Active: true, PlayerID: ptr(7), AuthMethod: auth.AuthMethodStaticToken}
+	if auth.Authorize(id, auth.ActionMatchTeamApproval, auth.Scope{}) {
+		t.Error("want AuthMethodStaticToken denied ActionMatchTeamApproval")
+	}
+}

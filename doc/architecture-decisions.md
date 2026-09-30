@@ -1,7 +1,7 @@
 # League App Architecture Decisions
 
 **Status:** Target design
-**Last reviewed:** 2026-09-29
+**Last reviewed:** 2026-09-30
 
 This document consolidates approved product and architecture decisions. It
 describes the target model, not necessarily the schema currently implemented in
@@ -672,3 +672,46 @@ purposes. This mirrors, and generalizes, `handicap_history.
 player_name_snapshot`'s existing pre-merge/pre-rename readability
 purpose, and the established no-FK attribution convention already used
 by `matches.approved_by_user_id`/`handicap_history.applied_by_user_id`.
+
+### 2026-09-30 - A player-scoped action requires an active session; a personal API key or static token never suffices
+
+**Status:** `accepted`
+
+Player Score Approval Phase 1B (`doc/domains/matches/README.md`) is the
+first feature where an action's authorization depends not only on WHO the
+caller is but on HOW they authenticated: an eligible linked player may
+approve, withdraw, or request a correction for their team's side, or make
+a player-authenticated score write, only through an active password
+session. A personal API key belonging to that same player's linked user
+account must not authorize the action, and neither may the static
+`LEAGUE_ADMIN_TOKEN` bootstrap credential -- both remain fully valid for
+their existing, distinct purposes (personal-key admin/automation access,
+static-token bootstrap), just never as a substitute for "this specific
+human is sitting at their own browser session right now."
+
+**Decision:** a domain that needs this distinction consumes
+`auth.Identity.AuthMethod` (see `doc/domains/users/README.md`'s
+2026-09-30 entry) directly in its `auth.Authorize` case, or in a
+purpose-built HTTP-layer gate when the check also depends on a database
+fact `Authorize` cannot evaluate (e.g. per-match player eligibility).
+`AuthMethod` is a general identity field, not a matches-domain concept --
+any future domain with its own "must be an actual logged-in person, not
+an automation credential" action reuses the same field rather than
+inventing a parallel signal.
+
+**Correction (2026-09-30, same day):** the first implementation of
+`ActionMatchTeamApproval` checked `AuthMethod` inside `Authorize`'s normal
+per-action `switch`, which `Authorize`'s unconditional `system_admin`
+bypass runs BEFORE -- so a `system_admin` identity satisfied the action
+through role membership alone, exactly the credential-type bypass this
+decision exists to prevent. A session-only/player-only action must be
+checked before any role-based shortcut, not as an ordinary case inside
+it; see `doc/domains/matches/README.md`'s 2026-09-30 PM correction round
+entry for the fix.
+
+This complements, and does not replace, the existing credential-
+precedence rule (session beats a stored Bearer key when both are
+present) recorded in `doc/domains/users/README.md`: precedence decides
+WHICH credential wins when more than one is presented; `AuthMethod`
+lets a policy decision refuse to honor a credential type at all for a
+specific action, regardless of precedence.
