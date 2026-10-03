@@ -51,14 +51,29 @@ function loadSection(sec) {
     case 'entry':
       {
         const preselect = appContext.consumeEntryPreselect();
-        document.querySelector('match-entry-page')?.refresh(
-          state.allSeasons,
-          state.activeSeason,
-          state.allPlayers,
-          state.activeLeague,
-          preselect.seasonId,
-          preselect.matchId
-        );
+        const entryEl = document.querySelector('match-entry-page');
+        if (preselect.playerContext) {
+          // Player Score Approval Phase 1C: opened from "My Matches" for a
+          // linked player -- never pass the shell's admin-selected
+          // league/season/player list, which may have nothing to do with
+          // this player's own league.
+          entryEl?.refreshForPlayer(
+            preselect.playerContext.playerId,
+            preselect.matchId,
+            preselect.seasonId,
+            preselect.playerContext.eligibleHome,
+            preselect.playerContext.eligibleAway
+          );
+        } else {
+          entryEl?.refresh(
+            state.allSeasons,
+            state.activeSeason,
+            state.allPlayers,
+            state.activeLeague,
+            preselect.seasonId,
+            preselect.matchId
+          );
+        }
       }
       break;
     case 'standings': document.querySelector('standings-section')?.refresh(state.allSeasons); break;
@@ -79,6 +94,14 @@ function loadSection(sec) {
         // for this role anyway) triggered the navigation.
         isPlayerRole(state.currentIdentity) ? state.currentIdentity.player_id : null
       );
+      break;
+    case 'my-matches':
+      // Player Score Approval Phase 1C: "My Matches" resolves its own
+      // player/league/season context server-side from currentIdentity's
+      // linked player_id -- never from state.activeSeason/activeLeague,
+      // which reflect whatever league an admin last selected and may have
+      // nothing to do with this player's own league.
+      document.querySelector('my-matches-page')?.refresh(state.currentIdentity);
       break;
     case 'weekly-summary':
       document.querySelector('weekly-summary-page')?.refresh(state.allSeasons, state.activeSeason);
@@ -150,6 +173,23 @@ function openPlayerOverview(playerId) {
   appContext.setOverviewPreselect(playerId);
   navTo('player-overview');
 }
+
+// Player Score Approval Phase 1C: "My Matches" opens a specific match into
+// the shared Match Entry component in player mode. mode is carried through
+// setEntryPreselect's playerContext and consumed exactly once by the
+// 'entry' case above, exactly like the admin preselect it extends.
+function openPlayerMatchEntry(playerId, matchId, seasonId, eligibleHome, eligibleAway) {
+  appContext.setEntryPreselect(seasonId, matchId, { playerId, eligibleHome, eligibleAway });
+  navTo('entry');
+}
+
+document.addEventListener('my-match-open-request', e => {
+  const identity = appContext.getState().currentIdentity;
+  const playerId = identity?.player_id;
+  if (playerId == null) return;
+  const { matchId, seasonId, eligibleHome, eligibleAway } = e.detail;
+  openPlayerMatchEntry(playerId, matchId, seasonId, eligibleHome, eligibleAway);
+});
 
 // --- Seasons domain bridge ----------------------------------------------------
 // The seasons domain component fires these events; the shell updates cross-domain
@@ -390,6 +430,7 @@ function applyWorkspace(workspace) {
   // by isPlayerRole); every admin-only nav item is hidden regardless of
   // what this identity would otherwise be allowed to see in Admin View.
   document.getElementById('nav-item-my-overview')?.classList.toggle('d-none', !(isPlayerWorkspace && isPlayerRole(identity)));
+  document.getElementById('nav-item-my-matches')?.classList.toggle('d-none', !(isPlayerWorkspace && isPlayerRole(identity)));
 
   const showAdminNav = !isPlayerWorkspace;
   const canManageFinances = showAdminNav && hasFinanceAdminRole(identity);

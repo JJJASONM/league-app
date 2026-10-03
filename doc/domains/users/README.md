@@ -4,8 +4,8 @@
 
 **Owner:** `users`
 **Status:** `draft`
-**Current version:** `0.13`
-**Last reviewed:** `2026-09-30`
+**Current version:** `0.15`
+**Last reviewed:** `2026-10-02`
 
 Users are authenticated accounts with roles and permissions. They are separate
 from players, who represent league participation and match history.
@@ -1503,6 +1503,41 @@ here.
 This is a general-purpose identity field, not a matches-domain-specific
 concept -- any future player-scoped or session-only action can consume it
 the same way without another `Identity` change.
+
+## Player Score Approval Phase 1C -- "My Matches" navigation (accepted 2026-10-02)
+
+**Status: accepted** as of 2026-10-02, after two PM correction rounds --
+see `doc/domains/matches/README.md`'s "Player Score Approval Phase 1C"
+section (specifically its "PM correction round" subsection) for full
+detail. The navigation behavior described below is implemented and
+accepted, but still has not been browser-verified -- that remains Phase
+1D's responsibility, not a condition of this acceptance.
+
+Player Score Approval Phase 1C (see `doc/domains/matches/README.md`) added
+a second Player View nav entry, "My Matches," alongside the existing "My
+Overview." This deliberately extends, rather than breaks, the "Player View
+is My Overview only" contract established in the staging UI-isolation
+corrections above (round 4, 2026-09-19): that contract's actual intent was
+"Player View shows only screens a linked player is authorized to use, and
+nothing from the admin shell" -- "My Overview only" was accurate as of that
+phase because My Overview was the only such screen that existed yet, not
+because the count is meant to stay fixed at one.
+
+**Exact behavior added:** `#nav-item-my-matches`
+(`web/index.html`) is gated by `applyWorkspace`
+(`web/app.js`) using the exact same condition as `#nav-item-my-overview`
+(`isPlayerWorkspace && isPlayerRole(identity)`) -- visible only in Player
+View, only for a linked player, hidden in Admin View regardless of role.
+Every other admin-only nav item (League Admin, Users, Financial,
+Communication, the admin Player Overview picker, and every item carrying
+the shared `admin-workspace-nav-item` class) remains hidden in Player View
+exactly as before; this phase widens Player View's own screen count by one,
+it does not touch any admin-facing visibility rule from the sections above.
+Identity-change/sign-out/workspace-switch safety (round 4's fixes #1-#2)
+is unaffected: "My Matches" and the Match Entry component it can open are
+both reset on every `refresh()`/`refreshForPlayer()` call exactly like
+every other section, so no privileged or stale content can survive a
+workspace switch or a different identity signing in.
 
 ### 2026-07-18 - Roles follow clearance workflows
 

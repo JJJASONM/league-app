@@ -248,3 +248,14 @@ func (s *RoundService) ResolveApprovalEligibility(ctx context.Context, matchID i
 	}
 	return eligible, nil
 }
+
+// ListEligibleMatchesForPlayer exposes RoundStore.ListEligibleMatchesForPlayer
+// at the service layer, unchanged, for Player Score Approval Phase 1C's
+// "My Matches" list.
+func (s *RoundService) ListEligibleMatchesForPlayer(ctx context.Context, seasonID, playerID int64) ([]PlayerEligibleMatch, error) {
+	rows, err := s.store.ListEligibleMatchesForPlayer(ctx, seasonID, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("list eligible matches for player: %w", err)
+	}
+	return rows, nil
+}

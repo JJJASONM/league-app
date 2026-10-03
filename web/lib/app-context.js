@@ -15,6 +15,12 @@
       activeSeason: null,
       entryPreSelectSeasonId: null,
       entryPreSelectMatchId: null,
+      // Player Score Approval Phase 1C: set only when "My Matches" opens a
+      // match into Match Entry for a linked player -- null for every
+      // ordinary admin navigation into Match Entry. Carries which side(s)
+      // that player is eligible to act on (the eligibility list's own
+      // authoritative flags, never re-derived in the browser).
+      entryPreSelectPlayerContext: null,
       // Users Admin Screen Phase 1: the user identity resolved from the
       // Admin Key currently set for this tab (via GET /api/users/me), or
       // null when no key is set or it did not resolve. Drives the Users
@@ -104,18 +110,21 @@
       return state;
     }
 
-    function setEntryPreselect(seasonId, matchId) {
+    function setEntryPreselect(seasonId, matchId, playerContext) {
       state.entryPreSelectSeasonId = seasonId;
       state.entryPreSelectMatchId = matchId;
+      state.entryPreSelectPlayerContext = playerContext || null;
     }
 
     function consumeEntryPreselect() {
       const detail = {
         seasonId: state.entryPreSelectSeasonId,
         matchId: state.entryPreSelectMatchId,
+        playerContext: state.entryPreSelectPlayerContext,
       };
       state.entryPreSelectSeasonId = null;
       state.entryPreSelectMatchId = null;
+      state.entryPreSelectPlayerContext = null;
       return detail;
     }
 

@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.15`
-**Last reviewed:** `2026-09-30`
+**Current version:** `0.17`
+**Last reviewed:** `2026-10-02`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -3545,7 +3545,333 @@ generic audit framework, no handicap formula change. Player UI (Phase
 staging/browser verification all remain outstanding. `MATCHES-Q002` is
 advanced further, not resolved -- see Roadmap.
 
+## Player Score Approval Phase 1C -- Player-Facing Score Entry and Team Approval UI (accepted 2026-10-02)
+
+**Status: accepted as of 2026-10-02.** The implementation below went
+through two PM correction rounds (2026-09-30: five player-mode state/scope
+defects; a follow-up inspection pass the same round: score inputs
+themselves not disabled when read-only) -- see "PM correction round
+(2026-09-30)" below for exactly what was wrong and how it was fixed. Both
+rounds were reviewed and accepted. Browser/staging verification of this
+phase's UI has still NOT been performed at any point -- that is explicitly
+Phase 1D's job, not a condition of this acceptance -- see Verification.
+
+**Why this branch exists:** Phase 1A built the authoritative score-revision
+and team-approval model; Phase 1B exposed it over HTTP with session
+authorization, but players still had no way to reach any of it through the
+application -- Player View exposed only My Overview. This phase makes the
+approved player workflow usable through the browser, reusing the existing
+admin Match Entry scoresheet component rather than building a second one.
+
+**Stop condition:** a signed-in linked player can open Player View, reach
+their eligible matches via a new "My Matches" nav entry, open an eligible
+match in Match Entry, enter/save/clear scores with the current
+`score_revision`, see both teams' approval states, approve/withdraw/request-
+correction for their own eligible side(s), recover cleanly from a stale-
+revision conflict, and never see admin-only Approve/Process/Unprocess/
+Unapprove controls. The implementation below meets that stop condition and
+has been accepted after two PM correction rounds (see "PM correction
+round" below), but it has NOT been browser-verified against it -- only
+backend automated tests and `node --check` syntax checks have run; that
+verification remains Phase 1D's responsibility. Phase 1D also remains
+responsible for the admin `/approve` contract integration and Weekly
+Summary/admin presentation -- this phase is not approved for standalone
+deployment on its own (see the Now section of `doc/roadmap.md`).
+
+### Discovery findings
+
+- The shell already has a `workspace` concept (`admin`/`player`,
+  `web/app.js`'s `applyWorkspace`) fully independent of role, and a linked
+  player's own league/season context is NEVER `appContext.activeLeague` --
+  that reflects whatever league an admin last selected in this browser tab.
+  `player-overview-page-component.js` already established the correct
+  pattern for a player-owned read: pass `season_id=null` and let the
+  backend resolve the player's own league's active season server-side
+  (`FindActiveSeasonByLeague` + `GetPlayerRosterTeam`) -- this phase follows
+  the same pattern for the new eligible-matches read.
+- The existing `<match-entry-page>` component had no mode/read-only concept
+  at all, no team-approval-panel rendering, and never sent
+  `expected_revision` on `saveRounds`/`clearMatchResults` -- Phase 1B's
+  player-write contract was entirely unreachable from the browser before
+  this phase.
+- `RoundStore.ResolveApprovalEligibility`'s per-side rule (current
+  season-roster membership OR actual `round_results` participation) has no
+  existing batched/list-shaped equivalent: `MatchStore.ListMatches` only
+  filters by `season_id`/`league_id`, never by player. A new backend read
+  was required to avoid either an N+1 per-match eligibility check in the
+  browser or a frontend-side approximation from `player.team_id` alone
+  (explicitly disallowed -- it would hide a valid substitute's match).
+- `models.RoundResult` and `models.LineupPlan` already carry each player's
+  name and handicap denormalized on the row (`home_player_name`,
+  `home_handicap`, etc.) -- the two most common Match Entry load paths
+  (existing rounds; a pre-set lineup) never actually needed the shell's
+  league-wide `allPlayers` list for player identity, only the inline
+  fallback lineup-picker (offering a full roster/substitute choice) does.
+
+### Additive backend support: `GET /api/players/{id}/eligible-matches`
+
+A new protected read, added because no existing endpoint could answer "which
+matches is this player eligible to act on" without either an N+1 backend
+call per match or a frontend eligibility approximation:
+
+- `backend/domains/matches/round_store.go`: new `RoundStore` interface
+  method `ListEligibleMatchesForPlayer(ctx, seasonID, playerID) ([]PlayerEligibleMatch, error)`
+  and new `PlayerEligibleMatch` domain type (match summary + independent
+  `EligibleHome`/`EligibleAway` booleans + the same `MatchApprovalState`
+  every other approval read uses).
+- `backend/storage/sqlite/round_store.go`: implementation is a single SQL
+  query per season (not per match) that mirrors
+  `ResolveApprovalEligibility`'s exact per-side rule via
+  `EXISTS(season_rosters ...) OR EXISTS(round_results ...)` for each side,
+  joined with the match's live approval-state columns.
+- `backend/domains/matches/team_approval_service.go`: unchanged passthrough
+  at the service layer, matching the existing pattern for
+  `ResolveApprovalEligibility`.
+- `handlers/deps.go`: `RoundManager` interface extended with the same
+  method (`noopRoundMgr` in `handlers/api_clearance_auth_test.go` and
+  `stubRoundStore` in `backend/domains/matches/round_service_test.go`
+  updated to satisfy their interfaces).
+- `models/models.go`: new `PlayerEligibleMatch` JSON response type, reusing
+  `TeamSideApprovalSnapshot` for `home_approval`/`away_approval` so a "My
+  Matches" list row and the dedicated `GET .../approval` read render
+  identically on the frontend.
+- `handlers/api_player_eligible_matches_routes.go` (new),
+  `handlers/api_player_eligible_matches_handler.go` (new): route and
+  handler for `GET /api/players/{id}/eligible-matches`. Access control
+  reuses `playerOverviewAuth` and `ActionPlayerOverviewOwn` completely
+  unchanged -- the ownership model is identical to Player Overview
+  (`system_admin` any player, `league_admin` only players in a league they
+  administer, a linked player only their own list). No new `auth.Action`
+  was needed. `season_id` is optional; when omitted, the player's own
+  league's active season is resolved server-side, exactly like Player
+  Overview. A player with no derivable league (teamless, or their league
+  has no active season) gets an empty list, not an error.
+
+No change was made to any existing route's request/response contract.
+`GET /api/matches/{id}` and `GET /api/matches/{id}/rounds` already served
+an eligible player correctly for Match Entry's own reads (Phase 1B's
+`canSeeMatchDraftDetailWithLeague`), so no additional backend read was
+needed for those.
+
+### Frontend implementation
+
+- **Player View navigation:** a new `My Matches` nav entry
+  (`#nav-item-my-matches`, `web/index.html`) gated exactly like `My
+  Overview` -- visible only in Player View for a linked player
+  (`web/app.js`'s `applyWorkspace`) -- pointing at a new
+  `<my-matches-page>` custom element and `#section-my-matches`.
+- **`web/domains/matches/my-matches-page-component.js`** (new): fetches
+  `GET /players/{id}/eligible-matches` for `currentIdentity.player_id`
+  (never `appContext.activeSeason`), and renders week/opponent/home-or-away/
+  score-status/both sides' approval-state badges per eligible match, plus
+  loading and empty states. Opening a match dispatches a bubbling
+  `my-match-open-request` event (never navigates directly), carrying that
+  row's own `eligible_home`/`eligible_away` flags.
+- **`web/app.js`**: handles `my-match-open-request` by calling a new
+  `openPlayerMatchEntry(...)`, which extends the existing admin
+  `entryPreSelect*` mechanism (`web/lib/app-context.js`'s
+  `setEntryPreselect`/`consumeEntryPreselect` gained an optional
+  `playerContext` field, `{playerId, eligibleHome, eligibleAway}`, additive
+  and `null` for every ordinary admin navigation) so the shared
+  `entry`-section `loadSection` case can tell the two apart and call either
+  `match-entry-page`'s existing `refresh(...)` (admin) or its new
+  `refreshForPlayer(...)` (player) accordingly.
+- **`web/domains/matches/match-entry-page-component.js`**: reused, not
+  duplicated, exactly per scope. Added:
+  - `refreshForPlayer(playerId, matchId, seasonId, eligibleHome, eligibleAway)`:
+    hides the admin season/match picker row, resets all mode/approval state
+    (`#reset()`), and loads the one match directly.
+  - `#loadMatchEntryForPlayer(matchId)`: mirrors the admin loader but
+    resolves the match's OWN league (via its season's `league_id`) for the
+    game-format check and league name, fetches the protected approval
+    snapshot (`GET .../approval`), and only fetches the full league-wide
+    player list lazily, if the inline lineup-picker fallback is actually
+    reached (the two more common paths -- existing rounds, a pre-set
+    lineup -- resolve player identity from each row's own embedded
+    name/handicap via a new `#resolvePlayer` helper, used by both the admin
+    and player loaders identically).
+  - A **Team Approval panel**, rendered only in player mode, showing both
+    sides' state (Pending/Approved/Correction Requested), actor name,
+    correction note, and the revision that state applies to; mutation
+    controls (Approve, Withdraw, Request Correction with a required note)
+    are rendered only for the side(s) `eligibleHome`/`eligibleAway` mark
+    true. Every mutation call passes the CURRENT `score_revision` from the
+    last-fetched snapshot and re-renders the panel in place from the
+    mutation's own response (every team-approval route already returns the
+    fresh snapshot) -- no extra read is needed after an action succeeds.
+  - The four admin-only match-level buttons (Approve/Process/Unprocess/
+    Unapprove -- the Weekly Score Processing Phase 1A/1B workflow, distinct
+    from team-side approval) are now gated on `#mode === 'admin'` first,
+    before their own existing state checks, so they can never render in
+    player mode.
+  - `saveRounds`/`clearMatchResults` now send `expected_revision` in player
+    mode (sourced from the last-fetched approval snapshot); the admin path
+    is untouched (the parameter is omitted from the request body when not
+    given). A `409` response in player mode is never retried or silently
+    overwritten -- it triggers a toast explaining the scores changed
+    elsewhere and a full reload of match/rounds/approval state for the
+    player to review before trying again.
+  - `web/lib/api-client.js`'s shared `api()` now attaches `.status` to
+    every thrown `Error` (purely additive -- every existing caller only
+    ever read `.message`), which is what lets Match Entry distinguish a
+    409 conflict from any other failure without parsing message text.
+
+### Tests added
+
+Backend (17 new tests, all passing): 7 storage-layer tests in
+`backend/storage/sqlite/round_store_approval_test.go` for
+`ListEligibleMatchesForPlayer` (roster-home-only, roster-away-only, actual-
+participant-substitute-with-no-roster-row, unrelated-player-excluded,
+different-season-excluded, live-approval-snapshot-included, ordered-by-
+week-then-id), and 9 new HTTP integration tests in the new
+`handlers/api_player_eligible_matches_test.go` covering: a linked player
+sees their own eligible match; an unrelated player sees an empty list; a
+linked player cannot view another player's list (403); a same-league
+`league_admin` can view it; a different-league `league_admin` cannot (403);
+`system_admin` can view any player's list; an actual-participant substitute
+with no season-roster row is still listed; a teamless player with no
+derivable league gets an empty list, not an error; an explicit `season_id`
+override is honored. Frontend changes were verified with `node --check` on
+every changed/added JavaScript file (syntax only -- no automated frontend
+test harness exists in this repo; see Verification below for what was and
+was not exercised).
+
+### PM correction round (2026-09-30)
+
+PM review of the initial Phase 1C implementation above found five
+player-mode state/scope defects, all corrected in place in the sections
+above (not described as separate new sections, since each is a targeted
+fix to behavior already documented above):
+
+1. **`GET /api/players/{id}/eligible-matches` accepted an arbitrary
+   explicit `season_id`** with no check that it belonged to the requested
+   player's own league, risking exposure of a different league's protected
+   match/approval data. Fixed by validating the explicit season exactly
+   like Player Overview does: `seasonMgr.GetSeason` (mapped through the
+   same `mapSeasonErr` Player Overview uses) followed by the identical
+   unconditional league-consistency check (404 "player is not in this
+   season's league" whenever the player resolves to a real league that
+   disagrees with the season's) -- applied regardless of caller identity,
+   so `system_admin` and a same-league `league_admin` get the same
+   contract as everyone else, not a second policy.
+2. **Player-mode Save/Clear rendered as available even when the approval
+   snapshot failed to load**, which meant a write could be sent with no
+   `expected_revision` at all (the backend correctly rejects it, but the
+   UI should never offer a control it knows will fail). Fixed: a
+   successfully-loaded approval snapshot is now a hard prerequisite for
+   `canEditScores` in player mode; when it is null, the scoresheet renders
+   read-only with a "could not be loaded" message and a Retry action
+   (`#loadMatchEntryForPlayer` re-fetches everything cleanly). Also fixed
+   in the same pass: `#reset()` and every player-mode load now clear/
+   repopulate `#allSeasons` with ONLY the match's own season (fetched
+   fresh every time), so the shared `seasonClosed` lock calculation can no
+   longer read a stale admin-selected league's season list left over from
+   a prior Admin View visit.
+3. **The team-approval panel offered Approve/Request Correction before
+   the match was scored, and kept offering every control through season-
+   closed/week-closed/admin-accepted/processed locks.** Fixed by mirroring
+   the backend's own guard conditions in presentation: Approve and Request
+   Correction now require a completed, unlocked match; Withdraw requires
+   the side to already be approved and the match to remain unlocked; no
+   mutation control renders at all once the match is locked by any of
+   those four conditions, replaced by a short explanation that never
+   implies the player could perform the admin-only action that would
+   unlock it.
+4. **The dedicated Substitute/Undo controls (`ActionLineupMutate`-gated,
+   admin-only routes) rendered in player mode**, where they would 403.
+   Fixed by gating `#subControlHtml`'s Sub/Undo buttons to admin mode
+   only (player mode shows the existing "Sub for X" attribution as
+   read-only text when relevant, nothing else); the inline lineup
+   picker's own admin-Lineup-page link is replaced with plain text in
+   player mode (that admin section is hidden entirely in Player View);
+   and the player-mode toolbar's "Change Lineup" button (which only ever
+   reloaded the same match) is replaced with "Back to My Matches." The
+   inline picker itself -- which is local player selection feeding a
+   score write, not a lineup-management API call -- is unchanged and
+   still available in both modes. No player session is authorized for any
+   lineup-management/substitute route by this fix or any other part of
+   this phase.
+5. **Player-mode lock messages reused admin instructions** ("Reopen the
+   week," "Unprocess, then unapprove") that a player cannot act on. Fixed
+   with player-appropriate wording ("This week is closed. Contact a
+   league administrator." / "This match has been accepted or processed
+   and is locked. Contact a league administrator for corrections."),
+   gated on mode; Admin View's existing detailed instructions are
+   unchanged.
+6. **A follow-up PM inspection pass of this same correction round found a
+   sixth defect the first pass missed:** `#ssGameInput()` still rendered
+   every score input enabled regardless of `#scoresheetEditable` -- a
+   read-only scoresheet (player-mode approval snapshot unavailable,
+   closed season, closed week, approved, or processed) hid Save/Clear and
+   the Sub/Undo controls, but a player could still type directly into the
+   game-score inputs themselves. Fixed by adding the HTML `disabled`
+   attribute to each input whenever `#scoresheetEditable` is false,
+   reading that same existing flag directly (no second editability
+   policy); each input's displayed value is computed independently of
+   this and is unchanged either way.
+
+New backend tests were added for the first correction (season-league
+validation); the other five are frontend-only presentation/state
+corrections with no new backend surface, verified by `node --check` and
+manual code review of the exact guard conditions mirrored from the
+backend (no automated frontend test harness exists in this repo -- see
+Verification).
+
+### Verification
+
+`go build ./...`, `go test ./... -count=1` (all packages, zero failures),
+and `go vet ./...` (same four pre-existing warnings as every prior phase,
+zero new findings) all pass. `git diff --check` is clean. An ASCII
+byte-scan of every added/changed line (tracked diff and new untracked
+files) found zero non-ASCII bytes. `node --check` passed on every changed
+JavaScript file. Browser/manual verification of the player workflow has
+NOT been performed at any point in this phase, including after both
+correction rounds -- Phase 1D covers staging/browser verification per the
+roadmap's phase split. This phase's acceptance does not depend on that
+verification having happened; it is explicitly deferred to Phase 1D. Phase
+1C is still not approved for standalone deployment on its own (the
+existing admin Approve button still does not send `expected_revision`) --
+see `doc/roadmap.md`'s Now section for the combined Phase 1A+1B+1C
+deployment warning.
+
+### Explicit Phase 1C exclusions
+
+No captain role, no email notifications, no mobile work, no generic audit
+infrastructure, no new handicap behavior, no automated week close, no admin
+acceptance UI changes, no broad visual redesign, no second scoresheet
+implementation, no frontend-authoritative eligibility rule. A player using
+the inline lineup-picker fallback's "Sub for X" badge may see a generic
+"original player" label instead of that player's actual name when
+`#allPlayers` was never populated (the two more common load paths don't
+need it) -- a minor, pre-existing display fallback already in the code,
+not a new defect. Phase 1D (admin `/approve` contract integration, Weekly
+Summary/admin presentation, staging/browser verification) remains
+outstanding; `MATCHES-Q002` is advanced further, not resolved.
+
 ## Decision History
+
+### 2026-10-02 - Player Score Approval Phase 1C: player-facing score entry and team approval UI, accepted
+
+**Status:** `accepted`
+
+Added a player-facing "My Matches" list and extended the existing admin
+Match Entry component with a player mode (score entry/clear with mandatory
+`expected_revision`, a team-approval panel, stale-revision recovery) rather
+than building a second scoresheet UI. Required one small additive backend
+read, `GET /api/players/{id}/eligible-matches`, reusing the existing
+`ActionPlayerOverviewOwn` ownership model rather than a new `auth.Action`.
+Two PM correction rounds were required before acceptance: the first found
+five player-mode state/scope defects (cross-league season validation, a
+missing approval-snapshot prerequisite for writes, ungated team-approval
+controls, admin-only substitute controls leaking into player mode, and
+admin-worded lock messages); a follow-up inspection pass in the same round
+found a sixth (score inputs themselves stayed enabled on a read-only
+scoresheet). All six are corrected -- see "Player Score Approval Phase 1C"
+above, specifically its "PM correction round" subsection, for full detail.
+Accepted 2026-10-02. Still not approved for standalone deployment on its
+own, and still not browser-verified -- both remain Phase 1D's
+responsibility, not conditions of this acceptance; see that section's
+Verification and `doc/roadmap.md`'s Now section.
 
 ### 2026-09-30 - Player Score Approval Phase 1B: PM correction round (authorization and privacy)
 

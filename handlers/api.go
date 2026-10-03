@@ -106,6 +106,14 @@ func Register(mux *http.ServeMux, dataDir string, deps Dependencies) {
 		registerPlayerOverviewRoute(mux, deps, deps.PlayerMgr, seasonMgr, deps.TeamMgr, deps.MatchMgr, deps.RoundMgr, deps.FinanceMgr, deps.RuleMgr)
 	}
 
+	// Player Score Approval Phase 1C: "My Matches" list. Route
+	// registration lives in api_player_eligible_matches_routes.go, gated
+	// on RoundMgr the same way Player Overview is (eligibility and
+	// approval state both live behind RoundManager).
+	if deps.RoundMgr != nil {
+		registerPlayerEligibleMatchesRoute(mux, deps, deps.PlayerMgr, seasonMgr, deps.RoundMgr)
+	}
+
 	// Finance route registration lives in api_finances_routes.go. Handler-
 	// level composition across FinanceMgr, SeasonMgr, RuleMgr, and RoundMgr
 	// (standings reference on payouts). SeasonMgr and RuleMgr are required

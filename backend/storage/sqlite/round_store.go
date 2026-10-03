@@ -1083,3 +1083,119 @@ func (s *RoundStore) UnprocessMatch(ctx context.Context, matchID int64) error {
 	}
 	return nil
 }
+
+// ListEligibleMatchesForPlayer returns every match in seasonID where
+// playerID is eligible for the home side, the away side, or both -- using
+// the exact same per-side rule as ResolveApprovalEligibility (current
+// season-roster membership for that side's team, OR actual round_results
+// participation on that side for that specific match), evaluated in one
+// query instead of once per match to avoid an N+1 scan over a season's
+// schedule. Matches where neither side is eligible are excluded entirely.
+func (s *RoundStore) ListEligibleMatchesForPlayer(ctx context.Context, seasonID, playerID int64) ([]matches.PlayerEligibleMatch, error) {
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT m.id, m.season_id, m.week_number, m.match_date, m.completed, m.week_closed,
+		       COALESCE(m.home_team_id,0), COALESCE(ht.name,'(unassigned)'),
+		       COALESCE(m.away_team_id,0), COALESCE(at.name,'(unassigned)'),
+		       m.score_revision, m.approved_at, m.processed_at,
+		       m.home_approval_state, m.home_approval_state_at,
+		       m.home_approval_actor_user_id, m.home_approval_actor_player_id,
+		       m.home_approval_actor_name_snapshot, m.home_approval_state_score_revision,
+		       m.home_correction_note,
+		       m.away_approval_state, m.away_approval_state_at,
+		       m.away_approval_actor_user_id, m.away_approval_actor_player_id,
+		       m.away_approval_actor_name_snapshot, m.away_approval_state_score_revision,
+		       m.away_correction_note,
+		       EXISTS(SELECT 1 FROM season_rosters sr WHERE sr.season_id = m.season_id AND sr.player_id = ? AND sr.team_id = m.home_team_id) AS roster_home,
+		       EXISTS(SELECT 1 FROM season_rosters sr WHERE sr.season_id = m.season_id AND sr.player_id = ? AND sr.team_id = m.away_team_id) AS roster_away,
+		       EXISTS(SELECT 1 FROM round_results rr WHERE rr.match_id = m.id AND rr.home_player_id = ?) AS actual_home,
+		       EXISTS(SELECT 1 FROM round_results rr WHERE rr.match_id = m.id AND rr.away_player_id = ?) AS actual_away
+		FROM matches m
+		LEFT JOIN teams ht ON ht.id = m.home_team_id
+		LEFT JOIN teams at ON at.id = m.away_team_id
+		WHERE m.season_id = ?
+		  AND (
+		       EXISTS(SELECT 1 FROM season_rosters sr WHERE sr.season_id = m.season_id AND sr.player_id = ? AND sr.team_id = m.home_team_id)
+		    OR EXISTS(SELECT 1 FROM season_rosters sr WHERE sr.season_id = m.season_id AND sr.player_id = ? AND sr.team_id = m.away_team_id)
+		    OR EXISTS(SELECT 1 FROM round_results rr WHERE rr.match_id = m.id AND rr.home_player_id = ?)
+		    OR EXISTS(SELECT 1 FROM round_results rr WHERE rr.match_id = m.id AND rr.away_player_id = ?)
+		  )
+		ORDER BY m.week_number, m.id`,
+		playerID, playerID, playerID, playerID,
+		seasonID,
+		playerID, playerID, playerID, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("list eligible matches for player: %w", err)
+	}
+	defer rows.Close()
+
+	var out []matches.PlayerEligibleMatch
+	for rows.Next() {
+		var row matches.PlayerEligibleMatch
+		var completed, weekClosed int
+		var approvedAt, processedAt sql.NullString
+		var homeStateAt, awayStateAt sql.NullString
+		var homeActorUserID, awayActorUserID sql.NullInt64
+		var homeActorPlayerID, awayActorPlayerID sql.NullInt64
+		var homeApprovedRev, awayApprovedRev sql.NullInt64
+		var rosterHome, rosterAway, actualHome, actualAway bool
+		if err := rows.Scan(
+			&row.MatchID, &row.SeasonID, &row.WeekNumber, &row.MatchDate, &completed, &weekClosed,
+			&row.HomeTeamID, &row.HomeTeamName, &row.AwayTeamID, &row.AwayTeamName,
+			&row.Approval.ScoreRevision, &approvedAt, &processedAt,
+			&row.Approval.HomeSide.State, &homeStateAt, &homeActorUserID, &homeActorPlayerID,
+			&row.Approval.HomeSide.ActorNameSnapshot, &homeApprovedRev, &row.Approval.HomeSide.CorrectionNote,
+			&row.Approval.AwaySide.State, &awayStateAt, &awayActorUserID, &awayActorPlayerID,
+			&row.Approval.AwaySide.ActorNameSnapshot, &awayApprovedRev, &row.Approval.AwaySide.CorrectionNote,
+			&rosterHome, &rosterAway, &actualHome, &actualAway,
+		); err != nil {
+			return nil, fmt.Errorf("list eligible matches for player: scan: %w", err)
+		}
+		row.Completed = completed == 1
+		row.WeekClosed = weekClosed == 1
+		row.MatchDate = normMatchDatePtr(row.MatchDate)
+		row.Approval.Exists = true
+		row.Approval.Completed = row.Completed
+		if approvedAt.Valid && approvedAt.String != "" {
+			row.Approval.ApprovedAt = &approvedAt.String
+		}
+		if processedAt.Valid && processedAt.String != "" {
+			row.Approval.ProcessedAt = &processedAt.String
+		}
+		if homeStateAt.Valid {
+			row.Approval.HomeSide.StateAt = &homeStateAt.String
+		}
+		if homeActorUserID.Valid {
+			row.Approval.HomeSide.ActorUserID = &homeActorUserID.Int64
+		}
+		if homeActorPlayerID.Valid {
+			row.Approval.HomeSide.ActorPlayerID = &homeActorPlayerID.Int64
+		}
+		if homeApprovedRev.Valid {
+			v := int(homeApprovedRev.Int64)
+			row.Approval.HomeSide.StateScoreRevision = &v
+		}
+		if awayStateAt.Valid {
+			row.Approval.AwaySide.StateAt = &awayStateAt.String
+		}
+		if awayActorUserID.Valid {
+			row.Approval.AwaySide.ActorUserID = &awayActorUserID.Int64
+		}
+		if awayActorPlayerID.Valid {
+			row.Approval.AwaySide.ActorPlayerID = &awayActorPlayerID.Int64
+		}
+		if awayApprovedRev.Valid {
+			v := int(awayApprovedRev.Int64)
+			row.Approval.AwaySide.StateScoreRevision = &v
+		}
+		row.EligibleHome = rosterHome || actualHome
+		row.EligibleAway = rosterAway || actualAway
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list eligible matches for player: %w", err)
+	}
+	if out == nil {
+		out = []matches.PlayerEligibleMatch{}
+	}
+	return out, nil
+}

@@ -661,6 +661,42 @@ contract this section's own check #2 exercised:
   `doc/domains/matches/README.md`'s "Player Score Approval Phase 1B"
   section and `doc/roadmap.md`'s Now section.
 
+**Player Score Approval Phase 1C -- player-facing score entry and team
+approval UI (implemented 2026-09-30, NOT staging/browser-verified).** The
+four routes and two protected reads Phase 1B flagged above as "no UI yet"
+now have one, reusing the existing admin Match Entry component in a new
+player mode. Backend automated tests and `node --check` syntax checks
+passed this phase; no browser session exercised any of the following --
+all of it needs a real browser pass before this can be marked verified:
+
+- [ ] Sign in as a linked player (session, not Admin Key), switch to
+      Player View. A new "My Matches" nav entry should appear alongside
+      "My Overview" and nowhere else (Admin View must not show it).
+- [ ] "My Matches" should list only matches that player is eligible to act
+      on (current roster team, or an actual round-results participant/
+      substitute), each showing week, opponent, home/away, score status,
+      and both teams' current approval state -- and nothing from another
+      league.
+- [ ] Opening a match from "My Matches" should load it in the existing
+      Match Entry scoresheet UI, with no admin-only Approve/Process/
+      Unprocess/Unapprove buttons visible anywhere on the page.
+- [ ] Entering and saving scores, then clearing them, should succeed and
+      the scoresheet should reflect the save/clear immediately.
+- [ ] The Team Approval panel should show Approve/Withdraw/Request
+      Correction controls only for the side(s) that player is eligible
+      for, never the other side. Approving, withdrawing, and requesting a
+      correction (with a note) should each update the panel immediately.
+      Editing scores after an approval should visibly reset that
+      approval back to Pending.
+- [ ] Forcing a stale-revision conflict (e.g. two tabs/sessions editing
+      the same match) should show a clear message and reload the match
+      rather than silently overwriting or erroring opaquely.
+- `MATCHES-Q002` is advanced further by Phase 1C, not resolved -- Phase 1D
+  (admin `/approve` UI integration, Weekly Summary/admin presentation, and
+  staging/browser verification for both Phase 1C and 1D) remains
+  outstanding. See `doc/domains/matches/README.md`'s "Player Score
+  Approval Phase 1C" section and `doc/roadmap.md`'s Now section.
+
 ### 11. Close / Reopen Week
 
 - Browser: Schedule nav -> Review & Close on a week with all matches scored.

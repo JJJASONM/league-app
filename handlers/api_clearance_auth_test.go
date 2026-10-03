@@ -113,6 +113,9 @@ func (n *noopRoundMgr) ResolveApprovalEligibility(_ context.Context, _ int64, _ 
 func (n *noopRoundMgr) AdminAcceptMatch(_ context.Context, _ int64, _ *int64, _ string, _ bool, _ int) error {
 	return nil
 }
+func (n *noopRoundMgr) ListEligibleMatchesForPlayer(_ context.Context, _, _ int64) ([]matches.PlayerEligibleMatch, error) {
+	return nil, nil
+}
 
 // clearanceDeps returns Dependencies with personal-key auth wired and all required
 // managers set to noops. The four clearance routes are mounted with auth because

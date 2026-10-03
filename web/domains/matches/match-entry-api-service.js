@@ -20,12 +20,19 @@ export async function fetchLineupPlans(seasonId, weekNumber) {
   return api('GET', `/lineup-plans?season_id=${seasonId}&week_number=${weekNumber}`);
 }
 
-export async function saveRounds(matchId, rounds) {
-  return api('POST', `/matches/${matchId}/rounds`, { rounds });
+// expectedRevision (Player Score Approval Phase 1C) is omitted from the
+// body entirely when not given -- the existing admin write path stays
+// byte-for-byte unchanged; a player-mode caller always passes the
+// score_revision from the match's last-fetched approval snapshot, which
+// the backend requires unconditionally for a non-admin write.
+export async function saveRounds(matchId, rounds, expectedRevision) {
+  const body = expectedRevision != null ? { rounds, expected_revision: expectedRevision } : { rounds };
+  return api('POST', `/matches/${matchId}/rounds`, body);
 }
 
-export async function clearMatchResults(matchId) {
-  return api('DELETE', `/matches/${matchId}/results`);
+export async function clearMatchResults(matchId, expectedRevision) {
+  const body = expectedRevision != null ? { expected_revision: expectedRevision } : undefined;
+  return api('DELETE', `/matches/${matchId}/results`, body);
 }
 
 // Weekly Score Processing Phase 1A/1B admin actions. note is optional and

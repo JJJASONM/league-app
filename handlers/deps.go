@@ -166,6 +166,9 @@ type RoundManager interface {
 	BothSidesApproved(ctx context.Context, matchID int64) (bool, error)
 	ResolveApprovalEligibility(ctx context.Context, matchID int64, side string, playerID int64) (bool, error)
 	AdminAcceptMatch(ctx context.Context, matchID int64, approvedByUserID *int64, note string, override bool, expectedRevision int) error
+
+	// Player Score Approval Phase 1C: the player-facing "My Matches" list.
+	ListEligibleMatchesForPlayer(ctx context.Context, seasonID, playerID int64) ([]matches.PlayerEligibleMatch, error)
 }
 
 // MatchManager handles match listing, detail retrieval, and team assignment.

@@ -464,6 +464,34 @@ type MatchApprovalEvent struct {
 	CreatedAt         time.Time `json:"created_at"`
 }
 
+// PlayerEligibleMatch is Player Score Approval Phase 1C's protected
+// response shape for one entry in GET /api/players/{id}/eligible-matches
+// (the "My Matches" list): a match the requested player is eligible to act
+// on for at least one side. EligibleHome/EligibleAway are independent --
+// a client must never infer eligibility from home_team_id/away_team_id
+// alone (see backend's ResolveApprovalEligibility, which also grants
+// eligibility via actual round_results participation, e.g. a substitute).
+// Approval carries the same shape as MatchApprovalSnapshot so a "My
+// Matches" list row and the dedicated GET .../approval read render
+// identically.
+type PlayerEligibleMatch struct {
+	MatchID       int64                    `json:"match_id"`
+	SeasonID      int64                    `json:"season_id"`
+	WeekNumber    int                      `json:"week_number"`
+	MatchDate     *string                  `json:"match_date"`
+	Completed     bool                     `json:"completed"`
+	WeekClosed    bool                     `json:"week_closed"`
+	HomeTeamID    int64                    `json:"home_team_id"`
+	HomeTeamName  string                   `json:"home_team_name"`
+	AwayTeamID    int64                    `json:"away_team_id"`
+	AwayTeamName  string                   `json:"away_team_name"`
+	EligibleHome  bool                     `json:"eligible_home"`
+	EligibleAway  bool                     `json:"eligible_away"`
+	ScoreRevision int                      `json:"score_revision"`
+	Home          TeamSideApprovalSnapshot `json:"home_approval"`
+	Away          TeamSideApprovalSnapshot `json:"away_approval"`
+}
+
 // WeekSummary is one entry in the GET /api/seasons/{id}/weeks response.
 // Status is "open" when no league_weeks row exists (inferred) or the row has status "open".
 // Status is "closed" after a successful POST /api/seasons/{id}/weeks/{week}/close.

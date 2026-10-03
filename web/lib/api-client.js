@@ -73,9 +73,17 @@ async function api(method, path, body) {
     if (Array.isArray(data.messages) && data.messages.length > 0) {
       const errs = data.messages.filter(m => m.level === 'error');
       const list = (errs.length ? errs : data.messages).map(m => m.message).join('; ');
-      throw new Error(list);
+      const err = new Error(list);
+      err.status = res.status;
+      throw err;
     }
-    throw new Error(data.error || 'Request failed');
+    // .status (Player Score Approval Phase 1C) lets a caller distinguish a
+    // stale-revision conflict (409) from any other failure without parsing
+    // message text -- every other existing caller only ever reads
+    // .message, so this is purely additive.
+    const err = new Error(data.error || 'Request failed');
+    err.status = res.status;
+    throw err;
   }
   return data;
 }

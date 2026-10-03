@@ -1033,3 +1033,150 @@ func TestApproveMatch_StillWorksWithoutAnyTeamApprovals(t *testing.T) {
 		t.Error("want team approval state completely unaffected by the existing admin route")
 	}
 }
+
+// --- ListEligibleMatchesForPlayer (Player Score Approval Phase 1C) ---
+
+func TestListEligibleMatchesForPlayer_RosterHomeOnly_EligibleHomeTrueAwayFalse(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+	pid := seedRosterPlayer(t, seasonID, homeTeamID, "Home")
+
+	rows, err := s.ListEligibleMatchesForPlayer(context.Background(), seasonID, pid)
+	if err != nil {
+		t.Fatalf("ListEligibleMatchesForPlayer: %v", err)
+	}
+	if len(rows) != 1 || rows[0].MatchID != matchID {
+		t.Fatalf("want exactly the one match returned, got %+v", rows)
+	}
+	if !rows[0].EligibleHome || rows[0].EligibleAway {
+		t.Errorf("want EligibleHome=true, EligibleAway=false for a home-roster player, got %+v", rows[0])
+	}
+}
+
+func TestListEligibleMatchesForPlayer_RosterAwayOnly_EligibleAwayTrueHomeFalse(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, seasonID, _, awayTeamID := seedRoundTestData(t)
+	pid := seedRosterPlayer(t, seasonID, awayTeamID, "Away")
+
+	rows, err := s.ListEligibleMatchesForPlayer(context.Background(), seasonID, pid)
+	if err != nil {
+		t.Fatalf("ListEligibleMatchesForPlayer: %v", err)
+	}
+	if len(rows) != 1 || rows[0].MatchID != matchID {
+		t.Fatalf("want exactly the one match returned, got %+v", rows)
+	}
+	if rows[0].EligibleHome || !rows[0].EligibleAway {
+		t.Errorf("want EligibleHome=false, EligibleAway=true for an away-roster player, got %+v", rows[0])
+	}
+}
+
+func TestListEligibleMatchesForPlayer_ActualParticipantSubstitute_NoRoster_StillEligible(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, homePlayerID, awayPlayerID, seasonID, _, _ := seedRoundTestData(t)
+	// A genuine last-minute substitute: actually played, but never rostered.
+	seedRoundParticipant(t, matchID, "home", homePlayerID, awayPlayerID)
+
+	rows, err := s.ListEligibleMatchesForPlayer(context.Background(), seasonID, homePlayerID)
+	if err != nil {
+		t.Fatalf("ListEligibleMatchesForPlayer: %v", err)
+	}
+	if len(rows) != 1 || rows[0].MatchID != matchID {
+		t.Fatalf("want the substitute's match returned even with no season_rosters row, got %+v", rows)
+	}
+	if !rows[0].EligibleHome {
+		t.Error("want EligibleHome=true for an actual round_results participant with no roster membership")
+	}
+}
+
+func TestListEligibleMatchesForPlayer_UnrelatedPlayer_MatchExcluded(t *testing.T) {
+	s := newRoundStore(t)
+	_, _, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+	// A player rostered to the home team of a DIFFERENT match in the same
+	// season must not see a match they have no connection to at all.
+	res, _ := db.DB.Exec(`INSERT INTO players (first_name, last_name) VALUES ('Nobody','Unrelated')`)
+	unrelatedID, _ := res.LastInsertId()
+	_ = homeTeamID
+
+	rows, err := s.ListEligibleMatchesForPlayer(context.Background(), seasonID, unrelatedID)
+	if err != nil {
+		t.Fatalf("ListEligibleMatchesForPlayer: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("want zero matches for a player with no roster or participation link, got %+v", rows)
+	}
+}
+
+func TestListEligibleMatchesForPlayer_DifferentSeason_Excluded(t *testing.T) {
+	s := newRoundStore(t)
+	_, _, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+	pid := seedRosterPlayer(t, seasonID, homeTeamID, "Home")
+
+	var leagueID int64
+	db.DB.QueryRow(`SELECT league_id FROM teams WHERE id=?`, homeTeamID).Scan(&leagueID)
+	res, _ := db.DB.Exec(`INSERT INTO seasons (league_id, name) VALUES (?, 'Other Season')`, leagueID)
+	otherSeasonID, _ := res.LastInsertId()
+
+	rows, err := s.ListEligibleMatchesForPlayer(context.Background(), otherSeasonID, pid)
+	if err != nil {
+		t.Fatalf("ListEligibleMatchesForPlayer: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("want zero matches when queried against a season the player's roster match isn't in, got %+v", rows)
+	}
+}
+
+func TestListEligibleMatchesForPlayer_IncludesLiveApprovalSnapshotAndRevision(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+	pid := seedRosterPlayer(t, seasonID, homeTeamID, "Home")
+
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID)
+	uid := int64(9)
+	if err := s.ApproveTeamSide(context.Background(), matchID, "home", 0, &uid, &pid, "Home Approver"); err != nil {
+		t.Fatalf("ApproveTeamSide: %v", err)
+	}
+
+	rows, err := s.ListEligibleMatchesForPlayer(context.Background(), seasonID, pid)
+	if err != nil {
+		t.Fatalf("ListEligibleMatchesForPlayer: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want one row, got %+v", rows)
+	}
+	got := rows[0].Approval
+	if got.HomeSide.State != matches.ApprovalStateApproved {
+		t.Errorf("want home side approved in the list row's live snapshot, got %q", got.HomeSide.State)
+	}
+	if got.HomeSide.ActorNameSnapshot != "Home Approver" {
+		t.Errorf("want actor name snapshot carried through, got %q", got.HomeSide.ActorNameSnapshot)
+	}
+	if got.ScoreRevision != 0 {
+		t.Errorf("want score_revision 0 (unchanged by approval), got %d", got.ScoreRevision)
+	}
+	if !rows[0].Completed {
+		t.Error("want Completed true after marking the match completed")
+	}
+}
+
+func TestListEligibleMatchesForPlayer_OrderedByWeekThenID(t *testing.T) {
+	s := newRoundStore(t)
+	matchID, _, _, seasonID, homeTeamID, _ := seedRoundTestData(t)
+	pid := seedRosterPlayer(t, seasonID, homeTeamID, "Home")
+
+	// A second, later match for the same season/team, week 2.
+	res, _ := db.DB.Exec(`
+		INSERT INTO matches (season_id, home_team_id, away_team_id, week_number, match_number)
+		VALUES (?,?,?,2,1)`, seasonID, homeTeamID, homeTeamID)
+	secondMatchID, _ := res.LastInsertId()
+
+	rows, err := s.ListEligibleMatchesForPlayer(context.Background(), seasonID, pid)
+	if err != nil {
+		t.Fatalf("ListEligibleMatchesForPlayer: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want both matches returned, got %+v", rows)
+	}
+	if rows[0].MatchID != matchID || rows[1].MatchID != secondMatchID {
+		t.Errorf("want week 1 match before week 2 match, got order %d, %d", rows[0].MatchID, rows[1].MatchID)
+	}
+}

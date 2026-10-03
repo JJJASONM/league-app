@@ -86,6 +86,10 @@ type stubRoundStore struct {
 	lastAdminAcceptanceEvent                                          matches.AdminAcceptanceEvent
 	lastGuardedAcceptRevision                                         int
 	lastGuardedAcceptHomePinned, lastGuardedAcceptAwayPinned          matches.TeamSideApprovalState
+
+	// Player Score Approval Phase 1C
+	eligibleMatchesResult []matches.PlayerEligibleMatch
+	eligibleMatchesErr    error
 }
 
 func (s *stubRoundStore) IsWeekClosed(_ context.Context, _ int64) (bool, error) {
@@ -220,6 +224,9 @@ func (s *stubRoundStore) ListApprovalEvents(_ context.Context, _ int64) ([]model
 func (s *stubRoundStore) RecordAdminAcceptanceEvent(_ context.Context, ev matches.AdminAcceptanceEvent) error {
 	s.lastAdminAcceptanceEvent = ev
 	return s.recordAdminEventErr
+}
+func (s *stubRoundStore) ListEligibleMatchesForPlayer(_ context.Context, _, _ int64) ([]matches.PlayerEligibleMatch, error) {
+	return s.eligibleMatchesResult, s.eligibleMatchesErr
 }
 
 // ─── helper ──────────────────────────────────────────────────────────────────

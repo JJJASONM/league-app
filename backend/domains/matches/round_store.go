@@ -242,6 +242,40 @@ type RoundStore interface {
 	// capturing a structured snapshot of both sides' state/note at the
 	// moment of the admin's decision.
 	RecordAdminAcceptanceEvent(ctx context.Context, ev AdminAcceptanceEvent) error
+
+	// ListEligibleMatchesForPlayer returns every match in seasonID where
+	// playerID is eligible (per ResolveApprovalEligibility's exact rule,
+	// applied independently to each side) for the home side, the away
+	// side, or both, ordered by week_number then id. Player Score
+	// Approval Phase 1C's "My Matches" list -- eligibility must stay
+	// authoritative in the backend rather than approximated in the
+	// browser from the player's roster team_id alone, since actual
+	// round_results participation (e.g. a substitute) can also confer
+	// eligibility independent of the player's current roster team.
+	ListEligibleMatchesForPlayer(ctx context.Context, seasonID, playerID int64) ([]PlayerEligibleMatch, error)
+}
+
+// PlayerEligibleMatch summarizes one match a linked player is eligible to
+// act on for at least one side. EligibleHome/EligibleAway report which
+// side(s) apply -- a caller must not assume "the player's roster team's
+// side" equals "the eligible side," since ResolveApprovalEligibility's
+// rule also grants eligibility via actual round_results participation.
+// Approval carries the same MatchApprovalState every other approval read
+// uses, so callers can reuse the existing snapshot rendering exactly.
+type PlayerEligibleMatch struct {
+	MatchID      int64
+	SeasonID     int64
+	WeekNumber   int
+	MatchDate    *string
+	Completed    bool
+	WeekClosed   bool
+	HomeTeamID   int64
+	HomeTeamName string
+	AwayTeamID   int64
+	AwayTeamName string
+	EligibleHome bool
+	EligibleAway bool
+	Approval     MatchApprovalState
 }
 
 // MatchApprovalState holds one match's Weekly Score Processing Phase 1A
