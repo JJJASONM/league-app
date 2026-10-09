@@ -2,7 +2,7 @@
 
 **Owner:** Product test readiness
 **Status:** staging run complete 2026-08-23 -- see Staging Run Results
-**Last reviewed:** 2026-09-30
+**Last reviewed:** 2026-10-08
 
 Purpose: give an admin tester a pass/fail path through the widest useful
 slice of the app before more feature work is added, on staging or a local
@@ -696,6 +696,64 @@ all of it needs a real browser pass before this can be marked verified:
   staging/browser verification for both Phase 1C and 1D) remains
   outstanding. See `doc/domains/matches/README.md`'s "Player Score
   Approval Phase 1C" section and `doc/roadmap.md`'s Now section.
+
+**Player Score Approval Phase 1D -- admin Match Entry integration and
+Weekly Summary approval readiness (implemented and code-reviewed/accepted
+2026-10-08, NOT staging/browser-verified).** Admin Match Entry's Approve
+button now sends the Phase 1B `AdminAcceptMatch` contract instead of the
+pre-Phase-1B shape Phase 1B flagged above as incompatible. **A PM review
+round found the initial handoff returned the new Weekly Summary approval
+fields unconditionally from the PUBLIC recap route; this was corrected and
+re-reviewed/accepted --
+the recap route and all of its pre-existing data remain public, and the
+four new fields (`score_revision`/`home_approval_status`/
+`away_approval_status`/`approval_ready`) are now conditionally included
+only for an appropriately scoped administrator (`system_admin`, or a
+`league_admin` for the season's own league), following the same
+approval-metadata privacy policy `GET .../approval` already enforces --
+see `doc/domains/matches/README.md`'s "Privacy correction" subsection.**
+Backend automated tests pass (5 store-layer tests for calculation
+correctness plus 6 new HTTP-level tests proving the visibility boundary
+itself); `node --check` passed on every changed JavaScript file; no
+browser session has exercised any of the following:
+
+- [ ] In Admin View Match Entry, a completed-but-not-yet-accepted match
+      should show a "Team Approval Status" panel with the current score
+      revision and each side's state (Pending / Approved (current) /
+      Approved (stale revision) / Correction Requested), plus a
+      "ready to accept" vs. "will require override" line.
+- [ ] With both sides approved at the current revision, clicking Accept
+      should succeed immediately with no confirmation prompt, and the
+      match should show as Approved with no override note.
+- [ ] With one or both sides not approved (pending, correction requested,
+      or stale), clicking Accept should show a confirmation dialog naming
+      exactly which side(s) are not satisfied and why; declining it must
+      leave the match unchanged (not accepted); confirming it should
+      accept via override, and the panel should then show "Accepted by
+      administrator override."
+- [ ] Reload the approval snapshot deliberately out of date (e.g. edit
+      scores in a second tab/session between opening Match Entry and
+      clicking Accept) and confirm Accept reports a clear conflict and
+      reloads the match/approval state rather than silently overwriting.
+- [ ] If the approval snapshot fails to load (e.g. simulate a network
+      failure), confirm the Accept button is replaced by a "Retry
+      Approval Status" action and no accept can be triggered.
+- [ ] Existing Process/Unprocess/Unapprove buttons and their behavior
+      should be unchanged.
+- [ ] In Weekly Summary, each scored match should show a new "Team
+      Approval" badge (Ready / Pending / Correction Requested / Stale
+      Revision), and its "Open" button should still navigate to that
+      match in Match Entry.
+- [ ] Call `GET /api/seasons/{id}/weeks/{week}/recap` directly (curl or
+      browser, no credentials) for a season with at least one scored
+      match: the response should still include the existing recap fields
+      (teams, scores, `approved_at`/`processed_at`/`week_closed`, etc.)
+      but none of `score_revision`/`home_approval_status`/
+      `away_approval_status`/`approval_ready` anywhere in `matches`.
+- `MATCHES-Q002` is advanced further by Phase 1D, not resolved -- it stays
+  open until staging/browser verification of the full Phase 1A-1D chain
+  passes. See `doc/domains/matches/README.md`'s "Player Score Approval
+  Phase 1D" section and `doc/roadmap.md`'s Now section.
 
 ### 11. Close / Reopen Week
 

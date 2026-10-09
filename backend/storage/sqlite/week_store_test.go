@@ -757,6 +757,158 @@ func TestWeekStore_GetWeekRecapData_ApprovalFieldsReflectMatchState(t *testing.T
 	}
 }
 
+// strPtrVal dereferences a *string for a test assertion, returning
+// "<nil>" when nil so a failure message is unambiguous about which it was.
+func strPtrVal(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
+}
+
+// TestWeekStore_GetWeekRecapData_ApprovalStatusNilWhenNotScored verifies
+// that an unscored match reports no team-approval status at all (Player
+// Score Approval Phase 1D) -- all four pointer fields nil, even though
+// home/away_approval_state default to 'pending' in the schema, since
+// there is nothing yet to approve. nil (not an empty string or false) is
+// required here: these same fields are also the privacy correction's
+// redaction mechanism (handlers.recapWeekHandler), so "not scored" and
+// "redacted for this caller" must be indistinguishable on the wire.
+func TestWeekStore_GetWeekRecapData_ApprovalStatusNilWhenNotScored(t *testing.T) {
+	initWeekDB(t)
+	seasonID, _ := weekStoreSeed(t)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := data.Matches[0]
+	if row.ScoreRevision != nil {
+		t.Errorf("want nil ScoreRevision when not scored, got %v", *row.ScoreRevision)
+	}
+	if row.HomeApprovalStatus != nil || row.AwayApprovalStatus != nil {
+		t.Errorf("want nil approval statuses when not scored, got home=%s away=%s",
+			strPtrVal(row.HomeApprovalStatus), strPtrVal(row.AwayApprovalStatus))
+	}
+	if row.ApprovalReady != nil {
+		t.Errorf("want nil ApprovalReady when not scored, got %v", *row.ApprovalReady)
+	}
+}
+
+// TestWeekStore_GetWeekRecapData_ApprovalStatusPendingWhenScoredNoApprovals
+// verifies a freshly-scored match (no team approvals recorded yet) reports
+// "pending" for both sides, non-nil.
+func TestWeekStore_GetWeekRecapData_ApprovalStatusPendingWhenScoredNoApprovals(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	db.DB.Exec(`UPDATE matches SET completed=1 WHERE id=?`, matchID)
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := data.Matches[0]
+	if strPtrVal(row.HomeApprovalStatus) != "pending" || strPtrVal(row.AwayApprovalStatus) != "pending" {
+		t.Errorf("want pending/pending, got home=%s away=%s", strPtrVal(row.HomeApprovalStatus), strPtrVal(row.AwayApprovalStatus))
+	}
+	if row.ApprovalReady == nil {
+		t.Fatal("want non-nil ApprovalReady when scored")
+	}
+	if *row.ApprovalReady {
+		t.Error("want ApprovalReady=false when neither side has approved")
+	}
+}
+
+// TestWeekStore_GetWeekRecapData_ApprovalStatusReadyWhenBothApprovedAtCurrentRevision
+// verifies ApprovalReady=true and both statuses report "approved_current"
+// when both sides approved at the match's current score_revision -- the
+// same condition RoundService.BothSidesApproved/AdminAcceptMatch use to
+// decide a normal accept needs no override.
+func TestWeekStore_GetWeekRecapData_ApprovalStatusReadyWhenBothApprovedAtCurrentRevision(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	if _, err := db.DB.Exec(`UPDATE matches SET completed=1, score_revision=0,
+		home_approval_state='approved', home_approval_state_score_revision=0,
+		away_approval_state='approved', away_approval_state_score_revision=0
+		WHERE id=?`, matchID); err != nil {
+		t.Fatalf("seed approvals: %v", err)
+	}
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := data.Matches[0]
+	if strPtrVal(row.HomeApprovalStatus) != "approved_current" || strPtrVal(row.AwayApprovalStatus) != "approved_current" {
+		t.Errorf("want approved_current/approved_current, got home=%s away=%s",
+			strPtrVal(row.HomeApprovalStatus), strPtrVal(row.AwayApprovalStatus))
+	}
+	if row.ApprovalReady == nil || !*row.ApprovalReady {
+		t.Error("want ApprovalReady=true when both sides approved at current revision")
+	}
+}
+
+// TestWeekStore_GetWeekRecapData_ApprovalStatusStaleWhenRevisionMismatch
+// verifies a side approved at a now-superseded score_revision (invalidated
+// by a later score edit) is reported as "approved_stale", not
+// "approved_current", and ApprovalReady is false.
+func TestWeekStore_GetWeekRecapData_ApprovalStatusStaleWhenRevisionMismatch(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	if _, err := db.DB.Exec(`UPDATE matches SET completed=1, score_revision=1,
+		home_approval_state='approved', home_approval_state_score_revision=0,
+		away_approval_state='approved', away_approval_state_score_revision=1
+		WHERE id=?`, matchID); err != nil {
+		t.Fatalf("seed approvals: %v", err)
+	}
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := data.Matches[0]
+	if strPtrVal(row.HomeApprovalStatus) != "approved_stale" {
+		t.Errorf("want approved_stale for home (approved at revision 0, current is 1), got %s", strPtrVal(row.HomeApprovalStatus))
+	}
+	if strPtrVal(row.AwayApprovalStatus) != "approved_current" {
+		t.Errorf("want approved_current for away, got %s", strPtrVal(row.AwayApprovalStatus))
+	}
+	if row.ApprovalReady == nil || *row.ApprovalReady {
+		t.Error("want ApprovalReady=false when either side is stale")
+	}
+}
+
+// TestWeekStore_GetWeekRecapData_ApprovalStatusCorrectionRequested verifies
+// a side with a pending correction request is reported as
+// "correction_requested" regardless of its state_score_revision.
+func TestWeekStore_GetWeekRecapData_ApprovalStatusCorrectionRequested(t *testing.T) {
+	initWeekDB(t)
+	seasonID, matchID := weekStoreSeed(t)
+	if _, err := db.DB.Exec(`UPDATE matches SET completed=1, score_revision=0,
+		away_approval_state='correction_requested', away_approval_state_score_revision=0,
+		away_correction_note='wrong score'
+		WHERE id=?`, matchID); err != nil {
+		t.Fatalf("seed correction request: %v", err)
+	}
+	store := sqlite.NewWeekStore(db.DB)
+
+	data, err := store.GetWeekRecapData(context.Background(), seasonID, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := data.Matches[0]
+	if strPtrVal(row.AwayApprovalStatus) != "correction_requested" {
+		t.Errorf("want correction_requested, got %s", strPtrVal(row.AwayApprovalStatus))
+	}
+	if row.ApprovalReady == nil || *row.ApprovalReady {
+		t.Error("want ApprovalReady=false when a side requested correction")
+	}
+}
+
 // --- GetWeekPlayerStats ---
 
 func TestWeekStore_GetWeekPlayerStats_EmptyWhenNoResults(t *testing.T) {

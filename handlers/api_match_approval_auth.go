@@ -298,6 +298,42 @@ func effectiveListLeagueID(ctx context.Context, seasonMgr SeasonManager, req mat
 	return 0, false
 }
 
+// canSeeApprovalMetadataInRecap is the read-authorization matrix's check
+// for GET /api/seasons/{id}/weeks/{week}/recap (Player Score Approval
+// Phase 1D privacy correction). The route ITSELF stays public -- Schedule,
+// Communications, and other existing consumers rely on its non-sensitive
+// recap data (teams, dates, set/game counts, approved_at/processed_at/
+// week_closed) -- but the newer score_revision/home_approval_status/
+// away_approval_status/approval_ready fields are the SAME protected
+// approval metadata GET .../approval already restricts, so they must not
+// be universally returned just because this route is not. Mirrors
+// canSeeApprovalMetadataInList's admin-only rule exactly: system_admin
+// unconditional; a league_admin only for the league that owns THIS
+// season (resolved directly from the path's season id -- no filter
+// ambiguity like the matches-list route has, since a recap is always for
+// exactly one season). Deliberately NEVER an eligible-player path: an
+// eligible linked player already has a protected PER-MATCH approval read
+// (GET .../approval) for matches where they are eligible, and must not
+// additionally receive every OTHER match's approval state for the whole
+// week through this public, unrelated-player-reachable recap.
+func canSeeApprovalMetadataInRecap(r *http.Request, deps Dependencies, seasonMgr SeasonManager, seasonID int64) bool {
+	if deps.ApplyAuth == nil && deps.AuthMgr == nil && deps.RoleAssignmentMgr == nil {
+		return true
+	}
+	identity, _, err := resolveIdentity(r, deps)
+	if err != nil || identity == nil {
+		return false
+	}
+	if identity.IsSystemAdmin() {
+		return true
+	}
+	season, err := seasonMgr.GetSeason(r.Context(), seasonID)
+	if err != nil {
+		return false
+	}
+	return identity.IsLeagueAdminFor(season.LeagueID)
+}
+
 // canSeeMatchDraftDetailPlayerEligible checks the eligible-session-player
 // half of canSeeMatchDraftDetail. Split out so the league-admin half above
 // can be resolved by callers that already have the season's league id in

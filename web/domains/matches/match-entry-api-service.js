@@ -35,10 +35,15 @@ export async function clearMatchResults(matchId, expectedRevision) {
   return api('DELETE', `/matches/${matchId}/results`, body);
 }
 
-// Weekly Score Processing Phase 1A/1B admin actions. note is optional and
-// only meaningful for approveMatch (admin-attested team/captain approval).
-export async function approveMatch(matchId, note) {
-  return api('POST', `/matches/${matchId}/approve`, note ? { note } : undefined);
+// Weekly Score Processing Phase 1A/1B admin actions.
+// approveMatch (Player Score Approval Phase 1D) is AdminAcceptMatch's
+// contract: expectedRevision is mandatory (sourced from the caller's last-
+// fetched approval snapshot, never guessed), override must be explicit
+// true/false, and note is optional admin-attested free text.
+export async function approveMatch(matchId, expectedRevision, override, note) {
+  const body = { expected_revision: expectedRevision, override: !!override };
+  if (note) body.note = note;
+  return api('POST', `/matches/${matchId}/approve`, body);
 }
 
 export async function processMatch(matchId) {

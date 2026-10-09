@@ -197,7 +197,17 @@ func getAdvancePreview(w http.ResponseWriter, r *http.Request, mgr WeekManager) 
 	jsonOK(w, preview)
 }
 
-func recapWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
+// recapWeekHandler serves the PUBLIC week recap. Player Score Approval
+// Phase 1D privacy correction: score_revision/home_approval_status/
+// away_approval_status/approval_ready are protected approval metadata
+// (the same facts GET .../approval already restricts, per Phase 1B's
+// policy) even though this route itself stays public for its other,
+// non-sensitive recap data -- see canSeeApprovalMetadataInRecap. They are
+// redacted (set to nil, never a placeholder zero/false/empty value) on
+// every match row for every caller except an appropriately scoped
+// administrator, as a post-build projection over the response -- the
+// manager/store always computes the full, authoritative values.
+func recapWeekHandler(w http.ResponseWriter, r *http.Request, deps Dependencies, mgr WeekManager, seasonMgr SeasonManager) {
 	seasonID, err := pathID(r, "id")
 	if err != nil {
 		jsonError(w, "invalid id", 400)
@@ -219,5 +229,15 @@ func recapWeekHandler(w http.ResponseWriter, r *http.Request, mgr WeekManager) {
 		}
 		return
 	}
+
+	if !canSeeApprovalMetadataInRecap(r, deps, seasonMgr, seasonID) {
+		for i := range recap.Matches {
+			recap.Matches[i].ScoreRevision = nil
+			recap.Matches[i].HomeApprovalStatus = nil
+			recap.Matches[i].AwayApprovalStatus = nil
+			recap.Matches[i].ApprovalReady = nil
+		}
+	}
+
 	jsonOK(w, recap)
 }

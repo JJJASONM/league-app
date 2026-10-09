@@ -473,6 +473,27 @@ func (s *WeekStore) GetWeekValidationData(ctx context.Context, seasonID, weekNum
 	return result, nil
 }
 
+// approvalStatusLabel (Player Score Approval Phase 1D) maps one side's raw
+// home/away_approval_state plus its *_approval_state_score_revision to the
+// label models.RecapMatchRow exposes. "approved" only counts as current
+// when stateRev equals scoreRevision -- the same equality
+// matches.sideApprovedAtRevision enforces authoritatively -- otherwise the
+// approval predates a later score edit and is reported as stale rather
+// than current.
+func approvalStatusLabel(state string, stateRev sql.NullInt64, scoreRevision int) string {
+	switch state {
+	case matches.ApprovalStateCorrectionRequested:
+		return "correction_requested"
+	case matches.ApprovalStateApproved:
+		if stateRev.Valid && int(stateRev.Int64) == scoreRevision {
+			return "approved_current"
+		}
+		return "approved_stale"
+	default:
+		return "pending"
+	}
+}
+
 // GetWeekRecapData returns match summaries and week status for the week-end recap.
 // Team names prefer season_teams.season_name; falls back to teams.name for legacy seasons.
 // HasResult is true when the match has completed=1.
@@ -505,7 +526,12 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 		    COALESCE(SUM(CASE WHEN mr.team_id = m.away_team_id THEN mr.games_won ELSE 0 END), 0) AS away_games_won,
 		    m.approved_at,
 		    m.processed_at,
-		    m.week_closed
+		    m.week_closed,
+		    m.score_revision,
+		    m.home_approval_state,
+		    m.home_approval_state_score_revision,
+		    m.away_approval_state,
+		    m.away_approval_state_score_revision
 		FROM matches m
 		LEFT JOIN season_teams hst ON hst.season_id = m.season_id AND hst.team_id = m.home_team_id
 		LEFT JOIN teams ht ON ht.id = m.home_team_id
@@ -523,22 +549,27 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 	matchRows := []models.RecapMatchRow{}
 	for rows.Next() {
 		var (
-			mid                                    int64
-			homeID                                 sql.NullInt64
-			homeName                               string
-			awayID                                 sql.NullInt64
-			awayName                               string
-			matchDate                              sql.NullString
-			completed                              int
+			mid                                      int64
+			homeID                                   sql.NullInt64
+			homeName                                 string
+			awayID                                   sql.NullInt64
+			awayName                                 string
+			matchDate                                sql.NullString
+			completed                                int
 			homeSets, awaySets, homeGames, awayGames int
-			approvedAt, processedAt                sql.NullString
-			weekClosed                              int
+			approvedAt, processedAt                  sql.NullString
+			weekClosed                               int
+			scoreRevision                            int
+			homeApprovalState, awayApprovalState     string
+			homeApprovalRev, awayApprovalRev         sql.NullInt64
 		)
 		if err := rows.Scan(
 			&mid, &homeID, &homeName, &awayID, &awayName,
 			&matchDate, &completed,
 			&homeSets, &awaySets, &homeGames, &awayGames,
 			&approvedAt, &processedAt, &weekClosed,
+			&scoreRevision, &homeApprovalState, &homeApprovalRev,
+			&awayApprovalState, &awayApprovalRev,
 		); err != nil {
 			return matches.WeekRecapData{}, fmt.Errorf("get week recap data: scan: %w", err)
 		}
@@ -552,6 +583,24 @@ func (s *WeekStore) GetWeekRecapData(ctx context.Context, seasonID, weekNum int6
 			HomeGamesWon: homeGames,
 			AwayGamesWon: awayGames,
 			WeekClosed:   weekClosed == 1,
+		}
+		// Player Score Approval Phase 1D: team-approval status is only
+		// meaningful once scores exist -- a freshly-seeded match's
+		// home/away_approval_state default to 'pending' even though
+		// there is nothing yet to approve, so these stay nil (omitted)
+		// exactly like HasResult's own set/game counts do above. Built
+		// here at full fidelity regardless of caller -- the HTTP-layer
+		// privacy redaction (handlers.recapWeekHandler,
+		// canSeeApprovalMetadataInRecap) is a separate, later projection
+		// step over the *http response*, not a concern of this store.
+		if row.HasResult {
+			homeStatus := approvalStatusLabel(homeApprovalState, homeApprovalRev, scoreRevision)
+			awayStatus := approvalStatusLabel(awayApprovalState, awayApprovalRev, scoreRevision)
+			ready := homeStatus == "approved_current" && awayStatus == "approved_current"
+			row.ScoreRevision = &scoreRevision
+			row.HomeApprovalStatus = &homeStatus
+			row.AwayApprovalStatus = &awayStatus
+			row.ApprovalReady = &ready
 		}
 		if homeID.Valid {
 			v := homeID.Int64

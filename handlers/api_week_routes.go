@@ -38,6 +38,6 @@ func registerWeekRoutes(mux *http.ServeMux, deps Dependencies, weekMgr WeekManag
 		getAdvancePreview(w, r, weekMgr)
 	})
 	mux.HandleFunc("GET /api/seasons/{id}/weeks/{week}/recap", func(w http.ResponseWriter, r *http.Request) {
-		recapWeekHandler(w, r, weekMgr)
+		recapWeekHandler(w, r, deps, weekMgr, seasonMgr)
 	})
 }

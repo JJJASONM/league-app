@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.17`
-**Last reviewed:** `2026-10-02`
+**Current version:** `0.20`
+**Last reviewed:** `2026-10-08`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -3848,7 +3848,352 @@ not a new defect. Phase 1D (admin `/approve` contract integration, Weekly
 Summary/admin presentation, staging/browser verification) remains
 outstanding; `MATCHES-Q002` is advanced further, not resolved.
 
+## Player Score Approval Phase 1D -- Admin Integration and Weekly Summary (accepted 2026-10-08)
+
+**Status: accepted as of 2026-10-08.** The implementation below, including
+the privacy correction documented in its own subsection, was reviewed and
+accepted after one PM correction round. Staging and browser verification
+of the full Phase 1A-1D chain have still NOT been performed -- that is not
+a condition of this acceptance; see Verification.
+
+**Why this branch exists:** Phases 1A-1C are accepted, but the admin
+Match Entry Approve action still sent the pre-Phase-1B request shape (no
+`expected_revision`, no `override`) -- every click would 400 against the
+rewired `AdminAcceptMatch` contract. This phase completes the admin side of
+the workflow and surfaces team-approval readiness in Weekly Summary, so the
+combined Phase 1A-1D chain is reviewable as a deployable whole.
+
+**Stop condition:** admin Match Entry's Accept action sends
+`expected_revision` (sourced from the last-fetched approval snapshot) and an
+explicit `override`, never silently converting a failed normal accept into
+an override; Accept is disabled with a Retry path whenever the approval
+snapshot failed to load; a 409 response (stale revision, changed team
+state, or override-required) reloads the authoritative match/approval state
+instead of being retried or overwritten; admin Match Entry shows both
+sides' approval state (current vs. stale revision, correction notes) and,
+once accepted, whether acceptance was normal or an override; Weekly Summary
+shows each scored match's team-approval readiness with a path to the
+relevant Match Entry screen; process/unprocess/unapprove/reopen/close-week-
+auto-process/substitute/lock behavior are all unchanged. The implementation
+below meets this but has not been browser-verified.
+
+### Discovery findings
+
+- `AdminAcceptMatch` (`backend/domains/matches/approval_service.go`) was
+  already fully implemented and tested in Phase 1B -- `override` only
+  bypasses the both-sides-approved-at-current-revision requirement, never
+  the match-level guards (not found, stale revision, season/week closed,
+  not scored, already processed, already accepted), and a failed
+  non-override call writes nothing. This phase needed no backend change to
+  `AdminAcceptMatch` itself, only to the pieces around it.
+- `POST /api/matches/{id}/approve` (`handlers/api_match_results_handlers.go`)
+  already required `expected_revision` unconditionally and decoded
+  `override`/`note` -- the gap was entirely that nothing in the browser sent
+  that shape yet. The route's own response is `{"status":"approved"}` only
+  (no snapshot), so the admin UI must separately reload the match and
+  approval snapshot after a successful accept to see the result.
+- The Phase 1C approval-snapshot (`GET /matches/{id}/approval`) and events
+  (`GET /matches/{id}/approval-events`) reads were already admin-accessible
+  and required no change; Match Entry's admin loader simply never called
+  them before this phase.
+- `RecapMatchRow` (`models/models.go`), backing Weekly Summary's week recap,
+  carried `approved_at`/`processed_at`/`week_closed` but nothing about
+  per-side team-approval state -- Weekly Summary had no way to show
+  approval readiness before a match reaches admin acceptance.
+
+### Admin Match Entry integration
+
+`web/domains/matches/match-entry-page-component.js`:
+
+- The admin loader (`#loadMatchEntry`) now fetches the match's approval
+  snapshot (`GET .../approval`) unconditionally, same as the player loader
+  already did -- a failed fetch leaves `#approval` null. When the match is
+  already `approved_at` and the snapshot loaded, it additionally fetches
+  `GET .../approval-events` and records the most recent `event_scope:
+  "match"` event's `event_type` (`admin_accepted` or `admin_override`) in a
+  new `#lastAcceptEvent` field, purely for display. Both fields are cleared
+  by `#reset()` and re-populated on every load, never left over from a
+  previous match.
+- The old Approve button/`#approveMatch` is replaced by an Accept button
+  (`data-action="accept-match"`) and `#acceptMatch`. When the snapshot
+  failed to load, no Accept button renders at all -- a Retry button
+  (`data-action="retry-admin-approval"`) does instead, and `#acceptMatch`
+  itself also refuses to proceed if `#approval` is somehow null, so an
+  accept can never go out with guessed state.
+- `#acceptMatch` sources `expected_revision` from `this.#approval.score_revision`
+  (never from the match row directly) and computes `override` as follows:
+  if both sides are `"approved"` at that exact revision (`#sideReadyAtRevision`,
+  mirroring `matches.sideApprovedAtRevision`'s equality check for display),
+  `override: false` and the request is sent immediately. Otherwise, a native
+  `confirm()` dialog names each unsatisfied side and why (not yet approved,
+  correction requested with its note, or approved at a stale revision) and
+  asks for explicit confirmation; declining sends nothing at all (no
+  override, no accept), and only confirming sends `override: true`. There is
+  no path from a declined or failed normal accept to an automatic override
+  retry.
+- Every outcome of `#acceptMatch` -- success, any error status, including a
+  409 for a stale revision or changed team state -- ends in `#reload()`,
+  which re-fetches the match, rounds/lineup, and approval snapshot fresh.
+  This is deliberately unconditional: a conflict must never leave the UI
+  showing pre-click state the backend no longer agrees with, and a success
+  must immediately reflect the real badges/available actions rather than
+  whatever the client assumed would happen.
+- A new `#renderAdminApprovalPanel()` (admin-mode analog of the existing
+  player-mode `#renderTeamApprovalPanel`, but read-only -- an administrator
+  never acts for a team side) shows, whenever the match is completed: the
+  current score revision, each side's state (`Pending` / `Approved
+  (current)` / `Approved (stale revision)` / `Correction Requested`) with
+  actor and correction-note attribution when present, a "ready to accept"
+  vs. "will require override" readiness line (before acceptance), and --
+  once accepted -- whether acceptance was normal or an administrator
+  override, from `#lastAcceptEvent`. Rendered only in admin mode, alongside
+  (not replacing) the existing player-mode panel, which is unchanged.
+- `web/domains/matches/match-entry-api-service.js`'s `approveMatch` now
+  takes `(matchId, expectedRevision, override, note)` and always sends
+  `expected_revision`/`override` in the body; `note` is included only when
+  given. No other admin action's request shape changed.
+
+### Weekly Summary integration: smallest necessary backend extension
+
+**`GET /api/seasons/{id}/weeks/{week}/recap` remains a PUBLIC route, and
+every pre-existing recap field (teams, dates, set/game counts,
+`approved_at`/`processed_at`/`week_closed`, missing-match count, player
+stats, handicap changes, acknowledgments, next-week readiness) remains
+public exactly as before this phase -- unchanged for every caller,
+authenticated or not.** Weekly Summary's existing `has_result`/
+`approved_at`/`processed_at`/`week_closed` status ladder already covers
+Unscored/Scored/Admin-Approved/Processed/Closed -- re-encoding those same
+four states a second time would duplicate existing data for no benefit.
+The gap was specifically the previously-invisible Phase 1B/1C
+team-approval states a scored-but-not-yet-accepted match sits in.
+`models.RecapMatchRow` (`models/models.go`) gains four **pointer** fields,
+computed at full fidelity in `backend/storage/sqlite/week_store.go`'s
+`GetWeekRecapData` (new `approvalStatusLabel` helper) by adding
+`m.score_revision`/`m.home_approval_state`/`m.home_approval_state_score_revision`/
+`m.away_approval_state`/`m.away_approval_state_score_revision` to the
+existing single per-week query -- no new query, no N+1:
+
+- `score_revision` (`*int`).
+- `home_approval_status` / `away_approval_status` (`*string`): one of
+  `"pending"`, `"approved_current"`, `"approved_stale"`, or
+  `"correction_requested"`. `"approved_stale"` means the side approved a
+  now-superseded revision (invalidated by a later score edit) -- the
+  exact distinction `matches.sideApprovedAtRevision` enforces
+  authoritatively, computed once here so no consumer re-derives it.
+- `approval_ready` (`*bool`): true only when both sides are
+  `"approved_current"` -- mirrors `RoundService.BothSidesApproved` exactly,
+  i.e. whether a normal (non-override) admin accept would succeed right
+  now.
+
+**These four fields are protected approval metadata, the same facts
+Player Score Approval Phase 1B's `GET .../approval` already restricts --
+they are never universally returned by this public route.** See "Privacy
+correction" immediately below for the full policy and mechanism (this was
+a PM-flagged correction to the initial Phase 1D handoff, applied before
+any commit).
+
+`web/domains/weekly-summary/weekly-summary-page-component.js` adds a "Team
+Approval" column, populated by a new `#teamApprovalStatus(m)` that returns
+no badge at all when `home_approval_status` is absent (either because the
+match is unscored, or because this session's request was redacted -- the
+two cases are indistinguishable on the wire by design, and both correctly
+render as "nothing to show" rather than a guessed label) and otherwise
+picks one display label (`Ready` / `Pending` / `Correction Requested` /
+`Stale Revision`) by priority among the backend-computed fields -- it
+performs no revision-equality comparison itself, only prioritizes among
+finished enum values and the `approval_ready` boolean, per the "do not
+duplicate authoritative acceptance rules in JavaScript" requirement.
+Weekly Summary's admin UI receives the real fields because it always runs
+under an authenticated administrator's own session request, which
+satisfies the policy below like any other caller would. The existing
+"Open" button (already present, linking to Match Entry for that match)
+needed no change -- it already provides the required path from Weekly
+Summary to the relevant Match Entry screen.
+
+### Privacy correction: approval metadata redaction for non-admin callers
+
+**PM review of the initial Phase 1D handoff found a privacy regression**:
+the four fields above were being returned unconditionally by the public
+recap route to every caller, including unauthenticated callers, linked
+players, and administrators of an unrelated league -- the same protected
+approval metadata Phase 1B deliberately restricted on `GET .../approval`
+would have leaked through this second, pre-existing public route. Fixed
+before any staging or commit, using the EXISTING Phase 1B approval-metadata
+visibility policy and season-to-league scope resolution rather than
+inventing a broader role check or a second protected endpoint:
+
+- `handlers/api_match_approval_auth.go`: new `canSeeApprovalMetadataInRecap`,
+  mirroring the already-existing `canSeeApprovalMetadataInList` (the same
+  check `GET /api/matches` uses to scope admin-attested approval metadata
+  visibility) exactly: `system_admin` unconditional; a `league_admin` only
+  for the league that owns the REQUESTED season (resolved directly from
+  the recap route's own season-id path parameter -- no filter ambiguity,
+  since a recap is always for exactly one season). Deliberately **no
+  eligible-player path** -- a linked player already has a protected
+  per-match read (`GET .../approval`) for matches where they are eligible,
+  and must not additionally receive every OTHER match's approval state for
+  the whole week through this public, unrelated-player-reachable recap.
+- `handlers/api_week_handlers.go`'s `recapWeekHandler`: builds the recap
+  normally (full fidelity, via the unchanged `WeekManager.WeekRecap`),
+  then -- only when `canSeeApprovalMetadataInRecap` is false -- sets all
+  four pointer fields to `nil` on every match row before responding. The
+  route registration (`handlers/api_week_routes.go`) now passes `deps` and
+  `seasonMgr` through to the handler for this check; the route itself
+  stays registered exactly as before (no new auth gate wrapping it, no
+  change to who can call it at all).
+- `models.RecapMatchRow`'s four fields were changed from plain
+  `int`/`string`/`bool` to `*int`/`*string`/`*bool` specifically so a
+  redacted field is **absent** from the JSON response, never present with
+  a placeholder `0`/`""`/`false` that would be indistinguishable from a
+  legitimate value for an authorized caller. `nil` now serves double duty
+  by design: "not yet scored" (the store never computes these before
+  `HasResult`) and "redacted for this caller" produce the identical
+  absent-key wire shape, which is intentional -- a consumer has no
+  legitimate reason to tell the two apart, and no caller's own redaction
+  state is itself sensitive information worth distinguishing.
+- `backend/storage/sqlite/week_store.go`'s `GetWeekRecapData` is
+  otherwise unchanged by this correction: it always computes the full,
+  authoritative values when `HasResult`, regardless of caller -- the
+  redaction is a separate, later projection over the *HTTP response*, not
+  a concern of the store or the `WeekManager`/`WeekService` layer. Every
+  other consumer of `models.WeekRecap`/`RecapMatchRow` in Go code (there
+  are none besides this one route today) is unaffected in behavior, only
+  in that the four fields are now pointers rather than values.
+
+This did not touch the accepted admin Match Entry Accept/override
+behavior at all -- Match Entry sources approval state exclusively from the
+dedicated, already-protected `GET .../approval`/`GET .../approval-events`
+reads (unaffected by this correction), never from the recap route.
+
+### Tests added
+
+5 SQLite-layer tests in `backend/storage/sqlite/week_store_test.go`
+covering `GetWeekRecapData`'s new fields (calculation correctness, store
+layer, unaffected by the privacy correction -- the store always computes
+full fidelity): nil/absent when not scored, `"pending"`/`"pending"` with
+`approval_ready=false` when scored with no approvals, `"approved_current"`/
+`approval_ready=true` when both sides approved at the current revision,
+`"approved_stale"` for a side approved at a since-superseded revision
+(`approval_ready=false`), and `"correction_requested"` for a side with a
+pending correction request.
+
+6 new HTTP-level tests in the new `handlers/api_week_recap_privacy_test.go`
+prove the visibility boundary itself, against the real sqlite-backed auth
+stack (`testServerWithAuth`/`seedApprovalFixture`, the same infrastructure
+Phase 1B's read-privacy tests use): an unauthenticated caller receives the
+existing recap data but none of the four fields
+(`TestWeekRecapPrivacy_Unauthenticated_NoApprovalFields`); a linked player
+(including one eligible for the match itself) receives the existing data
+but none of the four fields (`..._LinkedPlayer_NoApprovalFields`); a
+`league_admin` for a DIFFERENT league does not receive them
+(`..._DifferentLeagueAdmin_NoApprovalFields`); a `league_admin` scoped to
+the season's own league receives the correct fields
+(`..._SameLeagueAdmin_SeesApprovalFields`); a `system_admin` receives them
+(`..._SystemAdmin_SeesApprovalFields`); and every pre-existing recap field
+remains present and correct for an unauthenticated caller, proving the
+correction redacts only the four new fields and nothing else
+(`..._ExistingPublicFieldsUnchanged`).
+
+`AdminAcceptMatch`'s normal-accept/explicit-override/no-silent-override/
+missing-snapshot/stale-revision/changed-team-state behavior was already
+fully covered at the service layer (`backend/domains/matches/
+team_approval_service_test.go`) and HTTP layer (`handlers/
+api_match_approval_phase1b_test.go`) by Phase 1B, since this phase changed
+none of that logic -- only the browser's use of the existing contract, the
+new recap fields, and their visibility. No new backend tests were needed
+for `AdminAcceptMatch` itself. The admin Match Entry accept/override/
+reload flow is frontend logic with no automated test harness in this repo
+(per the established Phase 1C precedent) -- verified by `node --check` and
+manual code review of the guard conditions mirrored from the backend;
+browser verification remains outstanding (see Verification).
+
+### Verification
+
+`go build ./...` and `go test ./... -count=1` (all packages, zero
+failures) pass. `go vet ./...` reports the same four pre-existing warnings
+as every prior phase (`handlers/api_season_teams_test.go:455,1216`,
+`handlers/api_weeks_test.go:1271,1313` -- all in files untouched by this
+phase), zero new findings. `git diff --check` is clean. An ASCII byte-scan
+of every added/changed line found zero non-ASCII bytes. `node --check`
+passed on every changed JavaScript file
+(`web/domains/matches/match-entry-api-service.js`,
+`web/domains/matches/match-entry-page-component.js`,
+`web/domains/weekly-summary/weekly-summary-page-component.js`).
+Browser/staging verification of the admin accept/override flow and Weekly
+Summary's new column has NOT been performed -- that remains outstanding
+before the Phase 1A-1D chain can be considered fully verified; see
+`doc/testing/product-smoke-test-checklist.md`.
+
+### Explicit Phase 1D exclusions
+
+No captain role, no new login/session behavior, no email or mobile
+notifications, no generic audit infrastructure, no handicap formula
+changes, no visual redesign, no unrelated cleanup, no new acceptance
+endpoint, no second public approval endpoint, no broader role check than
+the existing Phase 1B approval-metadata visibility policy, and no global
+authentication requirement added to the recap route. `AdminAcceptMatch`
+remains the only path that sets `approved_at`, and this phase added no
+second copy of its decision logic anywhere (frontend presentation mirrors
+it for display only; the backend re-verifies independently and
+authoritatively at write time regardless of what the UI shows).
+`MATCHES-Q002` remains open until staging and browser verification of the
+full chain are complete.
+
 ## Decision History
+
+### 2026-10-08 - Player Score Approval Phase 1D: PM correction round (approval metadata privacy), accepted
+
+**Status:** `accepted`
+
+PM review of the Phase 1D entry below found a privacy regression: the new
+`score_revision`/`home_approval_status`/`away_approval_status`/
+`approval_ready` fields were being returned unconditionally by the PUBLIC
+`GET /api/seasons/{id}/weeks/{week}/recap` route to every caller --
+unauthenticated, linked player, or an administrator of an unrelated
+league -- leaking the same protected approval metadata Phase 1B
+deliberately restricted on `GET .../approval`. Fixed using the EXISTING
+Phase 1B approval-metadata visibility policy (a new
+`canSeeApprovalMetadataInRecap`, mirroring the already-existing
+`canSeeApprovalMetadataInList` exactly: `system_admin` unconditional,
+`league_admin` only for the season's own league, deliberately no
+eligible-player path) rather than a broader role check or a second
+protected endpoint. `models.RecapMatchRow`'s four fields became pointers
+so a redacted field is absent from the JSON response rather than present
+with a placeholder zero/false/empty value. The recap route itself stays
+public; every pre-existing recap field remains public and unchanged. Added
+6 new HTTP-level tests (`handlers/api_week_recap_privacy_test.go`) proving
+the visibility boundary for all five caller types the PM required plus
+unchanged pre-existing-field behavior. No change to the accepted admin
+Match Entry Accept/override behavior -- it sources approval state
+exclusively from the already-protected per-match reads, never from the
+recap route. See "Privacy correction: approval metadata redaction for
+non-admin callers" under "Player Score Approval Phase 1D" above for full
+detail. Accepted 2026-10-08. Staging/browser verification remains
+outstanding, not a condition of this acceptance; `MATCHES-Q002` stays
+open.
+
+### 2026-10-08 - Player Score Approval Phase 1D: admin integration and Weekly Summary, accepted
+
+**Status:** `accepted`
+
+Rewired admin Match Entry's Accept action onto the Phase 1B
+`AdminAcceptMatch` contract (`expected_revision` sourced from the
+authoritative approval snapshot, explicit `override` only after a
+confirm()-based admin acknowledgment of exactly which side(s) are not
+satisfied, never a silent override), added a read-only admin approval
+status panel (current vs. stale revision per side, correction notes,
+normal-vs-override acceptance history), and added the smallest necessary
+backend extension (`score_revision`/`home_approval_status`/
+`away_approval_status`/`approval_ready` on `RecapMatchRow`) so Weekly
+Summary can show team-approval readiness without duplicating any
+acceptance rule in JavaScript. No change to `AdminAcceptMatch`,
+`ApproveTeamSide`/`WithdrawTeamApproval`/`RequestCorrection`, or any other
+existing workflow -- all were already correct from Phase 1B/1C and fully
+tested; this phase only wired the browser onto the existing contract. See
+"Player Score Approval Phase 1D" above for full detail. Implemented and
+accepted 2026-10-08 (after the privacy correction round above);
+`MATCHES-Q002` stays open pending staging/browser verification of the
+full Phase 1A-1D chain.
 
 ### 2026-10-02 - Player Score Approval Phase 1C: player-facing score entry and team approval UI, accepted
 

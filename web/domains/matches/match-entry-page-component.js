@@ -24,6 +24,7 @@ import {
 } from './match-entry-api-service.js';
 import {
   fetchMatchApproval,
+  fetchMatchApprovalEvents,
   approveTeamSide,
   withdrawTeamApproval,
   requestTeamCorrection,
@@ -89,11 +90,19 @@ class MatchEntryPage extends HTMLElement {
   // team-approval mutation controls, a Retry action instead) rather than
   // risk a write going out with an undefined revision.
   #approval = null;
+  // Player Score Approval Phase 1D: the most recent "match"-scoped
+  // approval event's event_type ("admin_accepted" | "admin_override"),
+  // fetched only in admin mode and only once the match is already
+  // approved_at -- used solely to show whether an already-accepted match
+  // was accepted normally or via override. Never consulted for any
+  // decision; purely a display fact from the authoritative event log.
+  #lastAcceptEvent = null;
 
   #reset() {
     this.#mode = 'admin';
     this.#playerCtx = null;
     this.#approval = null;
+    this.#lastAcceptEvent = null;
     this.#currentMatch = null;
     this.#homeTeam = [];
     this.#awayTeam = [];
@@ -140,8 +149,9 @@ class MatchEntryPage extends HTMLElement {
       if (e.target.closest('[data-action="go-lineup"]'))        { e.preventDefault(); navTo('lineup'); return; }
       const clearBtn = e.target.closest('[data-action="clear-results"]');
       if (clearBtn) { this.#clearResults(parseInt(clearBtn.dataset.matchId)); return; }
-      const approveBtn = e.target.closest('[data-action="approve-match"]');
-      if (approveBtn) { this.#approveMatch(parseInt(approveBtn.dataset.matchId)); return; }
+      const acceptBtn = e.target.closest('[data-action="accept-match"]');
+      if (acceptBtn) { this.#acceptMatch(parseInt(acceptBtn.dataset.matchId)); return; }
+      if (e.target.closest('[data-action="retry-admin-approval"]')) { this.#reload(); return; }
       const processBtn = e.target.closest('[data-action="process-match"]');
       if (processBtn) { this.#processMatch(parseInt(processBtn.dataset.matchId)); return; }
       const unprocessBtn = e.target.closest('[data-action="unprocess-match"]');
@@ -274,6 +284,24 @@ class MatchEntryPage extends HTMLElement {
 
     this.#currentMatch = detail.match;
     const m = this.#currentMatch;
+
+    // Player Score Approval Phase 1D: the admin Accept action and the
+    // admin approval panel both require the authoritative approval
+    // snapshot -- fetched here unconditionally, same as the player
+    // loader, so a failed fetch (#approval stays null) disables Accept
+    // rather than risk sending expected_revision from guessed state.
+    // #reset() already cleared both fields; only re-populate here, never
+    // leave a previous match's snapshot/event rendered against this one.
+    try { this.#approval = await fetchMatchApproval(matchId); }
+    catch (_) { this.#approval = null; }
+    this.#lastAcceptEvent = null;
+    if (this.#approval && m.approved_at) {
+      try {
+        const events = await fetchMatchApprovalEvents(matchId);
+        const lastMatchEvent = events.filter(ev => ev.event_scope === 'match').pop();
+        this.#lastAcceptEvent = lastMatchEvent ? lastMatchEvent.event_type : null;
+      } catch (_) { this.#lastAcceptEvent = null; }
+    }
 
     this.#seasonRules = {};
     try {
@@ -775,9 +803,20 @@ class MatchEntryPage extends HTMLElement {
     // from the team-side approval panel below) must never render in player
     // mode -- gated on #mode first, before any of their own state checks.
     const isAdminMode = this.#mode === 'admin';
-    const approveBtn = (isAdminMode && !locked && m.completed && !isApproved)
-      ? `<button class="btn btn-sm btn-outline-primary" data-action="approve-match" data-match-id="${m.id}">
-          <i class="bi bi-check2-circle"></i> Approve</button>` : '';
+    // Player Score Approval Phase 1D: Accept replaces the old Approve
+    // button's request shape (which never sent expected_revision/override
+    // and would now 400 against AdminAcceptMatch). Disabled with a Retry
+    // path instead of rendered at all when the approval snapshot failed
+    // to load -- #acceptMatch's own expected_revision source -- rather
+    // than let an admin accept against guessed state.
+    const canAttemptAccept = isAdminMode && !locked && m.completed && !isApproved && !isProcessed;
+    const approveBtn = canAttemptAccept
+      ? (this.#approval
+          ? `<button class="btn btn-sm btn-outline-primary" data-action="accept-match" data-match-id="${m.id}">
+              <i class="bi bi-check2-circle"></i> Accept</button>`
+          : `<button class="btn btn-sm btn-outline-secondary" data-action="retry-admin-approval" data-match-id="${m.id}">
+              <i class="bi bi-arrow-clockwise"></i> Retry Approval Status</button>`)
+      : '';
     const processBtn = (isAdminMode && !locked && isApproved && !isProcessed)
       ? `<button class="btn btn-sm btn-outline-primary" data-action="process-match" data-match-id="${m.id}">
           <i class="bi bi-gear"></i> Process</button>` : '';
@@ -847,6 +886,7 @@ class MatchEntryPage extends HTMLElement {
     ${weekClosedHint}${lockedHint}`;
 
     if (this.#mode === 'player') html += this.#renderTeamApprovalPanel();
+    else html += this.#renderAdminApprovalPanel();
 
     html += `<div id="ss-print-area"><div class="ss-sheet">`;
 
@@ -1082,6 +1122,107 @@ class MatchEntryPage extends HTMLElement {
   #refreshApprovalPanel() {
     const panel = this.querySelector('#me-approval-panel');
     if (panel) panel.outerHTML = this.#renderTeamApprovalPanel();
+  }
+
+  // -- Player Score Approval Phase 1D: admin-mode approval status --------
+
+  // #renderAdminApprovalPanel is the admin-mode counterpart to
+  // #renderTeamApprovalPanel: read-only (an administrator never acts for
+  // a team side here -- only players do, via the player-mode panel above),
+  // paired with the Accept button in the toolbar. Shows exactly the
+  // snapshot #acceptMatch's own accept/override decision uses, so an
+  // administrator can see up front whether a normal Accept will succeed
+  // or require override, and why. #approvalSideLabel's "current" vs
+  // "stale" distinction mirrors matches.sideApprovedAtRevision's equality
+  // check for DISPLAY only -- the backend re-verifies this independently
+  // and authoritatively at write time regardless of what this shows.
+  #renderAdminApprovalPanel() {
+    const m = this.#currentMatch;
+    if (!m.completed) return '';
+    const snap = this.#approval;
+    if (!snap) {
+      return `<div class="alert alert-warning small no-print" id="me-admin-approval-panel">
+        Team approval status could not be loaded. Accepting is disabled until this is retried.
+        <button class="btn btn-sm btn-outline-secondary ms-2" data-action="retry-admin-approval">Retry</button>
+      </div>`;
+    }
+
+    const sideBlock = (teamName, side) => {
+      const lbl = this.#approvalSideLabel(side, snap.score_revision);
+      const actor = side.actor_name_snapshot
+        ? `<div class="small text-muted">By ${esc(side.actor_name_snapshot)}</div>` : '';
+      const note = side.correction_note
+        ? `<div class="small text-danger">&ldquo;${esc(side.correction_note)}&rdquo;</div>` : '';
+      return `<div class="col-md-6">
+        <div class="border rounded p-2 h-100">
+          <div class="d-flex justify-content-between align-items-center">
+            <strong>${esc(teamName)}</strong>
+            <span class="badge ${lbl.cls}">${lbl.text}</span>
+          </div>
+          ${actor}${note}
+        </div>
+      </div>`;
+    };
+
+    const homeReady = this.#sideReadyAtRevision(snap.home, snap.score_revision);
+    const awayReady = this.#sideReadyAtRevision(snap.away, snap.score_revision);
+    const readiness = m.approved_at ? '' : `<div class="small mt-2 ${homeReady && awayReady ? 'text-success' : 'text-muted'}">
+        ${homeReady && awayReady
+          ? 'Both teams have approved the current scores. Ready to accept.'
+          : 'One or both teams have not approved the current scores. Accepting will require administrator override.'}
+      </div>`;
+    const acceptedHow = (m.approved_at && this.#lastAcceptEvent)
+      ? `<div class="small ${this.#lastAcceptEvent === 'admin_override' ? 'text-warning' : 'text-success'} mt-1">
+          ${this.#lastAcceptEvent === 'admin_override'
+            ? 'Accepted by administrator override.'
+            : 'Accepted normally (both teams had approved).'}
+        </div>`
+      : '';
+
+    return `<div class="card mb-3 no-print" id="me-admin-approval-panel">
+      <div class="card-header fw-semibold py-2 d-flex justify-content-between align-items-center">
+        <span>Team Approval Status</span>
+        <span class="small text-muted">Revision ${snap.score_revision}</span>
+      </div>
+      <div class="card-body">
+        <div class="row g-2">
+          ${sideBlock(m.home_team_name, snap.home)}
+          ${sideBlock(m.away_team_name, snap.away)}
+        </div>
+        ${readiness}${acceptedHow}
+      </div>
+    </div>`;
+  }
+
+  // #sideReadyAtRevision mirrors matches.sideApprovedAtRevision exactly
+  // (state === "approved" AND state_score_revision === expectedRevision)
+  // for display purposes only -- shared by #renderAdminApprovalPanel and
+  // #acceptMatch so the two can never disagree about what "ready" means.
+  #sideReadyAtRevision(side, expectedRevision) {
+    return side.state === 'approved' && side.state_score_revision === expectedRevision;
+  }
+
+  #approvalSideLabel(side, scoreRevision) {
+    if (side.state === 'correction_requested') return { text: 'Correction Requested', cls: 'bg-warning text-dark' };
+    if (side.state === 'approved') {
+      return this.#sideReadyAtRevision(side, scoreRevision)
+        ? { text: 'Approved (current)', cls: 'bg-success' }
+        : { text: 'Approved (stale revision)', cls: 'bg-warning text-dark' };
+    }
+    return { text: 'Pending', cls: 'bg-secondary' };
+  }
+
+  // #approvalReasonText explains, for one side, why it does not count as
+  // a current approval -- used only to build #acceptMatch's override
+  // confirmation message.
+  #approvalReasonText(side, scoreRevision) {
+    if (side.state === 'correction_requested') {
+      return 'correction requested' + (side.correction_note ? ` ("${side.correction_note}")` : '');
+    }
+    if (side.state === 'approved') {
+      return `approved at revision ${side.state_score_revision}, but the current revision is ${scoreRevision} (stale)`;
+    }
+    return 'not yet approved';
   }
 
   // A 409 here means the score_revision this action targeted is no longer
@@ -1488,12 +1629,48 @@ class MatchEntryPage extends HTMLElement {
   // reloads the match so the status badges and button set reflect the new
   // state immediately.
 
-  async #approveMatch(matchId) {
+  // #acceptMatch is Player Score Approval Phase 1D's rewiring of the old
+  // #approveMatch onto AdminAcceptMatch's actual contract. expected_revision
+  // always comes from the last-fetched approval snapshot (#approval), never
+  // from the match row directly, per the PM's "use the latest authoritative
+  // approval snapshot" requirement. override is false whenever both sides
+  // are approved at the current revision; otherwise an explicit confirm()
+  // naming exactly which side(s) are not satisfied is required before
+  // sending override:true -- a declined confirm sends nothing at all, so a
+  // failed normal accept can never be silently retried as an override.
+  // Every outcome (success or error) ends in #reload(), so a stale-revision
+  // or changed-team-state 409 is reflected immediately rather than risking
+  // the UI showing state this click no longer agrees with.
+  async #acceptMatch(matchId) {
+    const snap = this.#approval;
+    if (!snap) {
+      toast('Approval status is unavailable; retry before accepting.', 'danger');
+      return;
+    }
+    const rev = snap.score_revision;
+    const homeReady = this.#sideReadyAtRevision(snap.home, rev);
+    const awayReady = this.#sideReadyAtRevision(snap.away, rev);
+    let override = false;
+    if (!homeReady || !awayReady) {
+      const reasons = [];
+      if (!homeReady) reasons.push(`Home: ${this.#approvalReasonText(snap.home, rev)}`);
+      if (!awayReady) reasons.push(`Away: ${this.#approvalReasonText(snap.away, rev)}`);
+      const ok = confirm(
+        'This match does not have both team approvals at the current score revision:\n\n' +
+        reasons.join('\n') +
+        '\n\nAccept anyway as an administrator override?'
+      );
+      if (!ok) return;
+      override = true;
+    }
     try {
-      await apiApproveMatch(matchId);
-      toast('Match approved');
-      await this.#loadMatchEntry();
-    } catch (e) { toast(e.message, 'danger'); }
+      await apiApproveMatch(matchId, rev, override);
+      toast(override ? 'Match accepted (administrator override)' : 'Match accepted');
+    } catch (e) {
+      toast(e.message, 'danger');
+    } finally {
+      await this.#reload();
+    }
   }
 
   async #processMatch(matchId) {

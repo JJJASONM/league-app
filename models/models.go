@@ -666,21 +666,55 @@ type AdvanceResult struct {
 // same fields already on models.Match, letting a recap consumer show the
 // full unscored/scored/approved/processed/closed status ladder for each
 // match without a second request against GET /api/matches.
+//
+// ScoreRevision, HomeApprovalStatus, AwayApprovalStatus, and ApprovalReady
+// (Player Score Approval Phase 1D) surface the Phase 1B/1C team-approval
+// state this row's status ladder could not previously represent at all --
+// added as the smallest extension that lets Weekly Summary show approval
+// readiness without a second per-match request. HomeApprovalStatus/
+// AwayApprovalStatus are one of "pending", "approved_current",
+// "approved_stale", or "correction_requested". "approved_stale" means the
+// side's approval predates the match's current ScoreRevision (invalidated
+// by a later score edit). ApprovalReady mirrors RoundService.
+// BothSidesApproved/sideApprovedAtRevision exactly -- computed once here,
+// server-side, so no consumer needs to re-derive the revision-equality
+// rule itself.
+//
+// All four fields are POINTERS and are nil whenever HasResult is false
+// (team approval is meaningless before scores exist) -- and, as of the
+// privacy correction below, also nil for every caller of the PUBLIC
+// GET .../weeks/{week}/recap route except an appropriately scoped
+// administrator (handlers.recapWeekHandler/canSeeApprovalMetadataInRecap
+// redact them to nil post-build for every other caller, including
+// unauthenticated callers, linked players, and administrators of a
+// different league). This mirrors Player Score Approval Phase 1B's
+// approval-metadata visibility policy: these are the same protected facts
+// GET .../approval already restricts, surfaced here for a second,
+// unrelated-player-reachable, otherwise-public route, so they must never
+// be universally present. Pointer (not a zero/empty value) is deliberate:
+// a plain int/string/bool would make an authorized caller's legitimate
+// zero/false/empty value indistinguishable from a redacted field. A
+// non-nil pointer means "this caller may see the real value," never "the
+// real value happens to be zero/false/empty."
 type RecapMatchRow struct {
-	MatchID      int64   `json:"match_id"`
-	HomeTeamID   *int64  `json:"home_team_id"`
-	HomeTeamName string  `json:"home_team_name,omitempty"`
-	AwayTeamID   *int64  `json:"away_team_id"`
-	AwayTeamName string  `json:"away_team_name,omitempty"`
-	MatchDate    *string `json:"match_date,omitempty"`
-	HasResult    bool    `json:"has_result"`
-	HomeSetsWon  int     `json:"home_sets_won"`
-	AwaySetsWon  int     `json:"away_sets_won"`
-	HomeGamesWon int     `json:"home_games_won"`
-	AwayGamesWon int     `json:"away_games_won"`
-	ApprovedAt   *string `json:"approved_at,omitempty"`
-	ProcessedAt  *string `json:"processed_at,omitempty"`
-	WeekClosed   bool    `json:"week_closed"`
+	MatchID            int64   `json:"match_id"`
+	HomeTeamID         *int64  `json:"home_team_id"`
+	HomeTeamName       string  `json:"home_team_name,omitempty"`
+	AwayTeamID         *int64  `json:"away_team_id"`
+	AwayTeamName       string  `json:"away_team_name,omitempty"`
+	MatchDate          *string `json:"match_date,omitempty"`
+	HasResult          bool    `json:"has_result"`
+	HomeSetsWon        int     `json:"home_sets_won"`
+	AwaySetsWon        int     `json:"away_sets_won"`
+	HomeGamesWon       int     `json:"home_games_won"`
+	AwayGamesWon       int     `json:"away_games_won"`
+	ApprovedAt         *string `json:"approved_at,omitempty"`
+	ProcessedAt        *string `json:"processed_at,omitempty"`
+	WeekClosed         bool    `json:"week_closed"`
+	ScoreRevision      *int    `json:"score_revision,omitempty"`
+	HomeApprovalStatus *string `json:"home_approval_status,omitempty"`
+	AwayApprovalStatus *string `json:"away_approval_status,omitempty"`
+	ApprovalReady      *bool   `json:"approval_ready,omitempty"`
 }
 
 // RecapPlayerStat is one player's stat totals for a week in a week-end recap.

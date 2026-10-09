@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-10-02
+**Last reviewed:** 2026-10-08
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -83,17 +83,41 @@ Unapprove and Substitute/Undo controls never render in player mode, and a
 read-only scoresheet disables its score inputs, not just its write
 controls.
 
+Player Score Approval Phase 1D (admin Match Entry integration and Weekly
+Summary approval-readiness presentation, branch
+`player-score-approval-phase-1d-admin-integration`) is **complete and
+accepted as of 2026-10-08**, after one PM correction round (the approval
+metadata privacy correction described below). Admin Match
+Entry's Accept action now sends the Phase 1B `AdminAcceptMatch` contract
+(`expected_revision` from the authoritative approval snapshot, explicit
+`override` only after an administrator confirms exactly which side(s) are
+not satisfied, never a silent override), shows each side's approval state
+and whether an already-accepted match was accepted normally or via
+override, and reloads authoritative state after every outcome rather than
+risking stale UI. Weekly Summary gained a "Team Approval" column backed by
+the smallest necessary backend extension (`score_revision`/
+`home_approval_status`/`away_approval_status`/`approval_ready` on
+`RecapMatchRow`) so readiness can be shown without duplicating any
+acceptance rule in JavaScript. **The public `GET .../weeks/{week}/recap`
+route and all of its pre-existing recap data remain public and unchanged
+-- these four new fields are protected approval metadata (the same policy
+`GET .../approval` already enforces) and are conditionally included only
+for an appropriately scoped administrator (`system_admin`, or a
+`league_admin` for the season's own league); every other caller,
+including an eligible linked player, receives the existing recap data
+with the four fields absent.** A PM review round found and required this
+correction before acceptance -- see `doc/domains/matches/README.md`'s
+"Player Score Approval Phase 1D" section, specifically its "Privacy
+correction" subsection, for full detail.
+
 **The larger Player Score Approval lane stays in Now, not complete.**
-Phase 1D (admin/Weekly Summary UI integration for the new `/approve`
-contract, plus staging/browser verification) remains fully outstanding and
-not yet started -- `MATCHES-Q002` is advanced further, not resolved, by
-Phase 1A+1B+1C alone. Phase 1C's acceptance does not include staging/
-browser verification, which is explicitly Phase 1D's job, not a condition
-of Phase 1C's acceptance. **Do not deploy Phase 1A+1B+1C alone without
-Phase 1D's admin integration**: the current admin Approve button still
-does not send the new mandatory `expected_revision`/`override` fields, and
-Phase 1C's own player-facing UI has not had staging/browser verification
-at any point.
+All four phases (1A-1D) are now implemented and accepted, but
+`MATCHES-Q002` is advanced further, not resolved -- it stays open until
+staging and browser verification of the full chain are complete, which
+remains fully outstanding (Phase 1C's own player-facing UI has never had
+staging/browser verification, and neither has Phase 1D). **Do not deploy
+Phase 1A+1B+1C+1D as a combined unit until staging/browser verification
+of the full chain has passed.**
 
 User Auth / Roles Phase 1 (promoted to Now 2026-09-18) is complete,
 corrected, deployed, and staging/browser-verified as of 2026-09-24 -- see
@@ -291,17 +315,15 @@ admin workflows are stable.
 
 - Online score entry workflow -- Phase 1A (data model and backend
   foundation), Phase 1B (routes, session authorization, protected reads),
-  and Phase 1C (player-facing score entry and team approval UI) have all
-  been promoted to Now and implemented; see the Now section above and
-  `doc/domains/matches/README.md`. This entry now tracks only what
-  Phase 1A+1B+1C do not cover:
-  - Resolve `MATCHES-Q002` fully (Phase 1A+1B+1C advance it; do not
-    resolve it).
-  - Admin-facing UI integration for the `/approve` route's new mandatory
-    `expected_revision`/`override` contract (Phase 1D) -- the current
-    admin frontend does not send it yet.
-  - Staging deployment and browser verification, for Phase 1C's
-    player-facing UI as well as Phase 1D's own admin UI work (Phase 1D).
+  Phase 1C (player-facing score entry and team approval UI), and Phase 1D
+  (admin Match Entry integration and Weekly Summary approval-readiness
+  presentation) have all been promoted to Now, implemented, and accepted;
+  see the Now section above and `doc/domains/matches/README.md`. This
+  entry now tracks only what Phase 1A-1D do not cover:
+  - Resolve `MATCHES-Q002` fully (Phase 1A-1D advance it; do not resolve
+    it -- it stays open until staging/browser verification passes).
+  - Staging deployment and browser verification of the full Phase 1A-1D
+    chain -- none of it has been staging/browser-verified at any point.
   - Current direction, confirmed and implemented in Phase 1A: a player is
     eligible to act for a team side via current season-roster membership
     or actual match participation, with admin override always available.

@@ -130,23 +130,50 @@ class WeeklySummaryPage extends HTMLElement {
     return { label: 'Unscored', cls: 'bg-warning text-dark' };
   }
 
+  // #teamApprovalStatus (Player Score Approval Phase 1D) picks one display
+  // label from the backend-computed home/away_approval_status and
+  // approval_ready fields on each RecapMatchRow. All of the actual
+  // approval-readiness logic (what "current" vs "stale" means, what counts
+  // as "ready") is computed once, server-side -- this only picks a display
+  // priority among those finished values, never re-derives them. Returns
+  // null when the match has no result yet (team approval does not apply
+  // before scores exist) OR when home_approval_status is simply absent --
+  // the privacy correction redacts these four fields to absent for any
+  // caller who is not an appropriately scoped administrator, and this
+  // page is only ever loaded by an authenticated admin session, so an
+  // absent field here means "not visible to this session," never "known
+  // to be pending." Must never fall through to a guessed label.
+  #teamApprovalStatus(m) {
+    if (!m.has_result || m.home_approval_status === undefined) return null;
+    if (m.home_approval_status === 'correction_requested' || m.away_approval_status === 'correction_requested') {
+      return { label: 'Correction Requested', cls: 'bg-warning text-dark' };
+    }
+    if (m.approval_ready) return { label: 'Ready', cls: 'bg-success' };
+    if (m.home_approval_status === 'approved_stale' || m.away_approval_status === 'approved_stale') {
+      return { label: 'Stale Revision', cls: 'bg-warning text-dark' };
+    }
+    return { label: 'Pending', cls: 'bg-secondary' };
+  }
+
   #renderRecap(recap, seasonId) {
     const rows = recap.matches || [];
     const approvedUnprocessed = rows.filter(m => m.approved_at && !m.processed_at && !m.week_closed);
 
     const matchRows = rows.map(m => {
       const status = this.#matchStatus(m);
+      const teamApproval = this.#teamApprovalStatus(m);
       return `<tr>
         <td>${esc(m.home_team_name || '(unassigned)')}</td>
         <td class="text-center text-muted small">vs</td>
         <td>${esc(m.away_team_name || '(unassigned)')}</td>
         <td><span class="badge ${status.cls}">${status.label}</span></td>
+        <td>${teamApproval ? `<span class="badge ${teamApproval.cls}">${teamApproval.label}</span>` : '<span class="text-muted small">&mdash;</span>'}</td>
         <td class="text-end">
           <button class="btn btn-outline-secondary btn-sm py-0" data-action="open-match-entry"
             data-match-id="${m.match_id}" data-season-id="${seasonId}">Open</button>
         </td>
       </tr>`;
-    }).join('') || '<tr><td colspan="5" class="text-center text-muted py-3">No matches this week</td></tr>';
+    }).join('') || '<tr><td colspan="6" class="text-center text-muted py-3">No matches this week</td></tr>';
 
     // Incomplete-week-safe copy: this week does not need to be fully
     // scored for the rest of the screen (handicap preview, next-week
