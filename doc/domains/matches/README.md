@@ -4,8 +4,8 @@
 
 **Owner:** `matches`
 **Status:** `draft`
-**Current version:** `0.20`
-**Last reviewed:** `2026-10-08`
+**Current version:** `0.22`
+**Last reviewed:** `2026-10-13`
 
 The Matches domain owns match participation, result entry, official week-close
 effects, reopening, corrections, and match-level workflow status.
@@ -3552,9 +3552,16 @@ through two PM correction rounds (2026-09-30: five player-mode state/scope
 defects; a follow-up inspection pass the same round: score inputs
 themselves not disabled when read-only) -- see "PM correction round
 (2026-09-30)" below for exactly what was wrong and how it was fixed. Both
-rounds were reviewed and accepted. Browser/staging verification of this
-phase's UI has still NOT been performed at any point -- that is explicitly
-Phase 1D's job, not a condition of this acceptance -- see Verification.
+rounds were reviewed and accepted. **This phase's core browser workflow
+was subsequently verified on staging on 2026-10-09** (branch
+`staging-player-score-approval-verification`): player navigation to "My
+Overview"/"My Matches" and nowhere else, eligible-match loading scoped to
+the signed-in player, score entry/save, approval for both the home and
+away sides, a correction request displaying its note and attribution, an
+approval visibly resetting after an edit, and a stale player-revision
+reload after a concurrent admin edit all passed. Player-mode score
+clearing and the Withdraw control's own browser-click path were NOT
+separately verified in that pass -- see Verification.
 
 **Why this branch exists:** Phase 1A built the authoritative score-revision
 and team-approval model; Phase 1B exposed it over HTTP with session
@@ -3571,12 +3578,16 @@ correction for their own eligible side(s), recover cleanly from a stale-
 revision conflict, and never see admin-only Approve/Process/Unprocess/
 Unapprove controls. The implementation below meets that stop condition and
 has been accepted after two PM correction rounds (see "PM correction
-round" below), but it has NOT been browser-verified against it -- only
-backend automated tests and `node --check` syntax checks have run; that
-verification remains Phase 1D's responsibility. Phase 1D also remains
-responsible for the admin `/approve` contract integration and Weekly
-Summary/admin presentation -- this phase is not approved for standalone
-deployment on its own (see the Now section of `doc/roadmap.md`).
+round" below). Its core browser workflow was verified on staging on
+2026-10-09: player navigation, eligible-match loading, score entry/save,
+approvals for both sides, correction display, approval reset after
+editing, and stale player-revision reload all passed. Player-mode score
+clearing and the Withdraw control's own browser-click path were not
+separately verified in that pass and remain open acceptance items -- see
+Verification. Phase 1D remains responsible for the admin `/approve`
+contract integration and Weekly Summary/admin presentation, both of which
+are themselves implemented and staging-verified at the core-workflow
+level -- see "Player Score Approval Phase 1D" below.
 
 ### Discovery findings
 
@@ -3824,15 +3835,25 @@ and `go vet ./...` (same four pre-existing warnings as every prior phase,
 zero new findings) all pass. `git diff --check` is clean. An ASCII
 byte-scan of every added/changed line (tracked diff and new untracked
 files) found zero non-ASCII bytes. `node --check` passed on every changed
-JavaScript file. Browser/manual verification of the player workflow has
-NOT been performed at any point in this phase, including after both
-correction rounds -- Phase 1D covers staging/browser verification per the
-roadmap's phase split. This phase's acceptance does not depend on that
-verification having happened; it is explicitly deferred to Phase 1D. Phase
-1C is still not approved for standalone deployment on its own (the
-existing admin Approve button still does not send `expected_revision`) --
-see `doc/roadmap.md`'s Now section for the combined Phase 1A+1B+1C
-deployment warning.
+JavaScript file. Browser/manual verification of the player workflow had
+NOT been performed at the time of this acceptance, including after both
+correction rounds -- Phase 1D was planned to cover staging/browser
+verification per the roadmap's phase split, and this phase's acceptance
+did not depend on that verification having happened yet.
+
+**Update 2026-10-09:** this phase's core browser workflow was
+subsequently verified on staging (branch
+`staging-player-score-approval-verification`) -- player navigation,
+eligible-match loading, score entry/save, approvals for both sides,
+correction display, approval reset after editing, and stale
+player-revision reload all passed. Player-mode score clearing and the
+Withdraw control's own browser-click path were NOT separately verified in
+that pass and remain open acceptance items. See
+`doc/testing/product-smoke-test-checklist.md`'s "Player Score Approval
+Phases 1A-1D -- staging verification (2026-10-09)" for the full record.
+`MATCHES-Q002` remains open pending verification, or explicit PM
+disposition, of all remaining unchecked acceptance items (not only the
+two items named here) -- see "Player Score Approval Phase 1D" below.
 
 ### Explicit Phase 1C exclusions
 
@@ -3852,9 +3873,23 @@ outstanding; `MATCHES-Q002` is advanced further, not resolved.
 
 **Status: accepted as of 2026-10-08.** The implementation below, including
 the privacy correction documented in its own subsection, was reviewed and
-accepted after one PM correction round. Staging and browser verification
-of the full Phase 1A-1D chain have still NOT been performed -- that is not
-a condition of this acceptance; see Verification.
+accepted after one PM correction round. **The core end-to-end Phase 1A-1D
+staging workflow passed on 2026-10-09** (branch
+`staging-player-score-approval-verification`, source checkpoint
+`8d7ac0c`, already deployed to staging to perform this verification) --
+see `doc/testing/product-smoke-test-checklist.md`'s "Player Score
+Approval Phases 1A-1D -- staging verification (2026-10-09)" for the full
+record. Two specifically identified browser edge checks remain
+unverified and must not be treated as passed: explicitly declining the
+admin override confirmation (proving no acceptance event is written),
+and forcing the approval-snapshot load to fail (proving the Retry path
+renders and recovers) -- both are covered by existing code and automated
+tests, but neither has received a complete browser interaction. Several
+other checklist interactions were also not separately exercised or
+reconfirmed during that pass: player-mode score clearing, the Withdraw
+control's own browser-click path, accepting after the admin approval
+snapshot becomes deliberately stale, and the Weekly Summary Open-button
+navigation. See Verification.
 
 **Why this branch exists:** Phases 1A-1C are accepted, but the admin
 Match Entry Approve action still sent the pre-Phase-1B request shape (no
@@ -3875,7 +3910,10 @@ once accepted, whether acceptance was normal or an override; Weekly Summary
 shows each scored match's team-approval readiness with a path to the
 relevant Match Entry screen; process/unprocess/unapprove/reopen/close-week-
 auto-process/substitute/lock behavior are all unchanged. The implementation
-below meets this but has not been browser-verified.
+below meets this; the core workflow was browser-verified 2026-10-09, with
+two specifically identified edge checks and several additional
+not-separately-reconfirmed interactions still outstanding (see
+Verification).
 
 ### Discovery findings
 
@@ -4119,10 +4157,27 @@ passed on every changed JavaScript file
 (`web/domains/matches/match-entry-api-service.js`,
 `web/domains/matches/match-entry-page-component.js`,
 `web/domains/weekly-summary/weekly-summary-page-component.js`).
-Browser/staging verification of the admin accept/override flow and Weekly
-Summary's new column has NOT been performed -- that remains outstanding
-before the Phase 1A-1D chain can be considered fully verified; see
-`doc/testing/product-smoke-test-checklist.md`.
+**Update 2026-10-09:** browser/staging verification of the admin
+accept/override flow and Weekly Summary's new column was subsequently
+performed -- the core end-to-end workflow (admin approval panel display,
+normal acceptance with no prompt, the confirm-and-override path recording
+an `admin_override` event, Process/Unprocess/Unapprove, the Weekly
+Summary "Ready" badge, and the recap privacy boundary in both directions)
+passed on staging on 2026-10-09. Two specifically identified browser edge
+checks remain unverified: explicitly declining the override confirmation
+(proving no acceptance event is written), and forcing the approval-
+snapshot load to fail (proving the Retry path renders and recovers) --
+both are covered by existing code and automated tests but have not
+received a complete browser interaction. Several other checklist
+interactions were also not separately exercised or reconfirmed during
+that pass: player-mode score clearing, the Withdraw control's own
+browser-click path, accepting after the admin approval snapshot becomes
+deliberately stale, and the Weekly Summary Open-button navigation.
+Neither this phase's acceptance nor Phase 1C's depends on any of these
+remaining items; `MATCHES-Q002` stays open pending verification, or
+explicit PM disposition, of all of them. See
+`doc/testing/product-smoke-test-checklist.md`'s "Player Score Approval
+Phases 1A-1D -- staging verification (2026-10-09)" for the full record.
 
 ### Explicit Phase 1D exclusions
 
@@ -4140,6 +4195,44 @@ authoritatively at write time regardless of what the UI shows).
 full chain are complete.
 
 ## Decision History
+
+### 2026-10-09 - Player Score Approval Phases 1A-1D: staging verification (core workflow)
+
+**Status:** `staging-verified (core workflow); acceptance items outstanding`
+
+Ran on branch `staging-player-score-approval-verification` (source
+checkpoint `8d7ac0c`), documentation-only -- no application code or test
+changes. Confirmed the full end-to-end Phase 1A-1D chain on staging:
+player-only navigation and eligible-match scoping; player score entry and
+save, advancing the score revision; player approval of the current
+revision for both the home and away sides; a correction request with its
+note and attribution; a concurrent admin edit correctly staling and
+reloading a player's approval (revision 2 to 3); the admin approval
+panel's revision/both-sides display; a normal admin accept succeeding
+with no override prompt when both sides were current; an override accept
+(one side withdrawn) correctly recording an `admin_override` event,
+confirmed both via the browser and via a clean API replay
+(`override=false` -> 409 missing-approval, `override=true` -> 200, final
+event `admin_override`, resulting snapshot home-approved/away-pending at
+revision 4); Process/Unprocess/Unapprove; Weekly Summary's "Ready" badge
+while the week stayed Open; and the recap privacy boundary in both
+directions (omitted for unauthenticated/player/cross-league callers,
+present for a correctly scoped administrator). Two specifically
+identified browser edge checks remain unverified, not exercised this
+pass: explicitly declining the admin override confirmation (proving no
+acceptance event is written), and forcing the approval-snapshot load to
+fail (proving the "Retry Approval Status" path renders and recovers) --
+both are already covered by existing code and automated tests. Several
+other checklist interactions were also not separately exercised or
+reconfirmed this pass: player-mode score clearing, the Withdraw
+control's own browser-click path, accepting after the admin approval
+snapshot becomes deliberately stale, and the Weekly Summary Open-button
+navigation. Disposable staging fixture data was deleted via the API
+afterward; the shared "Fixture Scoresheet League" was not touched. See
+`doc/testing/product-smoke-test-checklist.md`'s "Player Score Approval
+Phases 1A-1D -- staging verification (2026-10-09)" for the full record.
+`MATCHES-Q002` stays open pending verification, or explicit PM
+disposition, of all of these remaining unchecked acceptance items.
 
 ### 2026-10-08 - Player Score Approval Phase 1D: PM correction round (approval metadata privacy), accepted
 

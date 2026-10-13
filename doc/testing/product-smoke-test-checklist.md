@@ -2,7 +2,7 @@
 
 **Owner:** Product test readiness
 **Status:** staging run complete 2026-08-23 -- see Staging Run Results
-**Last reviewed:** 2026-10-08
+**Last reviewed:** 2026-10-13
 
 Purpose: give an admin tester a pass/fail path through the widest useful
 slice of the app before more feature work is added, on staging or a local
@@ -662,49 +662,70 @@ contract this section's own check #2 exercised:
   section and `doc/roadmap.md`'s Now section.
 
 **Player Score Approval Phase 1C -- player-facing score entry and team
-approval UI (implemented 2026-09-30, NOT staging/browser-verified).** The
-four routes and two protected reads Phase 1B flagged above as "no UI yet"
-now have one, reusing the existing admin Match Entry component in a new
-player mode. Backend automated tests and `node --check` syntax checks
-passed this phase; no browser session exercised any of the following --
-all of it needs a real browser pass before this can be marked verified:
+approval UI (implemented 2026-09-30).** The four routes and two protected
+reads Phase 1B flagged above as "no UI yet" now have one, reusing the
+existing admin Match Entry component in a new player mode. The core
+end-to-end player workflow was staging-verified 2026-10-09 -- see "Player
+Score Approval Phases 1A-1D -- staging verification (2026-10-09)" below
+for the full record (branch `staging-player-score-approval-verification`):
 
-- [ ] Sign in as a linked player (session, not Admin Key), switch to
+- [x] Sign in as a linked player (session, not Admin Key), switch to
       Player View. A new "My Matches" nav entry should appear alongside
       "My Overview" and nowhere else (Admin View must not show it).
-- [ ] "My Matches" should list only matches that player is eligible to act
+      **Staging-verified 2026-10-09**: player-only navigation showed only
+      "My Overview" and "My Matches," and nowhere else.
+- [x] "My Matches" should list only matches that player is eligible to act
       on (current roster team, or an actual round-results participant/
       substitute), each showing week, opponent, home/away, score status,
       and both teams' current approval state -- and nothing from another
-      league.
-- [ ] Opening a match from "My Matches" should load it in the existing
+      league. **Staging-verified 2026-10-09**: "My Matches" listed only
+      matches eligible for the signed-in player.
+- [x] Opening a match from "My Matches" should load it in the existing
       Match Entry scoresheet UI, with no admin-only Approve/Process/
       Unprocess/Unapprove buttons visible anywhere on the page.
-- [ ] Entering and saving scores, then clearing them, should succeed and
-      the scoresheet should reflect the save/clear immediately.
-- [ ] The Team Approval panel should show Approve/Withdraw/Request
-      Correction controls only for the side(s) that player is eligible
-      for, never the other side. Approving, withdrawing, and requesting a
-      correction (with a note) should each update the panel immediately.
-      Editing scores after an approval should visibly reset that
-      approval back to Pending.
-- [ ] Forcing a stale-revision conflict (e.g. two tabs/sessions editing
+      **Staging-verified 2026-10-09**: player Match Entry did not expose
+      admin-only actions.
+- [x] Entering and saving scores should succeed and the scoresheet should
+      reflect the save immediately, advancing the score revision.
+      **Staging-verified 2026-10-09**: a player entered and saved a
+      complete scoresheet; saving advanced the score revision.
+  - [ ] Clearing a saved scoresheet in player mode was NOT exercised in
+        this staging pass -- still NOT browser-verified.
+- [x] The Team Approval panel should show Approve/Request Correction
+      controls only for the side(s) that player is eligible for, never
+      the other side; approving (or requesting a correction, with a note)
+      should update the panel immediately; editing scores after an
+      approval should visibly reset that approval back to Pending.
+      **Staging-verified 2026-10-09**: a player approved the submitted
+      score revision, for both the home side and the away side;
+      editing scores afterward advanced the revision and cleared the
+      prior approval; a correction request displayed its note and
+      attribution correctly.
+  - [ ] The Withdraw control's own browser click path was NOT separately
+        confirmed in this pass -- one side's approval was withdrawn as
+        setup for the Phase 1D override scenario below, but the
+        mechanism used (browser click vs. direct API) was not recorded,
+        so Withdraw itself stays NOT browser-verified.
+- [x] Forcing a stale-revision conflict (e.g. two tabs/sessions editing
       the same match) should show a clear message and reload the match
       rather than silently overwriting or erroring opaquely.
-- `MATCHES-Q002` is advanced further by Phase 1C, not resolved -- Phase 1D
-  (admin `/approve` UI integration, Weekly Summary/admin presentation, and
-  staging/browser verification for both Phase 1C and 1D) remains
-  outstanding. See `doc/domains/matches/README.md`'s "Player Score
+      **Staging-verified 2026-10-09**: a forced concurrent admin edit
+      caused a stale player approval to reload correctly, from revision 2
+      to revision 3.
+- `MATCHES-Q002` is advanced further by Phase 1C and this staging pass,
+  not resolved -- it remains open pending verification, or explicit PM
+  disposition, of every remaining unchecked item above (clearing; the
+  Withdraw control's own browser path) plus Phase 1D's own remaining
+  items below. See `doc/domains/matches/README.md`'s "Player Score
   Approval Phase 1C" section and `doc/roadmap.md`'s Now section.
 
 **Player Score Approval Phase 1D -- admin Match Entry integration and
 Weekly Summary approval readiness (implemented and code-reviewed/accepted
-2026-10-08, NOT staging/browser-verified).** Admin Match Entry's Approve
-button now sends the Phase 1B `AdminAcceptMatch` contract instead of the
-pre-Phase-1B shape Phase 1B flagged above as incompatible. **A PM review
-round found the initial handoff returned the new Weekly Summary approval
-fields unconditionally from the PUBLIC recap route; this was corrected and
-re-reviewed/accepted --
+2026-10-08).** Admin Match Entry's Approve button now sends the Phase 1B
+`AdminAcceptMatch` contract instead of the pre-Phase-1B shape Phase 1B
+flagged above as incompatible. **A PM review round found the initial
+handoff returned the new Weekly Summary approval fields unconditionally
+from the PUBLIC recap route; this was corrected and re-reviewed/accepted --
 the recap route and all of its pre-existing data remain public, and the
 four new fields (`score_revision`/`home_approval_status`/
 `away_approval_status`/`approval_ready`) are now conditionally included
@@ -712,48 +733,120 @@ only for an appropriately scoped administrator (`system_admin`, or a
 `league_admin` for the season's own league), following the same
 approval-metadata privacy policy `GET .../approval` already enforces --
 see `doc/domains/matches/README.md`'s "Privacy correction" subsection.**
-Backend automated tests pass (5 store-layer tests for calculation
-correctness plus 6 new HTTP-level tests proving the visibility boundary
-itself); `node --check` passed on every changed JavaScript file; no
-browser session has exercised any of the following:
+The core end-to-end admin workflow and the approval-metadata privacy
+boundary were staging-verified 2026-10-09. **Two specifically identified
+browser edge checks remain unverified and must not be treated as
+passed** (explicitly declining the override confirmation; approval-
+snapshot load failure and Retry recovery), **and several additional
+checklist interactions below were not separately exercised or
+reconfirmed this pass** -- see "Player Score Approval Phases 1A-1D --
+staging verification (2026-10-09)" below for the full record:
 
-- [ ] In Admin View Match Entry, a completed-but-not-yet-accepted match
+- [x] In Admin View Match Entry, a completed-but-not-yet-accepted match
       should show a "Team Approval Status" panel with the current score
       revision and each side's state (Pending / Approved (current) /
       Approved (stale revision) / Correction Requested), plus a
       "ready to accept" vs. "will require override" line.
-- [ ] With both sides approved at the current revision, clicking Accept
+      **Staging-verified 2026-10-09**: the admin approval panel showed
+      the current revision and both teams' approval states.
+- [x] With both sides approved at the current revision, clicking Accept
       should succeed immediately with no confirmation prompt, and the
       match should show as Approved with no override note.
-- [ ] With one or both sides not approved (pending, correction requested,
+      **Staging-verified 2026-10-09**: normal admin acceptance succeeded
+      without an override prompt when both teams had current approvals.
+- [x] With one or both sides not approved (pending, correction requested,
       or stale), clicking Accept should show a confirmation dialog naming
-      exactly which side(s) are not satisfied and why; declining it must
-      leave the match unchanged (not accepted); confirming it should
-      accept via override, and the panel should then show "Accepted by
-      administrator override."
+      exactly which side(s) are not satisfied and why; confirming it
+      should accept via override, and the panel should then show
+      "Accepted by administrator override." **Staging-verified
+      2026-10-09** (confirm path only): with one team approval withdrawn,
+      browser acceptance used the override path and recorded an
+      `admin_override` event. A clean API replay separately confirmed
+      the full contract: `override=false` returned 409 with the
+      missing-approval error, `override=true` returned 200, the final
+      event was `admin_override`, and the resulting snapshot showed the
+      home approval as approved, the away approval as pending, and the
+      score revision at 4.
+  - [ ] **STILL NOT VERIFIED**: explicitly declining the admin override
+        confirmation and proving no acceptance event is written. Blocked
+        by browser-control behavior around the native confirmation
+        dialog during this staging pass. Existing code and automated
+        tests cover this path; it has not received a complete browser
+        interaction.
 - [ ] Reload the approval snapshot deliberately out of date (e.g. edit
       scores in a second tab/session between opening Match Entry and
       clicking Accept) and confirm Accept reports a clear conflict and
       reloads the match/approval state rather than silently overwriting.
-- [ ] If the approval snapshot fails to load (e.g. simulate a network
-      failure), confirm the Accept button is replaced by a "Retry
-      Approval Status" action and no accept can be triggered.
-- [ ] Existing Process/Unprocess/Unapprove buttons and their behavior
-      should be unchanged.
-- [ ] In Weekly Summary, each scored match should show a new "Team
+      Not addressed in this staging pass -- still NOT browser-verified.
+- [ ] **STILL NOT VERIFIED**: if the approval snapshot fails to load
+      (e.g. simulate a network failure), confirm the Accept button is
+      replaced by a "Retry Approval Status" action and no accept can be
+      triggered. Requires an artificial service or network failure.
+      Existing code and automated tests cover this path; it has not
+      received a complete browser interaction.
+- [x] Existing Process/Unprocess/Unapprove buttons and their behavior
+      should be unchanged. **Staging-verified 2026-10-09**: Process,
+      Unprocess, and Unapprove all worked.
+- [x] In Weekly Summary, each scored match should show a new "Team
       Approval" badge (Ready / Pending / Correction Requested / Stale
       Revision), and its "Open" button should still navigate to that
-      match in Match Entry.
-- [ ] Call `GET /api/seasons/{id}/weeks/{week}/recap` directly (curl or
+      match in Match Entry. **Staging-verified 2026-10-09**: Weekly
+      Summary showed the match as "Ready" while the week remained Open.
+      (The pre-existing "Open" button's own navigation was not
+      separately re-confirmed this pass.)
+- [x] Call `GET /api/seasons/{id}/weeks/{week}/recap` directly (curl or
       browser, no credentials) for a season with at least one scored
       match: the response should still include the existing recap fields
       (teams, scores, `approved_at`/`processed_at`/`week_closed`, etc.)
       but none of `score_revision`/`home_approval_status`/
       `away_approval_status`/`approval_ready` anywhere in `matches`.
-- `MATCHES-Q002` is advanced further by Phase 1D, not resolved -- it stays
-  open until staging/browser verification of the full Phase 1A-1D chain
-  passes. See `doc/domains/matches/README.md`'s "Player Score Approval
+      **Staging-verified 2026-10-09**: public Week Recap retained match
+      information but omitted all four protected fields; a scoped-admin
+      request to the same recap route included them correctly.
+- `MATCHES-Q002` is advanced further by this staging pass, not resolved.
+  The core end-to-end Phase 1A-1D staging workflow passed on 2026-10-09;
+  it remains open pending verification, or explicit PM disposition, of
+  every remaining unchecked item above -- the two specifically identified
+  edge checks (override decline; approval-snapshot failure/Retry) AND the
+  additional not-separately-reconfirmed interactions (reload of a
+  deliberately stale admin snapshot; the Weekly Summary Open button's own
+  navigation), plus Phase 1C's own remaining items (score clearing;
+  Withdraw). See `doc/domains/matches/README.md`'s "Player Score Approval
   Phase 1D" section and `doc/roadmap.md`'s Now section.
+
+**Player Score Approval Phases 1A-1D -- staging verification
+(2026-10-09).** Ran on branch `staging-player-score-approval-verification`
+(source checkpoint `8d7ac0c`), combining browser interaction (player and
+admin sessions) with a clean API replay for the override contract and the
+recap privacy boundary. Confirmed, in addition to the per-item notes
+above: home-team and away-team team-approval actions both worked (not
+just one side); the approval-metadata privacy boundary held in both
+directions (omitted for an unscoped/public/player/cross-league caller,
+present for a correctly scoped administrator).
+
+**Cleanup:** the disposable league, season, teams, players, match,
+lineups, and score data created for this pass were deleted through the
+API; the disposable match now returns 404. Staging health remained OK
+throughout and after cleanup. Disposable users created during this pass
+remain in place -- no delete-user endpoint exists, consistent with every
+prior staging pass. The shared "Fixture Scoresheet League" data was not
+modified. No credentials, passwords, session tokens, CSRF tokens, or API
+keys were recorded in this entry.
+
+**Still outstanding after this pass:** two specifically identified
+browser edge checks -- explicitly declining the admin override
+confirmation (proving no acceptance event is written), and forcing the
+approval-snapshot load to fail (proving the Retry path renders and
+recovers). Both are covered by existing code and automated tests, but
+neither has received a complete browser interaction. In addition,
+several other checklist interactions were not separately exercised or
+reconfirmed during this pass and must not be treated as passed:
+player-mode score clearing, the Withdraw control's own browser-click
+path, accepting after the admin approval snapshot becomes deliberately
+stale, and the Weekly Summary Open-button navigation. `MATCHES-Q002`
+remains open pending verification, or explicit PM disposition, of all of
+these items -- do not close it, and do not mark the Player Score
+Approval lane fully verified, based on this pass alone.
 
 ### 11. Close / Reopen Week
 

@@ -1,7 +1,7 @@
 # League App Roadmap
 
 **Status:** working roadmap
-**Last reviewed:** 2026-10-08
+**Last reviewed:** 2026-10-13
 
 This roadmap shows the intended path from the current admin-focused league app
 to a reliable season, match, standings, and eventually broader user-facing
@@ -111,13 +111,34 @@ correction before acceptance -- see `doc/domains/matches/README.md`'s
 correction" subsection, for full detail.
 
 **The larger Player Score Approval lane stays in Now, not complete.**
-All four phases (1A-1D) are now implemented and accepted, but
-`MATCHES-Q002` is advanced further, not resolved -- it stays open until
-staging and browser verification of the full chain are complete, which
-remains fully outstanding (Phase 1C's own player-facing UI has never had
-staging/browser verification, and neither has Phase 1D). **Do not deploy
-Phase 1A+1B+1C+1D as a combined unit until staging/browser verification
-of the full chain has passed.**
+All four phases (1A-1D) are now implemented and accepted, and the
+combined implementation has already been deployed to staging to perform
+this verification. **The core end-to-end Phase 1A-1D staging workflow
+passed on 2026-10-09** (branch
+`staging-player-score-approval-verification`) -- player
+navigation/eligibility scoping, player score entry/approval, a stale-
+revision reload, the admin approval panel, normal admin acceptance, the
+override-accept path (browser plus a clean API replay), Process/
+Unprocess/Unapprove, Weekly Summary's readiness badge, and the recap
+privacy boundary in both directions all passed. See
+`doc/testing/product-smoke-test-checklist.md`'s "Player Score Approval
+Phases 1A-1D -- staging verification (2026-10-09)" for the full record.
+Two specifically identified browser edge checks remain unverified --
+explicitly declining the admin override confirmation, and forcing an
+approval-snapshot load failure to confirm the Retry path -- both covered
+by existing code and automated tests but not yet exercised in a browser.
+In addition, several other checklist interactions were not separately
+exercised or reconfirmed during this pass: player-mode score clearing,
+the Withdraw control's own browser-click path, accepting after the admin
+approval snapshot becomes deliberately stale, and the Weekly Summary
+Open-button navigation. `MATCHES-Q002` is advanced further, not
+resolved -- it remains open pending verification, or explicit PM
+disposition, of all of these remaining unchecked acceptance items, not
+only the two edge checks named above. **Do not mark the Player Score
+Approval lane fully verified, do not close `MATCHES-Q002`, and do not
+promote this work beyond staging as complete until the remaining
+unchecked acceptance items are verified or explicitly dispositioned by
+PM.**
 
 User Auth / Roles Phase 1 (promoted to Now 2026-09-18) is complete,
 corrected, deployed, and staging/browser-verified as of 2026-09-24 -- see
@@ -321,9 +342,19 @@ admin workflows are stable.
   see the Now section above and `doc/domains/matches/README.md`. This
   entry now tracks only what Phase 1A-1D do not cover:
   - Resolve `MATCHES-Q002` fully (Phase 1A-1D advance it; do not resolve
-    it -- it stays open until staging/browser verification passes).
-  - Staging deployment and browser verification of the full Phase 1A-1D
-    chain -- none of it has been staging/browser-verified at any point.
+    it -- it stays open pending verification, or explicit PM
+    disposition, of all remaining unchecked acceptance items below).
+  - The core end-to-end Phase 1A-1D staging workflow passed on
+    2026-10-09 (see the Now section above). Two specifically identified
+    browser edge checks remain unverified: explicitly declining the
+    admin override confirmation, and forcing an approval-snapshot load
+    failure to confirm the Retry path -- both covered by existing code
+    and automated tests but not yet exercised in a browser. Several
+    other checklist interactions were also not separately exercised or
+    reconfirmed during that pass: player-mode score clearing, the
+    Withdraw control's own browser-click path, accepting after the admin
+    approval snapshot becomes deliberately stale, and the Weekly Summary
+    Open-button navigation.
   - Current direction, confirmed and implemented in Phase 1A: a player is
     eligible to act for a team side via current season-roster membership
     or actual match participation, with admin override always available.
